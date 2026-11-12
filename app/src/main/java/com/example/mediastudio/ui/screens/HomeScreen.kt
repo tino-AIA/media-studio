@@ -54,6 +54,7 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
     val warMovies by viewModel.warMovies.collectAsState()
     val animationMovies by viewModel.animationMovies.collectAsState()
     val documentaryMovies by viewModel.documentaryMovies.collectAsState()
+    val adultMovies by viewModel.adultMovies.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -65,7 +66,7 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
         topMonthlyMovies, trendingMovies, sciFiMovies, actionMovies,
         thrillerMovies, comedyMovies, horrorMovies, dramaMovies,
         crimeMovies, romanceMovies, westernMovies, warMovies,
-        animationMovies, documentaryMovies, searchQuery
+        animationMovies, documentaryMovies, adultMovies, searchQuery
     ) {
         listOf(
             "Top 10 ovog mjeseca" to topMonthlyMovies.take(10).filter { it.title.contains(searchQuery, true) },
@@ -80,8 +81,9 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
             "Romantični" to romanceMovies.filter { it.title.contains(searchQuery, true) },
             "Vestern" to westernMovies.filter { it.title.contains(searchQuery, true) },
             "Ratni" to warMovies.filter { it.title.contains(searchQuery, true) },
-            "Animirani" to animationMovies.filter { it.title.contains(searchQuery, true) },
-            "Dokumentarni" to documentaryMovies.filter { it.title.contains(searchQuery, true) }
+            "Animirani klasici" to animationMovies.filter { it.title.contains(searchQuery, true) },
+            "Dokumentarni" to documentaryMovies.filter { it.title.contains(searchQuery, true) },
+            "18+ / Erotski" to adultMovies.filter { it.title.contains(searchQuery, true) }
         ).filter { it.second.isNotEmpty() }
     }
 
@@ -105,7 +107,13 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
 
                     categories.forEachIndexed { index, (title, _) ->
                         NavigationDrawerItem(
-                            label = { Text(title, color = Color.White, fontSize = 15.sp) },
+                            label = {
+                                Text(
+                                    text = title,
+                                    color = if (title.startsWith("18+")) Color(0xFFFF6B6B) else Color.White,
+                                    fontSize = 15.sp
+                                )
+                            },
                             selected = false,
                             onClick = {
                                 scope.launch {
