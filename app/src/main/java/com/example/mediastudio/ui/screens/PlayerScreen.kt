@@ -4,23 +4,27 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.example.mediastudio.data.api.OpenSubtitlesModule
 
-// Helper funkcija za sigurno dohvaćanje Activityja iz trenutnog Contexta
 fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -28,57 +32,81 @@ fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-fun PlayerScreen(identifier: String, onNavigateBack: () -> Unit) {
+fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> Unit) {
     val context = LocalContext.current
-    
-    // Univerzalni URL za streaming H.264 formata sa Archive.org
     val videoUrl = "https://archive.org/download/$identifier/format=h.264"
 
-    // Presrećemo "Back" tipku na mobitelu kako bi ugasili player i vratili se nazad
+    var subtitleUrl by remember { mutableStateOf<String?>(null) }
+    var isFetchingSubtitle by remember { mutableStateOf(true) }
+
     BackHandler {
         onNavigateBack()
     }
 
-    // Inicijalizacija ExoPlayera
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            val mediaItem = MediaItem.fromUri(videoUrl)
-            setMediaItem(mediaItem)
-            prepare()
-            playWhenReady = true // Automatski kreni s reprodukcijom
+    // U pozadini tražimo hrvatski titl prije nego što se player učita
+    LaunchedEffect(movieTitle) {
+        subtitleUrl = OpenSubtitlesModule.fetchCroatianSubtitleUrl(movieTitle)
+        isFetchingSubtitle = false
+    }
+
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
-    // Uklapanje klasičnog Android View-a u Compose
-    AndroidView(
-        factory = {
-            PlayerView(context).apply {
-                player = exoPlayer
-                useController = true // Prikaži kontrole (play, pause, timeline)
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            }
-        },
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    )
-
-    // Kad izađemo iz ekrana (npr. korisnik stisne Back), vraćamo orijentaciju i oslobađamo resurse
-    DisposableEffect(Unit) {
-        val activity = context.findActivity()
-        
-        // 1. Postavi ekran na vodoravno (Landscape) kada se otvori Player
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-
-        onDispose {
-            // 2. Vrati ekran na standardno ponašanje (slobodno okretanje) kada korisnik izađe
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            
-            // 3. Oslobodi memoriju koju je player koristio
-            exoPlayer.release()
+    if (isFetchingSubtitle) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = Color.Red)
         }
+    } else {
+        val exoPlayer = remember(subtitleUrl) {
+            ExoPlayer.Builder(context).build().apply {
+                val mediaItemBuilder = MediaItem.Builder().setUri(videoUrl)
+
+                // Ako je pronađen hrvatski titl, dodajemo ga u player
+                if (subtitleUrl != null) {
+                    val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
+                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                        .setLanguage("hr")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                    mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
+                }
+
+                setMediaItem(mediaItemBuilder.build())
+                prepare()
+                playWhenReady = true
+            }
+        }
+
+        DisposableEffect(exoPlayer) {
+            onDispose {
+                exoPlayer.release()
+            }
+        }
+
+        AndroidView(
+            factory = {
+                PlayerView(context).apply {
+                    player = exoPlayer
+                    useController = true
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        )
     }
 }
