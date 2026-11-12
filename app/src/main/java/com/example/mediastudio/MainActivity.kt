@@ -22,7 +22,6 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 val homeViewModel: HomeViewModel = viewModel()
                 
-                // 3 stanja: 0 = Home, 1 = Details, 2 = Player
                 var currentScreen by remember { mutableStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
 
@@ -31,20 +30,21 @@ class MainActivity : ComponentActivity() {
                         viewModel = homeViewModel,
                         onMovieClick = { movie -> 
                             selectedMovie = movie
-                            currentScreen = 1 // Idi na detalje
+                            currentScreen = 1
                         }
                     )
                     1 -> selectedMovie?.let { movie ->
                         DetailsScreen(
                             movie = movie,
-                            onPlayClick = { currentScreen = 2 }, // Pokreni player
-                            onBackClick = { currentScreen = 0 }  // Vrati se na Home
+                            onPlayClick = { currentScreen = 2 },
+                            onBackClick = { currentScreen = 0 }
                         )
                     }
                     2 -> selectedMovie?.let { movie ->
                         PlayerScreen(
                             identifier = movie.identifier,
-                            onNavigateBack = { currentScreen = 1 } // Vrati se na detalje
+                            movieTitle = movie.title,
+                            onNavigateBack = { currentScreen = 1 }
                         )
                     }
                 }
