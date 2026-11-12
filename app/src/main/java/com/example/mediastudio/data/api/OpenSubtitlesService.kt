@@ -3,6 +3,8 @@ package com.example.mediastudio.data.api
 import android.content.Context
 import android.net.Uri
 import com.squareup.moshi.Json
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
@@ -28,7 +30,6 @@ data class SubtitleFile(
 data class DownloadRequest(@Json(name = "file_id") val fileId: Int)
 data class DownloadResponse(val link: String?)
 
-// Naš pojednostavljeni model za prikaz u izborniku playera
 data class SubtitleOption(
     val fileId: Int,
     val title: String,
@@ -38,18 +39,20 @@ data class SubtitleOption(
 interface OpenSubtitlesApi {
     @Headers(
         "Api-Key: GZaTvvntJdvb7Awbymax5vI0Kwb0Wnjo",
-        "User-Agent: MediaStudio v1.0",
+        "User-Agent: Mediastudio123 v1.0",
+        "Accept: application/json",
         "Content-Type: application/json"
     )
     @GET("subtitles")
     suspend fun searchSubtitles(
         @Query("query") query: String,
-        @Query("languages") languages: String = "hr,sr,bs" // Uključujemo i srodne jezike za bolji izbor
+        @Query("languages") languages: String = "hr,sr,bs"
     ): SubtitleSearchResponse
 
     @Headers(
         "Api-Key: GZaTvvntJdvb7Awbymax5vI0Kwb0Wnjo",
-        "User-Agent: MediaStudio v1.0",
+        "User-Agent: Mediastudio123 v1.0",
+        "Accept: application/json",
         "Content-Type: application/json"
     )
     @POST("download")
@@ -59,18 +62,27 @@ interface OpenSubtitlesApi {
 }
 
 object OpenSubtitlesModule {
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
     val api: OpenSubtitlesApi by lazy {
         Retrofit.Builder()
             .baseUrl("https://api.opensubtitles.com/api/v1/")
-            .addConverterFactory(MoshiConverterFactory.create())
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
             .create(OpenSubtitlesApi::class.java)
     }
 
-    // 1. Dohvaća listu dostupnih titlova s informacijom o FPS-u
     suspend fun searchAvailableSubtitles(rawTitle: String): List<SubtitleOption> {
         return try {
-            val cleanTitle = rawTitle.replace(Regex("\\(.*?\\)"), "").trim()
+            // Čistimo naslov od zagrada, godina i suvišnih znakova radi boljeg pronalaska
+            val cleanTitle = rawTitle
+                .replace(Regex("\\(.*?\\)"), "")
+                .replace(Regex("\\[.*?\\]"), "")
+                .replace(Regex("-\\s*\\d{4}"), "")
+                .trim()
+
             val response = api.searchSubtitles(query = cleanTitle)
             
             response.data?.mapNotNull { item ->
@@ -78,11 +90,11 @@ object OpenSubtitlesModule {
                 val file = attr.files?.firstOrNull() ?: return@mapNotNull null
                 val lang = attr.language?.uppercase() ?: "HR"
                 val fpsValue = attr.fps ?: 0f
-                val releaseName = attr.release ?: file.fileName ?: "Nepoznato izdanje"
+                val releaseName = attr.release ?: file.fileName ?: "Titl"
                 
                 SubtitleOption(
                     fileId = file.fileId,
-                    title = "[$lang] $releaseName (${if (fpsValue > 0) "$fpsValue FPS" else "FPS nepoznat"})",
+                    title = "[$lang] $releaseName (${if (fpsValue > 0) "$fpsValue FPS" else "Auto FPS"})",
                     fps = fpsValue
                 )
             } ?: emptyList()
@@ -92,27 +104,21 @@ object OpenSubtitlesModule {
         }
     }
 
-    // 2. Preuzima odabrani titl, popravlja čćžšđ (Windows-1250 -> UTF-8) i sprema u cache
     suspend fun downloadAndFixEncoding(context: Context, fileId: Int): Uri? = withContext(Dispatchers.IO) {
         try {
             val downloadResult = api.getDownloadLink(DownloadRequest(fileId))
             val link = downloadResult.link ?: return@withContext null
 
             val bytes = URL(link).readBytes()
-            
-            // Provjera je li datoteka već UTF-8 ili je stariji Windows-1250 format
             val utf8String = String(bytes, Charsets.UTF_8)
             val finalText = if (utf8String.contains("\uFFFD")) {
-                // Ako sadrži znak zamjene (), dekodiramo kao Windows-1250
                 String(bytes, Charset.forName("Windows-1250"))
             } else {
                 utf8String
             }
 
-            // Spremanje čistog UTF-8 titla u privremenu memoriju aplikacije
             val tempFile = File(context.cacheDir, "active_subtitle.srt")
             tempFile.writeText(finalText, Charsets.UTF_8)
-            
             Uri.fromFile(tempFile)
         } catch (e: Exception) {
             e.printStackTrace()
