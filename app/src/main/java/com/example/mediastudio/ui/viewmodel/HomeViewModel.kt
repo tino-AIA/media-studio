@@ -18,7 +18,8 @@ import retrofit2.http.Query
 data class GenreOption(
     val title: String,
     val query: String,
-    val defaultSort: String = "avg_rating desc"
+    val defaultSort: String = "avg_rating desc",
+    val isAdultCategory: Boolean = false
 )
 
 data class RatedMovie(
@@ -57,10 +58,20 @@ class HomeViewModel : ViewModel() {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    private val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity) AND -title:(erotic OR sex OR nude)"
+    // Popis ključnih riječi koje lokalno izbacujemo iz glavnih kategorija i Top 10
+    private val blockedAdultKeywords = listOf(
+        "erotic", "erotica", "adult", "xxx", "sex", "nude", "nudity", "porn",
+        "realm of the senses", "empire des sens", "good girl bad girl",
+        "tammy stones", "softcore", "hardcore", "strip", "playboy", "penthouse",
+        "lust", "seduction", "orgy", "fetish", "sensual", "intimate", "unrated", "nc-17"
+    )
+
+    private val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity OR porn) " +
+            "AND -title:(erotic OR erotica OR adult OR xxx OR sex OR nude OR \"realm of the senses\" OR \"bad girl\") " +
+            "AND -description:(pornography OR hardcore OR \"explicit sex\" OR \"adult film\")"
+
     private val baseQuery = "collection:feature_films AND mediatype:movies AND $safeFilter"
 
-    // Popis svih žanrova i njihovih upita na jednom mjestu
     val genreDefinitions = listOf(
         GenreOption("Top 10 ovog mjeseca", baseQuery, "month desc"),
         GenreOption("Najgledanije", baseQuery, "downloads desc"),
@@ -79,17 +90,20 @@ class HomeViewModel : ViewModel() {
             "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)"
         ),
         GenreOption("Dokumentarni", "mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)"),
-        GenreOption("18+ / Erotski", "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult)")
+        GenreOption(
+            title = "18+ / Erotski",
+            query = "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult OR title:\"realm of the senses\" OR title:\"bad girl\")",
+            defaultSort = "downloads desc",
+            isAdultCategory = true
+        )
     )
 
-    // Stanja za početni ekran
     private val _homeCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val homeCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _homeCategories
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
-    // Stanja za zasebni ekran odabranog žanra (sortirano po ocjeni)
     private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
     val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
 
@@ -103,14 +117,26 @@ class HomeViewModel : ViewModel() {
         loadAllCategories()
     }
 
+    private fun isAdultContent(id: String, title: String): Boolean {
+        val combined = "${id.lowercase()} ${title.lowercase()}"
+        return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
+    }
+
     private fun loadAllCategories() {
         viewModelScope.launch {
             _isLoading.value = true
             try {
                 val deferredList = genreDefinitions.map { genre ->
                     async {
-                        val rows = if (genre.title == "Top 10 ovog mjeseca") 10 else 20
-                        val movies = fetchSafe(genre.query, sort = genre.defaultSort, rows = rows).map { it.movie }
+                        // Povlačimo više rezultata kako bismo nakon lokalnog filtriranja imali punu listu
+                        val fetchRows = if (genre.title == "Top 10 ovog mjeseca") 40 else 30
+                        val targetLimit = if (genre.title == "Top 10 ovog mjeseca") 10 else 20
+                        val movies = fetchSafe(
+                            query = genre.query,
+                            sort = genre.defaultSort,
+                            rows = fetchRows,
+                            excludeAdult = !genre.isAdultCategory
+                        ).map { it.movie }.take(targetLimit)
                         genre to movies
                     }
                 }
@@ -123,17 +149,21 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    // Otvara zasebni ekran žanra i sortira filmove po ocjenama (najviša ocjena prva)
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
         viewModelScope.launch {
             _isGenreLoading.value = true
             _genreMovies.value = emptyList()
             try {
-                // Sortiramo po ocjeni publike (avg_rating desc) i broju recenzija
                 val sortOrder = if (genre.title == "Top 10 ovog mjeseca") "month desc" else "avg_rating desc"
-                val rows = if (genre.title == "Top 10 ovog mjeseca") 10 else 60
-                val results = fetchSafe(genre.query, sort = sortOrder, rows = rows)
+                val fetchRows = if (genre.title == "Top 10 ovog mjeseca") 40 else 70
+                val targetLimit = if (genre.title == "Top 10 ovog mjeseca") 10 else 60
+                val results = fetchSafe(
+                    query = genre.query,
+                    sort = sortOrder,
+                    rows = fetchRows,
+                    excludeAdult = !genre.isAdultCategory
+                ).take(targetLimit)
                 _genreMovies.value = results
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -146,7 +176,8 @@ class HomeViewModel : ViewModel() {
     private suspend fun fetchSafe(
         query: String,
         sort: String = "downloads desc",
-        rows: Int = 20
+        rows: Int = 20,
+        excludeAdult: Boolean = true
     ): List<RatedMovie> {
         return try {
             val docs = api.searchMovies(query = query, sort = sort, rows = rows).response?.docs ?: emptyList()
@@ -161,6 +192,11 @@ class HomeViewModel : ViewModel() {
                     id.replace("_", " ")
                         .replace("-", " ")
                         .replaceFirstChar { it.uppercase() }
+                }
+
+                // Dodatni lokalni filtar ako film nije označen u metapodacima na serveru
+                if (excludeAdult && isAdultContent(id, finalTitle)) {
+                    return@mapNotNull null
                 }
 
                 val ratingVal = when (val r = doc.avgRating) {
