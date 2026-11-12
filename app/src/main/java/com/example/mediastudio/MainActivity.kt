@@ -3,31 +3,18 @@ package com.example.mediastudio
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.mediastudio.ui.screens.HomeScreen
+import com.example.mediastudio.ui.viewmodel.HomeViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Color.Black 
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "Media Studio spreman!",
-                            color = Color.White
-                        )
-                    }
-                }
+                val homeViewModel: HomeViewModel = viewModel()
+                HomeScreen(viewModel = homeViewModel)
             }
         }
     }
