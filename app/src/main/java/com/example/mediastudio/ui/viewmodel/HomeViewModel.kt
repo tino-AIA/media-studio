@@ -14,17 +14,20 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import kotlin.math.ln
 
 data class GenreOption(
     val title: String,
     val query: String,
-    val defaultSort: String = "avg_rating desc",
-    val isAdultCategory: Boolean = false
+    val defaultSort: String = "downloads desc",
+    val isAdultCategory: Boolean = false,
+    val isAnimationCategory: Boolean = false
 )
 
 data class RatedMovie(
     val movie: ArchiveMovie,
-    val rating: String
+    val rating: String,
+    val relevanceScore: Double = 0.0
 )
 
 private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
@@ -32,16 +35,22 @@ private data class ArchiveResponseBody(val docs: List<RawArchiveDoc>?)
 private data class RawArchiveDoc(
     val identifier: String?,
     val title: Any?,
-    @Json(name = "avg_rating") val avgRating: Any?
+    val creator: Any?,
+    val description: Any?,
+    val collection: Any?,
+    @Json(name = "avg_rating") val avgRating: Any?,
+    @Json(name = "num_reviews") val numReviews: Any?
 )
 
 private interface ArchiveSearchApi {
     @GET("advancedsearch.php")
     suspend fun searchMovies(
         @Query("q") query: String,
-        @Query("fl[]") fields: List<String> = listOf("identifier", "title", "avg_rating"),
+        @Query("fl[]") fields: List<String> = listOf(
+            "identifier", "title", "creator", "description", "collection", "avg_rating", "num_reviews"
+        ),
         @Query("sort[]") sort: String = "downloads desc",
-        @Query("rows") rows: Int = 20,
+        @Query("rows") rows: Int = 50,
         @Query("page") page: Int = 1,
         @Query("output") output: String = "json"
     ): ArchiveSearchResponse
@@ -58,7 +67,6 @@ class HomeViewModel : ViewModel() {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // Popis ključnih riječi koje lokalno izbacujemo iz glavnih kategorija i Top 10
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "adult", "xxx", "sex", "nude", "nudity", "porn",
         "realm of the senses", "empire des sens", "good girl bad girl",
@@ -66,33 +74,48 @@ class HomeViewModel : ViewModel() {
         "lust", "seduction", "orgy", "fetish", "sensual", "intimate", "unrated", "nc-17"
     )
 
+    // Poznati studiji, redatelji i glumci za podizanje relevantnosti pravih filmova na vrh
+    private val notableCinemaKeywords = listOf(
+        "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
+        "20th century", "united artists", "disney", "fleischer", "republic pictures",
+        "hitchcock", "chaplin", "buster keaton", "fritz lang", "orson welles", "john ford",
+        "howard hawks", "frank capra", "billy wilder", "george romero", "roger corman",
+        "cary grant", "john wayne", "humphrey bogart", "james stewart", "vincent price",
+        "bela lugosi", "boris karloff", "peter lorre", "gary cooper", "ingrid bergman",
+        "audrey hepburn", "christopher lee", "peter cushing", "stan laurel", "oliver hardy",
+        "imdb", "academy award", "oscar"
+    )
+
     private val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity OR porn) " +
             "AND -title:(erotic OR erotica OR adult OR xxx OR sex OR nude OR \"realm of the senses\" OR \"bad girl\") " +
             "AND -description:(pornography OR hardcore OR \"explicit sex\" OR \"adult film\")"
 
-    private val baseQuery = "collection:feature_films AND mediatype:movies AND $safeFilter"
+    // Dugometražni igrani filmovi kao primarni kriterij
+    private val featureBase = "collection:feature_films AND mediatype:movies AND $safeFilter"
 
     val genreDefinitions = listOf(
-        GenreOption("Top 10 ovog mjeseca", baseQuery, "month desc"),
-        GenreOption("Najgledanije", baseQuery, "downloads desc"),
-        GenreOption("Sci-Fi klasici", "$baseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)"),
-        GenreOption("Akcija i avantura", "$baseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
-        GenreOption("Triler i misterija", "$baseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
-        GenreOption("Komedija", "mediatype:movies AND $safeFilter AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
-        GenreOption("Horor", "$baseQuery AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)"),
-        GenreOption("Drama", "$baseQuery AND (subject:drama OR subject:melodrama)"),
-        GenreOption("Krimi", "$baseQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
-        GenreOption("Romantični", "$baseQuery AND (subject:romance OR subject:romantic OR subject:love)"),
-        GenreOption("Vestern", "$baseQuery AND (subject:western OR subject:westerns OR subject:cowboy)"),
-        GenreOption("Ratni", "$baseQuery AND (subject:war OR subject:military OR subject:\"world war\")"),
+        GenreOption("Top 10 ovog mjeseca", featureBase, "month desc"),
+        GenreOption("Najgledanije", featureBase, "downloads desc"),
+        GenreOption("Sci-Fi klasici", "$featureBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)"),
+        GenreOption("Akcija i avantura", "$featureBase AND (subject:action OR subject:adventure OR subject:martial)"),
+        GenreOption("Triler i misterija", "$featureBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
+        GenreOption("Komedija", "$featureBase AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
+        GenreOption("Horor", "$featureBase AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)"),
+        GenreOption("Drama", "$featureBase AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$featureBase AND (subject:crime OR subject:gangster OR subject:detective)"),
+        GenreOption("Romantični", "$featureBase AND (subject:romance OR subject:romantic OR subject:love)"),
+        GenreOption("Vestern", "$featureBase AND (subject:western OR subject:westerns OR subject:cowboy)"),
+        GenreOption("Ratni", "$featureBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
-            "Animirani klasici",
-            "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)"
+            title = "Animirani klasici",
+            query = "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)",
+            defaultSort = "downloads desc",
+            isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult OR title:\"realm of the senses\" OR title:\"bad girl\")",
+            query = "collection:feature_films AND mediatype:movies AND (subject:erotic OR subject:erotica OR title:\"realm of the senses\" OR title:\"bad girl\") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
@@ -128,16 +151,19 @@ class HomeViewModel : ViewModel() {
             try {
                 val deferredList = genreDefinitions.map { genre ->
                     async {
-                        // Povlačimo više rezultata kako bismo nakon lokalnog filtriranja imali punu listu
-                        val fetchRows = if (genre.title == "Top 10 ovog mjeseca") 40 else 30
-                        val targetLimit = if (genre.title == "Top 10 ovog mjeseca") 10 else 20
-                        val movies = fetchSafe(
+                        val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
+                        val fetchRows = if (isMonthlyTop) 45 else 50
+                        val targetLimit = if (isMonthlyTop) 10 else 20
+
+                        val results = fetchAndRankByRelevance(
                             query = genre.query,
-                            sort = genre.defaultSort,
+                            apiSort = genre.defaultSort,
                             rows = fetchRows,
-                            excludeAdult = !genre.isAdultCategory
-                        ).map { it.movie }.take(targetLimit)
-                        genre to movies
+                            excludeAdult = !genre.isAdultCategory,
+                            isAdultCategory = genre.isAdultCategory,
+                            preserveApiOrder = isMonthlyTop
+                        )
+                        genre to results.map { it.movie }.take(targetLimit)
                     }
                 }
                 _homeCategories.value = deferredList.map { it.await() }.filter { it.second.isNotEmpty() }
@@ -155,15 +181,19 @@ class HomeViewModel : ViewModel() {
             _isGenreLoading.value = true
             _genreMovies.value = emptyList()
             try {
-                val sortOrder = if (genre.title == "Top 10 ovog mjeseca") "month desc" else "avg_rating desc"
-                val fetchRows = if (genre.title == "Top 10 ovog mjeseca") 40 else 70
-                val targetLimit = if (genre.title == "Top 10 ovog mjeseca") 10 else 60
-                val results = fetchSafe(
+                val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
+                val fetchRows = if (isMonthlyTop) 45 else 90
+                val targetLimit = if (isMonthlyTop) 10 else 60
+
+                val results = fetchAndRankByRelevance(
                     query = genre.query,
-                    sort = sortOrder,
+                    apiSort = if (isMonthlyTop) "month desc" else "downloads desc",
                     rows = fetchRows,
-                    excludeAdult = !genre.isAdultCategory
+                    excludeAdult = !genre.isAdultCategory,
+                    isAdultCategory = genre.isAdultCategory,
+                    preserveApiOrder = isMonthlyTop
                 ).take(targetLimit)
+
                 _genreMovies.value = results
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -173,47 +203,107 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    private suspend fun fetchSafe(
+    private suspend fun fetchAndRankByRelevance(
         query: String,
-        sort: String = "downloads desc",
-        rows: Int = 20,
-        excludeAdult: Boolean = true
+        apiSort: String,
+        rows: Int,
+        excludeAdult: Boolean,
+        isAdultCategory: Boolean,
+        preserveApiOrder: Boolean
     ): List<RatedMovie> {
         return try {
-            val docs = api.searchMovies(query = query, sort = sort, rows = rows).response?.docs ?: emptyList()
-            docs.mapNotNull { doc ->
+            val docs = api.searchMovies(query = query, sort = apiSort, rows = rows).response?.docs ?: emptyList()
+
+            val scoredList = docs.mapNotNull { doc ->
                 val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val rawTitle = when (val t = doc.title) {
-                    is String -> t.trim()
-                    is List<*> -> t.filterNotNull().joinToString(" ").trim()
-                    else -> ""
-                }
+                val rawTitle = extractText(doc.title)
                 val finalTitle = rawTitle.ifBlank {
-                    id.replace("_", " ")
-                        .replace("-", " ")
-                        .replaceFirstChar { it.uppercase() }
+                    id.replace("_", " ").replace("-", " ").replaceFirstChar { it.uppercase() }
                 }
 
-                // Dodatni lokalni filtar ako film nije označen u metapodacima na serveru
+                val creatorText = extractText(doc.creator)
+                val descText = extractText(doc.description)
+                val collectionText = extractText(doc.collection)
+                val fullMetaLower = "$id $finalTitle $creatorText $descText $collectionText".lowercase()
+
+                // 1. Zaštita od 18+ u standardnim kategorijama
                 if (excludeAdult && isAdultContent(id, finalTitle)) {
                     return@mapNotNull null
                 }
 
+                // 2. U 18+ kategoriji izbacujemo Adult Swim, anime i crtiće
+                if (isAdultCategory) {
+                    val isAnimeOrCartoon = fullMetaLower.contains("adult swim") ||
+                            fullMetaLower.contains("anime") ||
+                            fullMetaLower.contains("cartoon") ||
+                            fullMetaLower.contains("animation")
+                    if (isAnimeOrCartoon) return@mapNotNull null
+                }
+
+                // 3. Izbacujemo kratke trailere/isječke iz igranih kategorija
+                val isTrailerOrClip = fullMetaLower.contains("trailer") ||
+                        fullMetaLower.contains("preview") ||
+                        fullMetaLower.contains("tv spot")
+                if (isTrailerOrClip) return@mapNotNull null
+
+                // Izračun ocjene i broja recenzija
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
                     is String -> r.toDoubleOrNull() ?: 0.0
                     else -> 0.0
                 }
-                val ratingStr = if (ratingVal > 0.0) String.format("%.1f", ratingVal) else ""
+                val reviewsVal = when (val rev = doc.numReviews) {
+                    is Number -> rev.toInt()
+                    is String -> rev.toIntOrNull() ?: 0
+                    else -> 0
+                }
+
+                // Izračun bodova relevantnosti:
+                // - Bonus za dugometražni igrani film (feature_films)
+                var score = if (collectionText.lowercase().contains("feature_films")) 50.0 else 0.0
+
+                // - Ocjena ponderirana brojem recenzija (izbjegava amaterske videe s 1 ocjenom 5.0)
+                if (ratingVal > 0.0 && reviewsVal > 0) {
+                    score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
+                }
+
+                // - Bonus za poznate studije, redatelje, glumce i IMDb reference
+                val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
+                score += studioMatches * 18.0
+
+                // - Bonus ako postoji konkretan opis radnje i redatelj/studio
+                if (descText.length > 80) score += 10.0
+                if (creatorText.isNotBlank()) score += 8.0
+
+                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 2) {
+                    String.format("%.1f", ratingVal)
+                } else {
+                    ""
+                }
 
                 RatedMovie(
                     movie = ArchiveMovie(identifier = id, title = finalTitle),
-                    rating = ratingStr
+                    rating = ratingStr,
+                    relevanceScore = score
                 )
+            }
+
+            if (preserveApiOrder) {
+                scoredList
+            } else {
+                scoredList.sortedByDescending { it.relevanceScore }
             }
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
+        }
+    }
+
+    private fun extractText(value: Any?): String {
+        return when (value) {
+            is String -> value.trim()
+            is List<*> -> value.filterNotNull().joinToString(" ").trim()
+            else -> ""
         }
     }
 }
