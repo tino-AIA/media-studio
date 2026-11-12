@@ -86,6 +86,9 @@ class HomeViewModel : ViewModel() {
     private val _documentaryMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
     val documentaryMovies: StateFlow<List<ArchiveMovie>> = _documentaryMovies
 
+    private val _adultMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val adultMovies: StateFlow<List<ArchiveMovie>> = _adultMovies
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
@@ -97,24 +100,32 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val base = "collection:feature_films AND mediatype:movies"
+                val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity) AND -title:(erotic OR sex OR nude)"
+                val base = "collection:feature_films AND mediatype:movies AND $safeFilter"
 
-                val topMonthDef = async { fetchSafe(base, sort = "month desc", rows = 10) }
+                val topMonthDef = async { fetchSafe(base, sort = "month desc", rows = 15) }
                 val trendingDef = async { fetchSafe(base, sort = "downloads desc", rows = 20) }
                 val sciFiDef = async { fetchSafe("$base AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)") }
                 val actionDef = async { fetchSafe("$base AND (subject:action OR subject:adventure OR subject:martial)") }
                 val thrillerDef = async { fetchSafe("$base AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)") }
-                val comedyDef = async { fetchSafe("mediatype:movies AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)") }
+                val comedyDef = async { fetchSafe("mediatype:movies AND $safeFilter AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)") }
                 val horrorDef = async { fetchSafe("$base AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)") }
                 val dramaDef = async { fetchSafe("$base AND (subject:drama OR subject:melodrama)") }
                 val crimeDef = async { fetchSafe("$base AND (subject:crime OR subject:gangster OR subject:detective)") }
                 val romanceDef = async { fetchSafe("$base AND (subject:romance OR subject:romantic OR subject:love)") }
                 val westernDef = async { fetchSafe("$base AND (subject:western OR subject:westerns OR subject:cowboy)") }
                 val warDef = async { fetchSafe("$base AND (subject:war OR subject:military OR subject:\"world war\")") }
-                val animDef = async { fetchSafe("mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)") }
-                val docDef = async { fetchSafe("mediatype:movies AND (subject:documentary OR subject:documentaries)") }
+                
+                // Poznati studiji i hit klasici za animirane (Disney, Fleischer, Warner Bros / Looney Tunes, Popeye, Superman, Gulliver)
+                val animQuery = "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)"
+                val animDef = async { fetchSafe(animQuery, sort = "downloads desc", rows = 25) }
+                
+                val docDef = async { fetchSafe("mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)") }
+                
+                // Zasebna 18+ / erotska kategorija
+                val adultDef = async { fetchSafe("mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult)") }
 
-                _topMonthlyMovies.value = topMonthDef.await()
+                _topMonthlyMovies.value = topMonthDef.await().take(10)
                 _trendingMovies.value = trendingDef.await()
                 _sciFiMovies.value = sciFiDef.await()
                 _actionMovies.value = actionDef.await()
@@ -128,6 +139,7 @@ class HomeViewModel : ViewModel() {
                 _warMovies.value = warDef.await()
                 _animationMovies.value = animDef.await()
                 _documentaryMovies.value = docDef.await()
+                _adultMovies.value = adultDef.await()
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -150,7 +162,6 @@ class HomeViewModel : ViewModel() {
                     is List<*> -> t.filterNotNull().joinToString(" ").trim()
                     else -> ""
                 }
-                // Ako film nema upisan naslov u bazi, pretvaramo njegov ID u čitljiv naslov
                 val finalTitle = rawTitle.ifBlank {
                     id.replace("_", " ")
                         .replace("-", " ")
