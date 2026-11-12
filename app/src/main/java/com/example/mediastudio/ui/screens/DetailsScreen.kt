@@ -26,7 +26,11 @@ import com.example.mediastudio.data.model.ArchiveMovie
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DetailsScreen(movie: ArchiveMovie, onPlayClick: () -> Unit, onBackClick: () -> Unit) {
+fun DetailsScreen(
+    movie: ArchiveMovie,
+    onPlayClick: (String) -> Unit,
+    onBackClick: () -> Unit
+) {
     var fullInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
     var isLoadingInfo by remember { mutableStateOf(true) }
 
@@ -147,9 +151,9 @@ fun DetailsScreen(movie: ArchiveMovie, onPlayClick: () -> Unit, onBackClick: () 
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Gumb za pokretanje
+                // Gumb za pokretanje (šalje godinu filma dalje)
                 Button(
-                    onClick = onPlayClick,
+                    onClick = { onPlayClick(fullInfo?.year ?: "") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
                     modifier = Modifier
                         .fillMaxWidth()
