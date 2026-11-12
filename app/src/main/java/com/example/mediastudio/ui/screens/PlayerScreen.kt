@@ -52,7 +52,12 @@ fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Composable
-fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> Unit) {
+fun PlayerScreen(
+    identifier: String,
+    movieTitle: String,
+    movieYear: String = "",
+    onNavigateBack: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val fallbackVideoUrl = "https://archive.org/download/$identifier/format=h.264"
@@ -159,9 +164,9 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
         }
     }
 
-    // 3. Dohvaćamo popis titlova s OpenSubtitlesa
-    LaunchedEffect(movieTitle) {
-        availableSubtitles = OpenSubtitlesModule.searchAvailableSubtitles(movieTitle)
+    // 3. Dohvaćamo popis titlova s OpenSubtitlesa uz točnu godinu filma
+    LaunchedEffect(movieTitle, movieYear) {
+        availableSubtitles = OpenSubtitlesModule.searchAvailableSubtitles(movieTitle, movieYear)
     }
 
     // 4. Automatski odabiremo titl koji odgovara FPS-u videa
