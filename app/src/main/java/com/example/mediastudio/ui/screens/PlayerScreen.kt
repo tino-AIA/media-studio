@@ -38,8 +38,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.OpenSubtitlesModule
 import com.example.mediastudio.data.api.SubtitleOption
+import com.example.mediastudio.data.api.VideoQualityOption
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -53,61 +55,94 @@ fun Context.findActivity(): Activity? = when (this) {
 fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val videoUrl = "https://archive.org/download/$identifier/format=h.264"
+    val fallbackVideoUrl = "https://archive.org/download/$identifier/format=h.264"
 
+    // Stanja za kvalitete videa
+    var availableQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
+    var selectedQuality by remember { mutableStateOf<VideoQualityOption?>(null) }
+    var showQualityDialog by remember { mutableStateOf(false) }
+
+    // Stanja za titlove
     var availableSubtitles by remember { mutableStateOf<List<SubtitleOption>>(emptyList()) }
     var selectedSubtitle by remember { mutableStateOf<SubtitleOption?>(null) }
+    var activeSubtitleUri by remember { mutableStateOf<Uri?>(null) }
     var videoFps by remember { mutableStateOf(0f) }
     var autoMatchedDone by remember { mutableStateOf(false) }
     var showSubtitleDialog by remember { mutableStateOf(false) }
+
     var areControlsVisible by remember { mutableStateOf(true) }
 
     BackHandler {
-        if (showSubtitleDialog) {
-            showSubtitleDialog = false
-        } else {
-            onNavigateBack()
+        when {
+            showQualityDialog -> showQualityDialog = false
+            showSubtitleDialog -> showSubtitleDialog = false
+            else -> onNavigateBack()
         }
     }
 
-    // ExoPlayer s korakom premotavanja od 15 sekundi naprijed/natrag
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
             .setSeekBackIncrementMs(15000L)
             .setSeekForwardIncrementMs(15000L)
-            .build().apply {
-                setMediaItem(MediaItem.fromUri(videoUrl))
-                prepare()
-                playWhenReady = true
-            }
+            .build()
+    }
+
+    // Zajednička funkcija koja ažurira player pri promjeni kvalitete ILI titla bez gubitka pozicije
+    fun updateMediaSource(
+        quality: VideoQualityOption?,
+        subUri: Uri?,
+        startPosition: Long = exoPlayer.currentPosition,
+        playWhenReadyState: Boolean = true
+    ) {
+        val targetUrl = quality?.url ?: fallbackVideoUrl
+        val mediaItemBuilder = MediaItem.Builder().setUri(targetUrl)
+
+        if (subUri != null) {
+            val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(subUri)
+                .setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                .setLanguage("hr")
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .build()
+            mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
+        }
+
+        exoPlayer.setMediaItem(mediaItemBuilder.build(), startPosition)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = playWhenReadyState
+    }
+
+    fun applyQuality(option: VideoQualityOption) {
+        selectedQuality = option
+        val pos = if (exoPlayer.currentPosition > 0) exoPlayer.currentPosition else 0L
+        val wasPlaying = if (exoPlayer.playbackState == Player.STATE_IDLE) true else exoPlayer.isPlaying
+        updateMediaSource(option, activeSubtitleUri, pos, wasPlaying)
     }
 
     fun applySubtitle(option: SubtitleOption?) {
         selectedSubtitle = option
         scope.launch {
-            val currentPos = exoPlayer.currentPosition
+            val pos = exoPlayer.currentPosition
             val wasPlaying = exoPlayer.isPlaying
-
-            val mediaItemBuilder = MediaItem.Builder().setUri(videoUrl)
-
-            if (option != null) {
-                val localUri: Uri? = OpenSubtitlesModule.downloadAndFixEncoding(context, option.fileId)
-                if (localUri != null) {
-                    val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(localUri)
-                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
-                        .setLanguage("hr")
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                    mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
-                }
+            val localUri = if (option != null) {
+                OpenSubtitlesModule.downloadAndFixEncoding(context, option.fileId)
+            } else {
+                null
             }
-
-            exoPlayer.setMediaItem(mediaItemBuilder.build(), currentPos)
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = wasPlaying
+            activeSubtitleUri = localUri
+            updateMediaSource(selectedQuality, localUri, pos, wasPlaying)
         }
     }
 
+    // 1. Dohvaćamo sve dostupne kvalitete s Archive.org i automatski pokrećemo najbolju
+    LaunchedEffect(identifier) {
+        val qualities = ArchiveMetadataModule.fetchAvailableQualities(identifier)
+        availableQualities = qualities
+        val bestQuality = qualities.firstOrNull()
+        selectedQuality = bestQuality
+        updateMediaSource(bestQuality, activeSubtitleUri, 0L, true)
+    }
+
+    // 2. Osluškujemo stvarni FPS videa za usklađivanje titlova
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -124,10 +159,12 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
         }
     }
 
+    // 3. Dohvaćamo popis titlova s OpenSubtitlesa
     LaunchedEffect(movieTitle) {
         availableSubtitles = OpenSubtitlesModule.searchAvailableSubtitles(movieTitle)
     }
 
+    // 4. Automatski odabiremo titl koji odgovara FPS-u videa
     LaunchedEffect(availableSubtitles, videoFps) {
         if (!autoMatchedDone && availableSubtitles.isNotEmpty()) {
             val bestMatch = if (videoFps > 0f) {
@@ -154,7 +191,6 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Video Player (ima Play/Pause, -15s, +15s i timeline traku)
         AndroidView(
             factory = {
                 PlayerView(context).apply {
@@ -176,7 +212,7 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
             modifier = Modifier.fillMaxSize()
         )
 
-        // Gornja traka s dodatnim gumbima (prikazuje se samo kad su kontrole vidljive)
+        // Gornja kontrolna traka
         if (areControlsVisible) {
             Row(
                 modifier = Modifier
@@ -191,7 +227,7 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Lijeva strana: Gumb za povratak + Naslov filma
+                // Lijevo: Povratak i naslov
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
@@ -214,12 +250,11 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
                     )
                 }
 
-                // Desna strana: Od početka, Stop, Titlovi (CC)
+                // Desno: Početak, Stop, Kvaliteta (HD/SD), Titlovi (CC)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Gumb: Kreni od početka
                     OutlinedButton(
                         onClick = {
                             exoPlayer.seekTo(0L)
@@ -229,16 +264,11 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Od početka",
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Icon(Icons.Default.Refresh, contentDescription = "Početak", modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Početak", fontSize = 13.sp)
+                        Text("Početak", fontSize = 12.sp)
                     }
 
-                    // Gumb: Stop (zaustavlja reprodukciju i izlazi iz playera)
                     OutlinedButton(
                         onClick = {
                             exoPlayer.stop()
@@ -248,22 +278,33 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Stop,
-                            contentDescription = "Stop",
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Stop", fontSize = 13.sp)
+                        Text("Stop", fontSize = 12.sp)
                     }
 
-                    // Gumb: Odabir titlova (CC)
+                    // Gumb za odabir rezolucije / kvalitete videa
+                    if (availableQualities.isNotEmpty()) {
+                        val currentResShort = selectedQuality?.label?.substringBefore(" ") ?: "Auto"
+                        OutlinedButton(
+                            onClick = { showQualityDialog = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = currentResShort,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    // Gumb za odabir titlova (CC)
                     if (availableSubtitles.isNotEmpty()) {
                         Button(
                             onClick = { showSubtitleDialog = true },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Red.copy(alpha = 0.85f)
-                            ),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.85f)),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
@@ -271,7 +312,7 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
                                 text = "CC (${availableSubtitles.size})",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
+                                fontSize = 12.sp
                             )
                         }
                     }
@@ -279,7 +320,53 @@ fun PlayerScreen(identifier: String, movieTitle: String, onNavigateBack: () -> U
             }
         }
 
-        // Prozor (Dialog) s listom svih pronađenih titlova
+        // Prozor (Dialog) za odabir kvalitete slike
+        if (showQualityDialog) {
+            AlertDialog(
+                onDismissRequest = { showQualityDialog = false },
+                containerColor = Color(0xFF1A1A1A),
+                title = {
+                    Text("Kvaliteta videa", color = Color.White, fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
+                        items(availableQualities) { quality ->
+                            val isSelected = selectedQuality?.url == quality.url
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        applyQuality(quality)
+                                        showQualityDialog = false
+                                    }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = null,
+                                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = quality.label,
+                                    color = if (isSelected) Color.White else Color.LightGray,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showQualityDialog = false }) {
+                        Text("Zatvori", color = Color.White)
+                    }
+                }
+            )
+        }
+
+        // Prozor (Dialog) za odabir titlova
         if (showSubtitleDialog) {
             AlertDialog(
                 onDismissRequest = { showSubtitleDialog = false },
