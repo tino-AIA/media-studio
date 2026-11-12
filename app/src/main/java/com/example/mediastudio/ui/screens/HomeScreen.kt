@@ -2,7 +2,6 @@ package com.example.mediastudio.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -23,9 +22,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -201,51 +202,29 @@ fun MovieCategoryRow(
     }
 }
 
-// Posebna Netflix-stil kartica s velikim brojem (1-10) uz lijevi rub postera
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
-    val borderColor = if (isFocused) Color.White else Color.Transparent
+    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
+    val borderWidth = if (isFocused) 3.dp else 1.5.dp
 
-    Column(modifier = Modifier.width(155.dp)) {
+    Column(modifier = Modifier.width(162.dp)) {
         Box(
             modifier = Modifier
-                .width(155.dp)
+                .width(162.dp)
                 .height(175.dp)
                 .scale(scale)
         ) {
-            // Veliki Netflix broj u pozadini lijevo
-            Text(
-                text = "$rankNumber",
-                color = Color(0xFF2B2B2B),
-                fontSize = 115.sp,
-                fontWeight = FontWeight.Black,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-4).dp, y = 12.dp)
-            )
-
-            // Crveni obrub broja za bolju čitljivost
-            Text(
-                text = "$rankNumber",
-                color = Color.Red.copy(alpha = 0.85f),
-                fontSize = 110.sp,
-                fontWeight = FontWeight.Black,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-2).dp, y = 10.dp)
-            )
-
-            // Poster filma pomaknut udesno preko broja
+            // 1. Prvo crtamo poster sa sivim obrubom u pozadini desno
             Card(
                 modifier = Modifier
                     .width(115.dp)
                     .height(170.dp)
                     .align(Alignment.CenterEnd)
-                    .border(3.dp, borderColor, RoundedCornerShape(12.dp)),
+                    .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
@@ -257,6 +236,42 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                     contentScale = ContentScale.Crop
                 )
             }
+
+            // 2. Zatim u PRVI PLAN (preko ruba postera) crtamo broj s bijelim outlineom
+            val numberFontSize = if (rankNumber == 10) 86.sp else 96.sp
+            val numberLetterSpacing = if (rankNumber == 10) (-7).sp else 0.sp
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = 0.dp, y = 8.dp)
+            ) {
+                // Bijeli vanjski obrub (Stroke)
+                Text(
+                    text = "$rankNumber",
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = numberFontSize,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = numberLetterSpacing,
+                        drawStyle = Stroke(
+                            miter = 10f,
+                            width = 8f,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                )
+                // Crvena ispuna broja u sredini
+                Text(
+                    text = "$rankNumber",
+                    style = TextStyle(
+                        color = Color(0xFFE50914),
+                        fontSize = numberFontSize,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = numberLetterSpacing
+                    )
+                )
+            }
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
@@ -265,7 +280,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
             fontSize = 12.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 38.dp)
+            modifier = Modifier.padding(start = 44.dp)
         )
     }
 }
@@ -276,7 +291,8 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
-    val borderColor = if (isFocused) Color.White else Color.Transparent
+    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
+    val borderWidth = if (isFocused) 3.dp else 1.5.dp
 
     Column(modifier = Modifier.width(120.dp)) {
         Card(
@@ -284,7 +300,7 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
                 .width(120.dp)
                 .height(175.dp)
                 .scale(scale)
-                .border(3.dp, borderColor, RoundedCornerShape(12.dp)),
+                .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
             interactionSource = interactionSource,
             onClick = { onMovieClick(movie) }
