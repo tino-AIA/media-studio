@@ -2,6 +2,7 @@ package com.example.mediastudio.ui.screens
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +24,31 @@ import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.MovieFullInfo
 import com.example.mediastudio.data.model.ArchiveMovie
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.net.URL
+import java.net.URLEncoder
+
+private suspend fun translateToCroatian(text: String): String = withContext(Dispatchers.IO) {
+    if (text.isBlank()) return@withContext text
+    try {
+        val cleanInput = text.take(1500)
+        val encoded = URLEncoder.encode(cleanInput, "UTF-8")
+        val url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
+        val response = URL(url).readText()
+        val jsonArray = JSONArray(response)
+        val sentences = jsonArray.getJSONArray(0)
+        val sb = StringBuilder()
+        for (i in 0 until sentences.length()) {
+            sb.append(sentences.getJSONArray(i).getString(0))
+        }
+        sb.toString().ifBlank { text }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        text
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,10 +58,13 @@ fun DetailsScreen(
     onBackClick: () -> Unit
 ) {
     var fullInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
+    var translatedDescription by remember { mutableStateOf("") }
     var isLoadingInfo by remember { mutableStateOf(true) }
 
     LaunchedEffect(movie.identifier) {
-        fullInfo = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
+        val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
+        fullInfo = info
+        translatedDescription = translateToCroatian(info.description)
         isLoadingInfo = false
     }
 
@@ -84,14 +113,15 @@ fun DetailsScreen(
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Poster filma
+                // Poster filma sa sivim obrubom
                 Image(
                     painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
                     contentDescription = movie.title,
                     modifier = Modifier
                         .width(160.dp)
                         .height(230.dp)
-                        .clip(RoundedCornerShape(12.dp)),
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.5.dp, Color.Gray.copy(alpha = 0.65f), RoundedCornerShape(12.dp)),
                     contentScale = ContentScale.Crop
                 )
 
@@ -138,9 +168,9 @@ fun DetailsScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
 
-                        // Opis radnje
+                        // Prevedeni opis radnje na hrvatski
                         Text(
-                            text = info.description,
+                            text = translatedDescription.ifBlank { info.description },
                             color = Color.LightGray,
                             fontSize = 14.sp,
                             lineHeight = 20.sp,
@@ -151,7 +181,7 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Gumb za pokretanje (šalje godinu filma dalje)
+                // Gumb za pokretanje
                 Button(
                     onClick = { onPlayClick(fullInfo?.year ?: "") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
