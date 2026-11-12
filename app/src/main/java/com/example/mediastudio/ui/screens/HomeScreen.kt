@@ -1,17 +1,23 @@
 package com.example.mediastudio.ui.screens
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -63,7 +69,6 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (String) -> Unit) {
                         selected = false,
                         onClick = {
                             scope.launch { drawerState.close() }
-                            // Ovdje kasnije možemo dodati logiku za skrolanje do te kategorije
                         },
                         colors = NavigationDrawerItemDefaults.colors(
                             unselectedContainerColor = Color.Transparent
@@ -134,7 +139,7 @@ fun HeroMovieSection(movie: ArchiveMovie, onMovieClick: (String) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(400.dp) // Malo smanjeno kako bi se bolje uklopilo s TopAppBar-om
+            .height(400.dp)
     ) {
         Image(
             painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
@@ -169,9 +174,19 @@ fun HeroMovieSection(movie: ArchiveMovie, onMovieClick: (String) -> Unit) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+
+            // Fokus logika za "Gledaj" gumb (Daljinski upravljač)
+            val interactionSource = remember { MutableInteractionSource() }
+            val isFocused by interactionSource.collectIsFocusedAsState()
+            val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "button_scale")
+
             Button(
                 onClick = { onMovieClick(movie.identifier) }, 
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White)
+                interactionSource = interactionSource,
+                modifier = Modifier.scale(scale),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isFocused) Color.LightGray else Color.White
+                )
             ) {
                 Text("▶ Gledaj", color = Color.Black, fontWeight = FontWeight.Bold)
             }
@@ -208,13 +223,26 @@ fun MovieCategoryRow(categoryTitle: String, movies: List<ArchiveMovie>, onMovieC
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MovieCard(movie: ArchiveMovie, onMovieClick: (String) -> Unit) {
+    // Fokus logika za karticu filma (Daljinski upravljač)
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    
+    // Animacija povećanja kada je film označen
+    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "card_scale")
+    // Bijeli obrub kada je film označen
+    val borderColor = if (isFocused) Color.White else Color.Transparent
+
     Column(
-        modifier = Modifier.width(115.dp) // Ograničavamo širinu stupca na širinu postera
+        modifier = Modifier.width(115.dp)
     ) {
         Card(
             modifier = Modifier
                 .width(115.dp)
-                .height(170.dp),
+                .height(170.dp)
+                .scale(scale)
+                .border(3.dp, borderColor, RoundedCornerShape(12.dp)),
+            shape = RoundedCornerShape(12.dp),
+            interactionSource = interactionSource,
             onClick = { onMovieClick(movie.identifier) }
         ) {
             Image(
@@ -227,13 +255,12 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (String) -> Unit) {
         
         Spacer(modifier = Modifier.height(6.dp))
         
-        // Naslov filma ispod postera
         Text(
             text = movie.title,
-            color = Color.LightGray,
+            color = if (isFocused) Color.White else Color.LightGray,
             fontSize = 12.sp,
-            maxLines = 2, // Najviše dvije linije teksta
-            overflow = TextOverflow.Ellipsis // Dodaje "..." ako je tekst predug
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
