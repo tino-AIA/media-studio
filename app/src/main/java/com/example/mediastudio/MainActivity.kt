@@ -9,6 +9,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.ui.screens.DetailsScreen
 import com.example.mediastudio.ui.screens.HomeScreen
 import com.example.mediastudio.ui.screens.PlayerScreen
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
@@ -20,23 +22,31 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 val homeViewModel: HomeViewModel = viewModel()
                 
-                // Pamtimo koji je film odabran. Ako je null, prikazujemo početni ekran.
-                var selectedMovieId by remember { mutableStateOf<String?>(null) }
+                // 3 stanja: 0 = Home, 1 = Details, 2 = Player
+                var currentScreen by remember { mutableStateOf(0) }
+                var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
 
-                if (selectedMovieId == null) {
-                    HomeScreen(
+                when (currentScreen) {
+                    0 -> HomeScreen(
                         viewModel = homeViewModel,
-                        onMovieClick = { identifier -> 
-                            // Kada korisnik klikne film, spremamo njegov ID
-                            selectedMovieId = identifier 
+                        onMovieClick = { movie -> 
+                            selectedMovie = movie
+                            currentScreen = 1 // Idi na detalje
                         }
                     )
-                } else {
-                    // Ako imamo ID filma, otvaramo Player
-                    PlayerScreen(
-                        identifier = selectedMovieId!!,
-                        onNavigateBack = { selectedMovieId = null } // Za povratak nazad
-                    )
+                    1 -> selectedMovie?.let { movie ->
+                        DetailsScreen(
+                            movie = movie,
+                            onPlayClick = { currentScreen = 2 }, // Pokreni player
+                            onBackClick = { currentScreen = 0 }  // Vrati se na Home
+                        )
+                    }
+                    2 -> selectedMovie?.let { movie ->
+                        PlayerScreen(
+                            identifier = movie.identifier,
+                            onNavigateBack = { currentScreen = 1 } // Vrati se na detalje
+                        )
+                    }
                 }
             }
         }
