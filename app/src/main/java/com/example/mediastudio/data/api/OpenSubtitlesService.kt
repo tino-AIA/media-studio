@@ -20,7 +20,13 @@ data class SubtitleAttributes(
     val release: String?,
     val fps: Float?,
     val language: String?,
+    @Json(name = "download_count") val downloadCount: Int?,
+    @Json(name = "feature_details") val featureDetails: FeatureDetails?,
     val files: List<SubtitleFile>?
+)
+data class FeatureDetails(
+    @Json(name = "movie_name") val movieName: String?,
+    val year: Int?
 )
 data class SubtitleFile(
     @Json(name = "file_id") val fileId: Int,
@@ -46,7 +52,10 @@ interface OpenSubtitlesApi {
     @GET("subtitles")
     suspend fun searchSubtitles(
         @Query("query") query: String,
-        @Query("languages") languages: String = "hr,sr,bs"
+        @Query("year") year: Int? = null,
+        @Query("languages") languages: String = "hr,sr,bs",
+        @Query("type") type: String = "movie",
+        @Query("order_by") orderBy: String = "download_count"
     ): SubtitleSearchResponse
 
     @Headers(
@@ -74,30 +83,67 @@ object OpenSubtitlesModule {
             .create(OpenSubtitlesApi::class.java)
     }
 
-    suspend fun searchAvailableSubtitles(rawTitle: String): List<SubtitleOption> {
+    suspend fun searchAvailableSubtitles(rawTitle: String, movieYear: String = ""): List<SubtitleOption> {
         return try {
-            // Čistimo naslov od zagrada, godina i suvišnih znakova radi boljeg pronalaska
+            // Izvlačimo godinu iz naslova ako nije već proslijeđena iz metapodataka
+            val yearFromTitle = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(rawTitle)?.value?.toIntOrNull()
+            val targetYear = movieYear.trim().take(4).toIntOrNull() ?: yearFromTitle
+
             val cleanTitle = rawTitle
                 .replace(Regex("\\(.*?\\)"), "")
                 .replace(Regex("\\[.*?\\]"), "")
-                .replace(Regex("-\\s*\\d{4}"), "")
+                .replace(Regex("\\b(19\\d{2}|20\\d{2})\\b"), "")
+                .replace("-", " ")
                 .trim()
 
-            val response = api.searchSubtitles(query = cleanTitle)
-            
-            response.data?.mapNotNull { item ->
+            // 1. Prvo tražimo s točnom godinom filma (ako je poznata)
+            var response = if (targetYear != null) {
+                api.searchSubtitles(query = cleanTitle, year = targetYear)
+            } else {
+                api.searchSubtitles(query = cleanTitle)
+            }
+
+            // Ako s godinom nema rezultata, probamo bez godine ali filtriramo strogo po naslovu
+            if (response.data.isNullOrEmpty() && targetYear != null) {
+                response = api.searchSubtitles(query = cleanTitle, year = null)
+            }
+
+            val items = response.data ?: return emptyList()
+
+            // Filtriramo da ne ubaci moderne blockbustere ako znamo godinu
+            val filteredItems = items.filter { item ->
+                val subYear = item.attributes?.featureDetails?.year
+                val subMovieName = item.attributes?.featureDetails?.movieName?.lowercase() ?: ""
+                val cleanLower = cleanTitle.lowercase()
+
+                val yearOk = if (targetYear != null && subYear != null) {
+                    kotlin.math.abs(targetYear - subYear) <= 2
+                } else {
+                    true
+                }
+
+                val nameOk = subMovieName.isEmpty() ||
+                    subMovieName.contains(cleanLower) ||
+                    cleanLower.contains(subMovieName)
+
+                yearOk && nameOk
+            }
+
+            filteredItems.take(15).mapNotNull { item ->
                 val attr = item.attributes ?: return@mapNotNull null
                 val file = attr.files?.firstOrNull() ?: return@mapNotNull null
                 val lang = attr.language?.uppercase() ?: "HR"
                 val fpsValue = attr.fps ?: 0f
+                val subYear = attr.featureDetails?.year
+                val yearTag = if (subYear != null) " ($subYear)" else ""
                 val releaseName = attr.release ?: file.fileName ?: "Titl"
-                
+
                 SubtitleOption(
                     fileId = file.fileId,
-                    title = "[$lang] $releaseName (${if (fpsValue > 0) "$fpsValue FPS" else "Auto FPS"})",
+                    title = "[$lang]$yearTag $releaseName • ${if (fpsValue > 0) "$fpsValue FPS" else "Auto FPS"}",
                     fps = fpsValue
                 )
-            } ?: emptyList()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
