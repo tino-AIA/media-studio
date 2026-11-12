@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
                 
                 var currentScreen by remember { mutableStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
+                var selectedMovieYear by remember { mutableStateOf("") }
 
                 when (currentScreen) {
                     0 -> HomeScreen(
@@ -36,7 +37,10 @@ class MainActivity : ComponentActivity() {
                     1 -> selectedMovie?.let { movie ->
                         DetailsScreen(
                             movie = movie,
-                            onPlayClick = { currentScreen = 2 },
+                            onPlayClick = { year ->
+                                selectedMovieYear = year
+                                currentScreen = 2
+                            },
                             onBackClick = { currentScreen = 0 }
                         )
                     }
@@ -44,6 +48,7 @@ class MainActivity : ComponentActivity() {
                         PlayerScreen(
                             identifier = movie.identifier,
                             movieTitle = movie.title,
+                            movieYear = selectedMovieYear,
                             onNavigateBack = { currentScreen = 1 }
                         )
                     }
