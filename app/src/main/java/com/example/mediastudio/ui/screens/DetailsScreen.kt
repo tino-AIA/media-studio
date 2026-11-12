@@ -27,23 +27,42 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
 private suspend fun translateToCroatian(text: String): String = withContext(Dispatchers.IO) {
     if (text.isBlank()) return@withContext text
     try {
-        val cleanInput = text.take(1500)
-        val encoded = URLEncoder.encode(cleanInput, "UTF-8")
-        val url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
-        val response = URL(url).readText()
-        val jsonArray = JSONArray(response)
-        val sentences = jsonArray.getJSONArray(0)
-        val sb = StringBuilder()
-        for (i in 0 until sentences.length()) {
-            sb.append(sentences.getJSONArray(i).getString(0))
+        // Dijelimo dugačke opise u manje odlomke radi pouzdanog prijevoda
+        val chunks = text.take(2400).chunked(700)
+        val resultBuilder = StringBuilder()
+
+        for (chunk in chunks) {
+            val encoded = URLEncoder.encode(chunk, "UTF-8")
+            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hr&dt=t&q=$encoded"
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                connectTimeout = 5000
+                readTimeout = 5000
+            }
+
+            if (conn.responseCode == 200) {
+                val response = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                val jsonArray = JSONArray(response)
+                val sentences = jsonArray.getJSONArray(0)
+                for (i in 0 until sentences.length()) {
+                    val part = sentences.getJSONArray(i).optString(0, "")
+                    resultBuilder.append(part)
+                }
+            } else {
+                resultBuilder.append(chunk)
+            }
+            conn.disconnect()
         }
-        sb.toString().ifBlank { text }
+
+        resultBuilder.toString().trim().ifBlank { text }
     } catch (e: Exception) {
         e.printStackTrace()
         text
@@ -83,7 +102,6 @@ fun DetailsScreen(
         containerColor = Color.Black
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize()) {
-            // Pozadinska zamagljena slika
             Image(
                 painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
                 contentDescription = movie.title,
@@ -113,7 +131,6 @@ fun DetailsScreen(
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Poster filma sa sivim obrubom
                 Image(
                     painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
                     contentDescription = movie.title,
@@ -127,7 +144,6 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Naslov
                 Text(
                     text = movie.title,
                     color = Color.White,
@@ -141,7 +157,6 @@ fun DetailsScreen(
                     CircularProgressIndicator(color = Color.Red, modifier = Modifier.padding(16.dp))
                 } else {
                     fullInfo?.let { info ->
-                        // Godina i Redatelj
                         val metaLine = listOfNotNull(
                             info.year.takeIf { it.isNotBlank() }?.let { "Godina: $it" },
                             info.director.takeIf { it.isNotBlank() }?.let { "Redatelj: $it" }
@@ -157,7 +172,6 @@ fun DetailsScreen(
                             Spacer(modifier = Modifier.height(6.dp))
                         }
 
-                        // Dostupne kvalitete videa
                         if (info.qualities.isNotEmpty()) {
                             Text(
                                 text = "Dostupno: ${info.qualities.joinToString(", ") { it.label }}",
@@ -168,7 +182,6 @@ fun DetailsScreen(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
 
-                        // Prevedeni opis radnje na hrvatski
                         Text(
                             text = translatedDescription.ifBlank { info.description },
                             color = Color.LightGray,
@@ -181,7 +194,6 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Gumb za pokretanje
                 Button(
                     onClick = { onPlayClick(fullInfo?.year ?: "") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
