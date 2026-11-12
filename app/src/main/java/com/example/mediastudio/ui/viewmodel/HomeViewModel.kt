@@ -2,14 +2,49 @@ package com.example.mediastudio.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mediastudio.data.api.RetrofitClient
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
+
+private data class ArchiveSearchResponse(
+    val response: ArchiveResponseBody?
+)
+
+private data class ArchiveResponseBody(
+    val docs: List<ArchiveMovie>?
+)
+
+private interface ArchiveSearchApi {
+    @GET("advancedsearch.php")
+    suspend fun searchMovies(
+        @Query("q") query: String,
+        @Query("fl[]") fields: List<String> = listOf("identifier", "title"),
+        @Query("sort[]") sort: String = "downloads desc",
+        @Query("rows") rows: Int = 20,
+        @Query("page") page: Int = 1,
+        @Query("output") output: String = "json"
+    ): ArchiveSearchResponse
+}
 
 class HomeViewModel : ViewModel() {
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    private val api: ArchiveSearchApi = Retrofit.Builder()
+        .baseUrl("https://archive.org/")
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(ArchiveSearchApi::class.java)
+
     private val _topMonthlyMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
     val topMonthlyMovies: StateFlow<List<ArchiveMovie>> = _topMonthlyMovies
 
@@ -88,7 +123,7 @@ class HomeViewModel : ViewModel() {
         rows: Int = 20
     ): List<ArchiveMovie> {
         return try {
-            RetrofitClient.api.searchMovies(query = query, sort = sort, rows = rows).response?.docs ?: emptyList()
+            api.searchMovies(query = query, sort = sort, rows = rows).response?.docs ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
