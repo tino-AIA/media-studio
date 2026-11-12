@@ -3,12 +3,16 @@ package com.example.mediastudio.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -16,15 +20,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
+import com.example.mediastudio.data.api.ArchiveMetadataModule
+import com.example.mediastudio.data.api.MovieFullInfo
 import com.example.mediastudio.data.model.ArchiveMovie
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailsScreen(movie: ArchiveMovie, onPlayClick: () -> Unit, onBackClick: () -> Unit) {
+    var fullInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
+    var isLoadingInfo by remember { mutableStateOf(true) }
+
+    LaunchedEffect(movie.identifier) {
+        fullInfo = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
+        isLoadingInfo = false
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(movie.title, color = Color.White, maxLines = 1) },
+                title = { Text("Detalji filma", color = Color.White, maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Nazad", tint = Color.White)
@@ -36,44 +50,116 @@ fun DetailsScreen(movie: ArchiveMovie, onPlayClick: () -> Unit, onBackClick: () 
         containerColor = Color.Black
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize()) {
+            // Pozadinska zamagljena slika
             Image(
                 painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
                 contentDescription = movie.title,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                alpha = 0.25f
             )
-            
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Brush.verticalGradient(colors = listOf(Color.Black.copy(alpha = 0.6f), Color.Black), startY = 0f))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.7f), Color.Black),
+                            startY = 0f
+                        )
+                    )
             )
-            
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.Bottom,
+                    .padding(horizontal = 20.dp)
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Poster filma
+                Image(
+                    painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
+                    contentDescription = movie.title,
+                    modifier = Modifier
+                        .width(160.dp)
+                        .height(230.dp)
+                        .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Naslov
                 Text(
                     text = movie.title,
                     color = Color.White,
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
                 )
-                
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (isLoadingInfo) {
+                    CircularProgressIndicator(color = Color.Red, modifier = Modifier.padding(16.dp))
+                } else {
+                    fullInfo?.let { info ->
+                        // Godina i Redatelj
+                        val metaLine = listOfNotNull(
+                            info.year.takeIf { it.isNotBlank() }?.let { "Godina: $it" },
+                            info.director.takeIf { it.isNotBlank() }?.let { "Redatelj: $it" }
+                        ).joinToString("  •  ")
+
+                        if (metaLine.isNotBlank()) {
+                            Text(
+                                text = metaLine,
+                                color = Color(0xFFBBBBBB),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+
+                        // Dostupne kvalitete videa
+                        if (info.qualities.isNotEmpty()) {
+                            Text(
+                                text = "Dostupno: ${info.qualities.joinToString(", ") { it.label }}",
+                                color = Color(0xFF4CAF50),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        // Opis radnje
+                        Text(
+                            text = info.description,
+                            color = Color.LightGray,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Gumb za pokretanje
                 Button(
                     onClick = onPlayClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
                     modifier = Modifier
-                        .fillMaxWidth(0.8f)
-                        .height(50.dp)
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("▶ POKRENI FILM", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("▶ POKRENI FILM", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 }
+
+                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }
