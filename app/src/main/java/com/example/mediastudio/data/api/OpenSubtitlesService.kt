@@ -42,6 +42,12 @@ data class SubtitleOption(
     val fps: Float
 )
 
+data class SrtCue(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 interface OpenSubtitlesApi {
     @Headers(
         "Api-Key: GZaTvvntJdvb7Awbymax5vI0Kwb0Wnjo",
@@ -85,7 +91,6 @@ object OpenSubtitlesModule {
 
     suspend fun searchAvailableSubtitles(rawTitle: String, movieYear: String = ""): List<SubtitleOption> {
         return try {
-            // Izvlačimo godinu iz naslova ako nije već proslijeđena iz metapodataka
             val yearFromTitle = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(rawTitle)?.value?.toIntOrNull()
             val targetYear = movieYear.trim().take(4).toIntOrNull() ?: yearFromTitle
 
@@ -96,21 +101,18 @@ object OpenSubtitlesModule {
                 .replace("-", " ")
                 .trim()
 
-            // 1. Prvo tražimo s točnom godinom filma (ako je poznata)
             var response = if (targetYear != null) {
                 api.searchSubtitles(query = cleanTitle, year = targetYear)
             } else {
                 api.searchSubtitles(query = cleanTitle)
             }
 
-            // Ako s godinom nema rezultata, probamo bez godine ali filtriramo strogo po naslovu
             if (response.data.isNullOrEmpty() && targetYear != null) {
                 response = api.searchSubtitles(query = cleanTitle, year = null)
             }
 
             val items = response.data ?: return emptyList()
 
-            // Filtriramo da ne ubaci moderne blockbustere ako znamo godinu
             val filteredItems = items.filter { item ->
                 val subYear = item.attributes?.featureDetails?.year
                 val subMovieName = item.attributes?.featureDetails?.movieName?.lowercase() ?: ""
@@ -150,10 +152,10 @@ object OpenSubtitlesModule {
         }
     }
 
-    suspend fun downloadAndFixEncoding(context: Context, fileId: Int): Uri? = withContext(Dispatchers.IO) {
+    suspend fun downloadAndParseSubtitles(fileId: Int): List<SrtCue> = withContext(Dispatchers.IO) {
         try {
             val downloadResult = api.getDownloadLink(DownloadRequest(fileId))
-            val link = downloadResult.link ?: return@withContext null
+            val link = downloadResult.link ?: return@withContext emptyList()
 
             val bytes = URL(link).readBytes()
             val utf8String = String(bytes, Charsets.UTF_8)
@@ -163,12 +165,39 @@ object OpenSubtitlesModule {
                 utf8String
             }
 
-            val tempFile = File(context.cacheDir, "active_subtitle.srt")
-            tempFile.writeText(finalText, Charsets.UTF_8)
-            Uri.fromFile(tempFile)
+            parseSrt(finalText)
         } catch (e: Exception) {
             e.printStackTrace()
-            null
+            emptyList()
         }
+    }
+
+    private fun parseSrt(srtContent: String): List<SrtCue> {
+        val cues = mutableListOf<SrtCue>()
+        val normalized = srtContent.replace("\uFEFF", "").replace("\r\n", "\n").replace("\r", "\n")
+        val blocks = normalized.split(Regex("\n\\s*\n"))
+        val timeRegex = Regex("(\\d{1,2}):(\\d{2}):(\\d{2})[,.](\\d{3})\\s*-->\\s*(\\d{1,2}):(\\d{2}):(\\d{2})[,.](\\d{3})")
+
+        for (block in blocks) {
+            val lines = block.trim().lines()
+            if (lines.size < 2) continue
+
+            val timeLineIndex = lines.indexOfFirst { timeRegex.containsMatchIn(it) }
+            if (timeLineIndex == -1 || timeLineIndex + 1 >= lines.size) continue
+
+            val match = timeRegex.find(lines[timeLineIndex]) ?: continue
+            val g = match.groupValues
+
+            val startMs = (g[1].toLong() * 3600 + g[2].toLong() * 60 + g[3].toLong()) * 1000 + g[4].toLong()
+            val endMs = (g[5].toLong() * 3600 + g[6].toLong() * 60 + g[7].toLong()) * 1000 + g[8].toLong()
+
+            val rawText = lines.drop(timeLineIndex + 1).joinToString("\n")
+            val cleanText = rawText.replace(Regex("<[^>]*>"), "").trim()
+
+            if (cleanText.isNotEmpty()) {
+                cues.add(SrtCue(startMs = startMs, endMs = endMs, text = cleanText))
+            }
+        }
+        return cues
     }
 }
