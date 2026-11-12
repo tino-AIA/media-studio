@@ -5,12 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.screens.DetailsScreen
+import com.example.mediastudio.ui.screens.GenreScreen
 import com.example.mediastudio.ui.screens.HomeScreen
 import com.example.mediastudio.ui.screens.PlayerScreen
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
@@ -22,7 +24,8 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 val homeViewModel: HomeViewModel = viewModel()
                 
-                var currentScreen by remember { mutableStateOf(0) }
+                var currentScreen by remember { mutableIntStateOf(0) }
+                var previousScreen by remember { mutableIntStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
                 var selectedMovieYear by remember { mutableStateOf("") }
 
@@ -31,7 +34,12 @@ class MainActivity : ComponentActivity() {
                         viewModel = homeViewModel,
                         onMovieClick = { movie -> 
                             selectedMovie = movie
+                            previousScreen = 0
                             currentScreen = 1
+                        },
+                        onGenreSelect = { genre ->
+                            homeViewModel.openGenre(genre)
+                            currentScreen = 3
                         }
                     )
                     1 -> selectedMovie?.let { movie ->
@@ -41,7 +49,7 @@ class MainActivity : ComponentActivity() {
                                 selectedMovieYear = year
                                 currentScreen = 2
                             },
-                            onBackClick = { currentScreen = 0 }
+                            onBackClick = { currentScreen = previousScreen }
                         )
                     }
                     2 -> selectedMovie?.let { movie ->
@@ -52,6 +60,15 @@ class MainActivity : ComponentActivity() {
                             onNavigateBack = { currentScreen = 1 }
                         )
                     }
+                    3 -> GenreScreen(
+                        viewModel = homeViewModel,
+                        onMovieClick = { movie ->
+                            selectedMovie = movie
+                            previousScreen = 3
+                            currentScreen = 1
+                        },
+                        onBackClick = { currentScreen = 0 }
+                    )
                 }
             }
         }
