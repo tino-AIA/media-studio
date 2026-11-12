@@ -48,7 +48,11 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
     val comedyMovies by viewModel.comedyMovies.collectAsState()
     val horrorMovies by viewModel.horrorMovies.collectAsState()
     val dramaMovies by viewModel.dramaMovies.collectAsState()
+    val crimeMovies by viewModel.crimeMovies.collectAsState()
+    val romanceMovies by viewModel.romanceMovies.collectAsState()
     val westernMovies by viewModel.westernMovies.collectAsState()
+    val warMovies by viewModel.warMovies.collectAsState()
+    val animationMovies by viewModel.animationMovies.collectAsState()
     val documentaryMovies by viewModel.documentaryMovies.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
@@ -59,18 +63,24 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
 
     val categories = remember(
         topMonthlyMovies, trendingMovies, sciFiMovies, actionMovies,
-        thrillerMovies, comedyMovies, horrorMovies, dramaMovies, westernMovies, documentaryMovies, searchQuery
+        thrillerMovies, comedyMovies, horrorMovies, dramaMovies,
+        crimeMovies, romanceMovies, westernMovies, warMovies,
+        animationMovies, documentaryMovies, searchQuery
     ) {
         listOf(
             "Top 10 ovog mjeseca" to topMonthlyMovies.take(10).filter { it.title.contains(searchQuery, true) },
             "Najgledanije" to trendingMovies.filter { it.title.contains(searchQuery, true) },
             "Sci-Fi klasici" to sciFiMovies.filter { it.title.contains(searchQuery, true) },
-            "Akcija" to actionMovies.filter { it.title.contains(searchQuery, true) },
-            "Triler" to thrillerMovies.filter { it.title.contains(searchQuery, true) },
+            "Akcija i avantura" to actionMovies.filter { it.title.contains(searchQuery, true) },
+            "Triler i misterija" to thrillerMovies.filter { it.title.contains(searchQuery, true) },
             "Komedija" to comedyMovies.filter { it.title.contains(searchQuery, true) },
             "Horor" to horrorMovies.filter { it.title.contains(searchQuery, true) },
             "Drama" to dramaMovies.filter { it.title.contains(searchQuery, true) },
+            "Krimi" to crimeMovies.filter { it.title.contains(searchQuery, true) },
+            "Romantični" to romanceMovies.filter { it.title.contains(searchQuery, true) },
             "Vestern" to westernMovies.filter { it.title.contains(searchQuery, true) },
+            "Ratni" to warMovies.filter { it.title.contains(searchQuery, true) },
+            "Animirani" to animationMovies.filter { it.title.contains(searchQuery, true) },
             "Dokumentarni" to documentaryMovies.filter { it.title.contains(searchQuery, true) }
         ).filter { it.second.isNotEmpty() }
     }
@@ -95,7 +105,7 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
 
                     categories.forEachIndexed { index, (title, _) ->
                         NavigationDrawerItem(
-                            label = { Text(title, color = Color.White, fontSize = 16.sp) },
+                            label = { Text(title, color = Color.White, fontSize = 15.sp) },
                             selected = false,
                             onClick = {
                                 scope.launch {
@@ -218,7 +228,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                 .height(175.dp)
                 .scale(scale)
         ) {
-            // 1. Prvo crtamo poster sa sivim obrubom u pozadini desno
             Card(
                 modifier = Modifier
                     .width(115.dp)
@@ -237,7 +246,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                 )
             }
 
-            // 2. Zatim u PRVI PLAN (preko ruba postera) crtamo broj s bijelim outlineom
             val numberFontSize = if (rankNumber == 10) 86.sp else 96.sp
             val numberLetterSpacing = if (rankNumber == 10) (-7).sp else 0.sp
 
@@ -246,7 +254,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                     .align(Alignment.BottomStart)
                     .offset(x = 0.dp, y = 8.dp)
             ) {
-                // Bijeli vanjski obrub (Stroke)
                 Text(
                     text = "$rankNumber",
                     style = TextStyle(
@@ -261,7 +268,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                         )
                     )
                 )
-                // Crvena ispuna broja u sredini
                 Text(
                     text = "$rankNumber",
                     style = TextStyle(
