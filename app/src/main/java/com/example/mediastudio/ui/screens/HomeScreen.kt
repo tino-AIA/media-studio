@@ -3,18 +3,20 @@ package com.example.mediastudio.ui.screens
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -34,57 +36,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
-    val topMonthlyMovies by viewModel.topMonthlyMovies.collectAsState()
-    val trendingMovies by viewModel.trendingMovies.collectAsState()
-    val sciFiMovies by viewModel.sciFiMovies.collectAsState()
-    val actionMovies by viewModel.actionMovies.collectAsState()
-    val thrillerMovies by viewModel.thrillerMovies.collectAsState()
-    val comedyMovies by viewModel.comedyMovies.collectAsState()
-    val horrorMovies by viewModel.horrorMovies.collectAsState()
-    val dramaMovies by viewModel.dramaMovies.collectAsState()
-    val crimeMovies by viewModel.crimeMovies.collectAsState()
-    val romanceMovies by viewModel.romanceMovies.collectAsState()
-    val westernMovies by viewModel.westernMovies.collectAsState()
-    val warMovies by viewModel.warMovies.collectAsState()
-    val animationMovies by viewModel.animationMovies.collectAsState()
-    val documentaryMovies by viewModel.documentaryMovies.collectAsState()
-    val adultMovies by viewModel.adultMovies.collectAsState()
+fun HomeScreen(
+    viewModel: HomeViewModel,
+    onMovieClick: (ArchiveMovie) -> Unit,
+    onGenreSelect: (GenreOption) -> Unit
+) {
+    val homeCategories by viewModel.homeCategories.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
     var searchQuery by remember { mutableStateOf("") }
 
-    val categories = remember(
-        topMonthlyMovies, trendingMovies, sciFiMovies, actionMovies,
-        thrillerMovies, comedyMovies, horrorMovies, dramaMovies,
-        crimeMovies, romanceMovies, westernMovies, warMovies,
-        animationMovies, documentaryMovies, adultMovies, searchQuery
-    ) {
-        listOf(
-            "Top 10 ovog mjeseca" to topMonthlyMovies.take(10).filter { it.title.contains(searchQuery, true) },
-            "Najgledanije" to trendingMovies.filter { it.title.contains(searchQuery, true) },
-            "Sci-Fi klasici" to sciFiMovies.filter { it.title.contains(searchQuery, true) },
-            "Akcija i avantura" to actionMovies.filter { it.title.contains(searchQuery, true) },
-            "Triler i misterija" to thrillerMovies.filter { it.title.contains(searchQuery, true) },
-            "Komedija" to comedyMovies.filter { it.title.contains(searchQuery, true) },
-            "Horor" to horrorMovies.filter { it.title.contains(searchQuery, true) },
-            "Drama" to dramaMovies.filter { it.title.contains(searchQuery, true) },
-            "Krimi" to crimeMovies.filter { it.title.contains(searchQuery, true) },
-            "Romantični" to romanceMovies.filter { it.title.contains(searchQuery, true) },
-            "Vestern" to westernMovies.filter { it.title.contains(searchQuery, true) },
-            "Ratni" to warMovies.filter { it.title.contains(searchQuery, true) },
-            "Animirani klasici" to animationMovies.filter { it.title.contains(searchQuery, true) },
-            "Dokumentarni" to documentaryMovies.filter { it.title.contains(searchQuery, true) },
-            "18+ / Erotski" to adultMovies.filter { it.title.contains(searchQuery, true) }
-        ).filter { it.second.isNotEmpty() }
+    val filteredCategories = remember(homeCategories, searchQuery) {
+        homeCategories.map { (genre, movies) ->
+            genre to movies.filter { it.title.contains(searchQuery, true) }
+        }.filter { it.second.isNotEmpty() }
     }
 
     ModalNavigationDrawer(
@@ -105,12 +78,12 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
                     )
                     Divider(color = Color.DarkGray)
 
-                    categories.forEachIndexed { index, (title, _) ->
+                    viewModel.genreDefinitions.forEach { genre ->
                         NavigationDrawerItem(
                             label = {
                                 Text(
-                                    text = title,
-                                    color = if (title.startsWith("18+")) Color(0xFFFF6B6B) else Color.White,
+                                    text = genre.title,
+                                    color = if (genre.title.startsWith("18+")) Color(0xFFFF6B6B) else Color.White,
                                     fontSize = 15.sp
                                 )
                             },
@@ -118,7 +91,7 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
-                                    listState.animateScrollToItem(index)
+                                    onGenreSelect(genre)
                                 }
                             },
                             colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
@@ -168,18 +141,18 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
                 }
             } else {
                 LazyColumn(
-                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(paddingValues)
                 ) {
-                    itemsIndexed(categories) { _, (title, movies) ->
-                        val isTop10 = (title == "Top 10 ovog mjeseca")
+                    items(filteredCategories) { (genre, movies) ->
+                        val isTop10 = (genre.title == "Top 10 ovog mjeseca")
                         MovieCategoryRow(
-                            categoryTitle = if (isTop10) "🔥 $title" else title,
+                            genre = genre,
                             movies = movies,
                             isNetflixTop10 = isTop10,
-                            onMovieClick = onMovieClick
+                            onMovieClick = onMovieClick,
+                            onHeaderClick = { onGenreSelect(genre) }
                         )
                     }
                     item { Spacer(modifier = Modifier.height(30.dp)) }
@@ -191,20 +164,46 @@ fun HomeScreen(viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
 
 @Composable
 fun MovieCategoryRow(
-    categoryTitle: String,
+    genre: GenreOption,
     movies: List<ArchiveMovie>,
     isNetflixTop10: Boolean = false,
-    onMovieClick: (ArchiveMovie) -> Unit
+    onMovieClick: (ArchiveMovie) -> Unit,
+    onHeaderClick: () -> Unit
 ) {
     if (movies.isEmpty()) return
+    val displayTitle = if (isNetflixTop10) "🔥 ${genre.title}" else genre.title
+
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        Text(
-            text = categoryTitle,
-            color = Color.White,
-            fontSize = 19.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
+        // Klikabilni naslov žanra sa strelicom koji otvara cijeli žanr poredan po ocjenama
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onHeaderClick() }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = displayTitle,
+                color = Color.White,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Svi",
+                    color = Color.Gray,
+                    fontSize = 13.sp
+                )
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Otvori žanr",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp)
