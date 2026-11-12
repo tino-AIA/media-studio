@@ -3,6 +3,7 @@ package com.example.mediastudio.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.async
@@ -14,18 +15,30 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 
+data class GenreOption(
+    val title: String,
+    val query: String,
+    val defaultSort: String = "avg_rating desc"
+)
+
+data class RatedMovie(
+    val movie: ArchiveMovie,
+    val rating: String
+)
+
 private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
 private data class ArchiveResponseBody(val docs: List<RawArchiveDoc>?)
 private data class RawArchiveDoc(
     val identifier: String?,
-    val title: Any?
+    val title: Any?,
+    @Json(name = "avg_rating") val avgRating: Any?
 )
 
 private interface ArchiveSearchApi {
     @GET("advancedsearch.php")
     suspend fun searchMovies(
         @Query("q") query: String,
-        @Query("fl[]") fields: List<String> = listOf("identifier", "title"),
+        @Query("fl[]") fields: List<String> = listOf("identifier", "title", "avg_rating"),
         @Query("sort[]") sort: String = "downloads desc",
         @Query("rows") rows: Int = 20,
         @Query("page") page: Int = 1,
@@ -44,53 +57,47 @@ class HomeViewModel : ViewModel() {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    private val _topMonthlyMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val topMonthlyMovies: StateFlow<List<ArchiveMovie>> = _topMonthlyMovies
+    private val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity) AND -title:(erotic OR sex OR nude)"
+    private val baseQuery = "collection:feature_films AND mediatype:movies AND $safeFilter"
 
-    private val _trendingMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val trendingMovies: StateFlow<List<ArchiveMovie>> = _trendingMovies
+    // Popis svih žanrova i njihovih upita na jednom mjestu
+    val genreDefinitions = listOf(
+        GenreOption("Top 10 ovog mjeseca", baseQuery, "month desc"),
+        GenreOption("Najgledanije", baseQuery, "downloads desc"),
+        GenreOption("Sci-Fi klasici", "$baseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)"),
+        GenreOption("Akcija i avantura", "$baseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
+        GenreOption("Triler i misterija", "$baseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
+        GenreOption("Komedija", "mediatype:movies AND $safeFilter AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
+        GenreOption("Horor", "$baseQuery AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)"),
+        GenreOption("Drama", "$baseQuery AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$baseQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
+        GenreOption("Romantični", "$baseQuery AND (subject:romance OR subject:romantic OR subject:love)"),
+        GenreOption("Vestern", "$baseQuery AND (subject:western OR subject:westerns OR subject:cowboy)"),
+        GenreOption("Ratni", "$baseQuery AND (subject:war OR subject:military OR subject:\"world war\")"),
+        GenreOption(
+            "Animirani klasici",
+            "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)"
+        ),
+        GenreOption("Dokumentarni", "mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)"),
+        GenreOption("18+ / Erotski", "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult)")
+    )
 
-    private val _sciFiMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val sciFiMovies: StateFlow<List<ArchiveMovie>> = _sciFiMovies
-
-    private val _actionMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val actionMovies: StateFlow<List<ArchiveMovie>> = _actionMovies
-
-    private val _thrillerMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val thrillerMovies: StateFlow<List<ArchiveMovie>> = _thrillerMovies
-
-    private val _comedyMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val comedyMovies: StateFlow<List<ArchiveMovie>> = _comedyMovies
-
-    private val _horrorMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val horrorMovies: StateFlow<List<ArchiveMovie>> = _horrorMovies
-
-    private val _dramaMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val dramaMovies: StateFlow<List<ArchiveMovie>> = _dramaMovies
-
-    private val _crimeMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val crimeMovies: StateFlow<List<ArchiveMovie>> = _crimeMovies
-
-    private val _romanceMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val romanceMovies: StateFlow<List<ArchiveMovie>> = _romanceMovies
-
-    private val _westernMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val westernMovies: StateFlow<List<ArchiveMovie>> = _westernMovies
-
-    private val _warMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val warMovies: StateFlow<List<ArchiveMovie>> = _warMovies
-
-    private val _animationMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val animationMovies: StateFlow<List<ArchiveMovie>> = _animationMovies
-
-    private val _documentaryMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val documentaryMovies: StateFlow<List<ArchiveMovie>> = _documentaryMovies
-
-    private val _adultMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val adultMovies: StateFlow<List<ArchiveMovie>> = _adultMovies
+    // Stanja za početni ekran
+    private val _homeCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val homeCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _homeCategories
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
+
+    // Stanja za zasebni ekran odabranog žanra (sortirano po ocjeni)
+    private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
+    val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
+
+    private val _genreMovies = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val genreMovies: StateFlow<List<RatedMovie>> = _genreMovies
+
+    private val _isGenreLoading = MutableStateFlow(false)
+    val isGenreLoading: StateFlow<Boolean> = _isGenreLoading
 
     init {
         loadAllCategories()
@@ -100,46 +107,14 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity) AND -title:(erotic OR sex OR nude)"
-                val base = "collection:feature_films AND mediatype:movies AND $safeFilter"
-
-                val topMonthDef = async { fetchSafe(base, sort = "month desc", rows = 15) }
-                val trendingDef = async { fetchSafe(base, sort = "downloads desc", rows = 20) }
-                val sciFiDef = async { fetchSafe("$base AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)") }
-                val actionDef = async { fetchSafe("$base AND (subject:action OR subject:adventure OR subject:martial)") }
-                val thrillerDef = async { fetchSafe("$base AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)") }
-                val comedyDef = async { fetchSafe("mediatype:movies AND $safeFilter AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)") }
-                val horrorDef = async { fetchSafe("$base AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)") }
-                val dramaDef = async { fetchSafe("$base AND (subject:drama OR subject:melodrama)") }
-                val crimeDef = async { fetchSafe("$base AND (subject:crime OR subject:gangster OR subject:detective)") }
-                val romanceDef = async { fetchSafe("$base AND (subject:romance OR subject:romantic OR subject:love)") }
-                val westernDef = async { fetchSafe("$base AND (subject:western OR subject:westerns OR subject:cowboy)") }
-                val warDef = async { fetchSafe("$base AND (subject:war OR subject:military OR subject:\"world war\")") }
-                
-                // Poznati studiji i hit klasici za animirane (Disney, Fleischer, Warner Bros / Looney Tunes, Popeye, Superman, Gulliver)
-                val animQuery = "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)"
-                val animDef = async { fetchSafe(animQuery, sort = "downloads desc", rows = 25) }
-                
-                val docDef = async { fetchSafe("mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)") }
-                
-                // Zasebna 18+ / erotska kategorija
-                val adultDef = async { fetchSafe("mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult)") }
-
-                _topMonthlyMovies.value = topMonthDef.await().take(10)
-                _trendingMovies.value = trendingDef.await()
-                _sciFiMovies.value = sciFiDef.await()
-                _actionMovies.value = actionDef.await()
-                _thrillerMovies.value = thrillerDef.await()
-                _comedyMovies.value = comedyDef.await()
-                _horrorMovies.value = horrorDef.await()
-                _dramaMovies.value = dramaDef.await()
-                _crimeMovies.value = crimeDef.await()
-                _romanceMovies.value = romanceDef.await()
-                _westernMovies.value = westernDef.await()
-                _warMovies.value = warDef.await()
-                _animationMovies.value = animDef.await()
-                _documentaryMovies.value = docDef.await()
-                _adultMovies.value = adultDef.await()
+                val deferredList = genreDefinitions.map { genre ->
+                    async {
+                        val rows = if (genre.title == "Top 10 ovog mjeseca") 10 else 20
+                        val movies = fetchSafe(genre.query, sort = genre.defaultSort, rows = rows).map { it.movie }
+                        genre to movies
+                    }
+                }
+                _homeCategories.value = deferredList.map { it.await() }.filter { it.second.isNotEmpty() }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -148,11 +123,31 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    // Otvara zasebni ekran žanra i sortira filmove po ocjenama (najviša ocjena prva)
+    fun openGenre(genre: GenreOption) {
+        _selectedGenre.value = genre
+        viewModelScope.launch {
+            _isGenreLoading.value = true
+            _genreMovies.value = emptyList()
+            try {
+                // Sortiramo po ocjeni publike (avg_rating desc) i broju recenzija
+                val sortOrder = if (genre.title == "Top 10 ovog mjeseca") "month desc" else "avg_rating desc"
+                val rows = if (genre.title == "Top 10 ovog mjeseca") 10 else 60
+                val results = fetchSafe(genre.query, sort = sortOrder, rows = rows)
+                _genreMovies.value = results
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isGenreLoading.value = false
+            }
+        }
+    }
+
     private suspend fun fetchSafe(
         query: String,
         sort: String = "downloads desc",
         rows: Int = 20
-    ): List<ArchiveMovie> {
+    ): List<RatedMovie> {
         return try {
             val docs = api.searchMovies(query = query, sort = sort, rows = rows).response?.docs ?: emptyList()
             docs.mapNotNull { doc ->
@@ -167,7 +162,18 @@ class HomeViewModel : ViewModel() {
                         .replace("-", " ")
                         .replaceFirstChar { it.uppercase() }
                 }
-                ArchiveMovie(identifier = id, title = finalTitle)
+
+                val ratingVal = when (val r = doc.avgRating) {
+                    is Number -> r.toDouble()
+                    is String -> r.toDoubleOrNull() ?: 0.0
+                    else -> 0.0
+                }
+                val ratingStr = if (ratingVal > 0.0) String.format("%.1f", ratingVal) else ""
+
+                RatedMovie(
+                    movie = ArchiveMovie(identifier = id, title = finalTitle),
+                    rating = ratingStr
+                )
             }
         } catch (e: Exception) {
             e.printStackTrace()
