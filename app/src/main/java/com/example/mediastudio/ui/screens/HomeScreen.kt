@@ -6,7 +6,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -111,7 +110,15 @@ fun HomeScreen(
     ) {
         Scaffold(
             topBar = {
-                Column(modifier = Modifier.padding(top = 6.dp)) {
+                // POPRAVLJENO: Blokada tipke "Gore" je sada samo na gornjem izborniku,
+                // tako da ne blokira ostatak aplikacije!
+                Column(
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .onPreviewKeyEvent { 
+                            if (it.key == Key.DirectionUp) true else false 
+                        }
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -162,10 +169,8 @@ fun HomeScreen(
                     }
                 }
             },
-            containerColor = Color.Black,
-            modifier = Modifier
-                .onPreviewKeyEvent { if (it.key == Key.DirectionUp) true else false }
-                .focusable()
+            containerColor = Color.Black
+            // Uklonjen problematičan modifier iz Scaffolda
         ) { paddingValues ->
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
@@ -441,7 +446,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
             ) {
-                // PAMETNI COIL IMAGE LOADER ZA ZAŠTITU OD PRAZNIH PLAKATA
                 val painter = rememberAsyncImagePainter(
                     model = posterUrl.ifBlank { fallbackUrl }
                 )
