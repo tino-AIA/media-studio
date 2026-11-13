@@ -50,23 +50,29 @@ object PosterFetcher {
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        // We use the same aggressive cleaning strategy used for grouping
-        val cleanTitle = title
+        // EKSTREMNO ČIŠĆENJE ZA TMDB: Skidamo sve oznake epizoda, kvalitete videa, godina i sufiksa
+        var cleanTitle = title
             .replace(Regex("\\(\\d{4}\\)"), "")
+            .replace(Regex("(?i)\\b(video\\s*quality|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol\\.?\\s*\\d+|part\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)season\\s*\\d+.*"), "")
-            .replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized)"), "")
-            .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
             .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+            
+        // Neki id-evi su čišći od naslova na archive.org (npr za The Big Trees)
+        if (cleanTitle.length < 3) {
+             cleanTitle = archiveId.replace("_", " ").replace("-", " ")
+                 .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol|part)\\b.*"), "")
+                 .trim()
+        }
 
         val cacheKey = "${isSeries}_$cleanTitle"
         if (cache.containsKey(cacheKey)) return@withContext cache[cacheKey]!!
 
         val fallback = "https://archive.org/services/img/$archiveId"
-        if (cleanTitle.isBlank() || cleanTitle.length < 3) return@withContext fallback
+        if (cleanTitle.isBlank() || cleanTitle.length < 2) return@withContext fallback
 
         try {
             val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
@@ -328,7 +334,6 @@ object ArchiveMetadataModule {
                             )
                         }
                     } else {
-                        // Advanced search za kolekcije
                         val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$cleanId+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
                         val searchJson = JSONObject(URL(searchUrl).readText())
                         val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
