@@ -436,7 +436,7 @@ class HomeViewModel : ViewModel() {
                 )
             }
 
-            // GRUPIRANJE: Ako je riječ o serijama, spajamo iste serije (Season 1, Season 2...) u jedan objekt!
+            // GRUPIRANJE: Spajamo serije (Season 1, Season 2...) u jedan objekt na ekranu!
             val finalSorted = if (isSeriesCategory) {
                 val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
                 val mergedList = grouped.map { (baseTitle, group) ->
