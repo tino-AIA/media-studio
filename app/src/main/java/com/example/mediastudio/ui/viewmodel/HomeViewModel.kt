@@ -117,11 +117,12 @@ class HomeViewModel : ViewModel() {
     private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar) " +
             "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
-    private val moviesBase = "mediatype:movies AND item_size:[450000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter"
+    private val moviesBase = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter"
 
+    // KATEGORIJE ZA FILMOVE (Top 10 prošlog tjedna uvijek vraća svih 10 naslova)
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 prošlog tjedna", "collection:feature_films AND $moviesBase", "week desc"),
-        GenreOption("Najgledanije", moviesBase, "downloads desc"),
+        GenreOption("Najgledanije", "collection:feature_films AND $moviesBase", "downloads desc"),
         GenreOption("Sci-Fi klasici", "$moviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$moviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
         GenreOption("Triler i misterija", "$moviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR collection:film_noir)"),
@@ -134,30 +135,31 @@ class HomeViewModel : ViewModel() {
         GenreOption("Ratni", "$moviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "$moviesBase AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$moviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[500000000 TO *] AND $noJunkFilter AND (" +
-                    "collection:(adultvhs OR mensmagazines_post70s) OR " +
-                    "subject:(erotic OR erotica OR softcore OR sexploitation) OR " +
-                    "identifier:(*alpha-france* OR *alphafrance* OR *realm-of-the-senses* OR *empire-des-sens* OR *servante-perverse*) OR " +
-                    "title:(\"alpha france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"bad girl\" OR \"jess franco\" OR \"tinto brass\") OR " +
-                    "creator:(\"alpha france\" OR \"nagisa oshima\" OR \"jess franco\" OR \"max pecas\" OR \"tinto brass\")" +
+            query = "mediatype:movies AND $noJunkFilter AND (" +
+                    "collection:adultvhs OR collection:mensmagazines_post70s OR " +
+                    "subject:erotic OR subject:erotica OR subject:softcore OR subject:sexploitation OR " +
+                    "title:\"alpha france\" OR creator:\"alpha france\" OR description:\"alpha france\" OR " +
+                    "title:\"realm of the senses\" OR title:\"empire des sens\" OR title:\"servante perverse\" OR " +
+                    "title:\"bad girl\" OR creator:\"jess franco\" OR creator:\"tinto brass\" OR creator:\"max pecas\"" +
                     ") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon OR education OR lecture)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
     )
 
-    private val seriesBase = "(collection:(classic_tv OR television OR television_inbox) OR subject:(\"tv series\" OR \"television series\" OR season OR episodes OR collection)) AND $noJunkFilter AND $safeFilter"
+    // KATEGORIJE ZA SERIJE I KOLEKCIJE (samo itemi s video datotekama, bez praznih metakolekcija)
+    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR season OR episodes OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter"
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
-        GenreOption("Animirane kolekcije i crtići", "(title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND mediatype:movies AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Animirane kolekcije i crtići", "mediatype:movies AND (title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom) OR title:(three stooges OR lucy OR beverly hillbillies OR laurel and hardy))", "downloads desc", isSeriesCategory = true),
@@ -226,7 +228,7 @@ class HomeViewModel : ViewModel() {
             _isSearchingGlobal.value = true
             try {
                 val safeQuery = trimmed.replace("\"", "")
-                val archiveQuery = "mediatype:movies AND $noJunkFilter AND (title:\"$safeQuery\" OR title:$safeQuery* OR identifier:*${safeQuery.replace(" ", "-")}* OR creator:\"$safeQuery\")"
+                val archiveQuery = "mediatype:movies AND $noJunkFilter AND (title:\"$safeQuery\" OR title:$safeQuery* OR creator:\"$safeQuery\" OR description:\"$safeQuery\")"
                 val (results, _) = fetchAndRankByRelevance(
                     query = archiveQuery,
                     apiSort = "downloads desc",
@@ -261,7 +263,7 @@ class HomeViewModel : ViewModel() {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = 45,
+                            rows = 60,
                             page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
@@ -278,7 +280,7 @@ class HomeViewModel : ViewModel() {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = 40,
+                            rows = 60,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -313,7 +315,7 @@ class HomeViewModel : ViewModel() {
             _currentGenrePage.value = page
             try {
                 val isWeeklyTop = genre.title.startsWith("Top 10")
-                val fetchRows = if (isWeeklyTop) 45 else 75
+                val fetchRows = if (isWeeklyTop) 60 else 80
                 val targetLimit = if (isWeeklyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
@@ -395,7 +397,7 @@ class HomeViewModel : ViewModel() {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..25 && !isAnimationCategory) {
+                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder) {
                     return@mapNotNull null
                 }
 
@@ -415,7 +417,8 @@ class HomeViewModel : ViewModel() {
 
                 if (collectionText.lowercase().contains("feature_films")) score += 80.0
                 if (runtimeMinutes >= 65) score += 160.0
-                if (itemSizeMb >= 700) score += 100.0
+                if (itemSizeMb >= 600) score += 130.0
+                if (itemSizeMb in 1..120 && !isAnimationCategory) score -= 220.0
 
                 if (ratingVal > 0.0 && reviewsVal > 0) {
                     score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
