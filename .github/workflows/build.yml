@@ -1,4 +1,4 @@
-name: Android Build
+name: Build Android APK
 
 on:
   push:
@@ -10,25 +10,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout kod
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Postavljanje Jave 17
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Postavljanje Gradle-a
+    - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.5'
 
-    - name: Build APK
-      run: gradle assembleDebug
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
 
-    - name: Spremi APK za preuzimanje
+    - name: Sign APK with persistent key for seamless updates
+      run: |
+        keytool -genkey -v -keystore media-studio-release.keystore -alias mediastudio \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -storepass mediastudio123 -keypass mediastudio123 \
+          -dname "CN=MediaStudio, OU=TV, O=MediaStudio, L=Zagreb, S=HR, C=HR" \
+          -startdate "2024/01/01 00:00:00"
+        BUILD_TOOLS=$(find $ANDROID_HOME/build-tools -maxdepth 1 | sort -V | tail -n 1)
+        UNSIGNED_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+        $BUILD_TOOLS/zipalign -v -p 4 "$UNSIGNED_APK" app-aligned.apk
+        $BUILD_TOOLS/apksigner sign --ks media-studio-release.keystore \
+          --ks-key-alias mediastudio --ks-pass pass:mediastudio123 \
+          --key-pass pass:mediastudio123 --out MediaStudio-updateable.apk app-aligned.apk
+
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: MediaStudio-APK
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: MediaStudio-updateable.apk
