@@ -38,6 +38,7 @@ fun SeriesScreen(
     onBackClick: () -> Unit
 ) {
     var episodes by remember { mutableStateOf<List<SeriesEpisode>>(emptyList()) }
+    var seriesDescription by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
     BackHandler {
@@ -46,7 +47,9 @@ fun SeriesScreen(
 
     LaunchedEffect(series.identifier) {
         isLoading = true
-        episodes = ArchiveMetadataModule.fetchSeriesEpisodes(series.identifier)
+        val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier)
+        seriesDescription = fullInfo.description
+        episodes = fullInfo.episodes
         isLoading = false
     }
 
@@ -89,13 +92,6 @@ fun SeriesScreen(
             ) {
                 CircularProgressIndicator(color = Color.Red)
             }
-        } else if (episodes.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(paddingValues),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Nema dostupnih epizoda u ovoj kolekciji.", color = Color.Gray)
-            }
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),
@@ -103,33 +99,48 @@ fun SeriesScreen(
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Image(
-                            painter = rememberAsyncImagePainter("https://archive.org/services/img/${series.identifier}"),
-                            contentDescription = series.title,
-                            modifier = Modifier
-                                .width(100.dp)
-                                .height(140.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .border(1.5.dp, Color.Gray, RoundedCornerShape(10.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = series.title,
-                                color = Color.White,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold
+                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Image(
+                                painter = rememberAsyncImagePainter("https://archive.org/services/img/${series.identifier}"),
+                                contentDescription = series.title,
+                                modifier = Modifier
+                                    .width(100.dp)
+                                    .height(140.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.5.dp, Color.Gray, RoundedCornerShape(10.dp)),
+                                contentScale = ContentScale.Crop
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = series.title,
+                                    color = Color.White,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = if (episodes.isNotEmpty())
+                                        "Odaberi epizodu s popisa za izravnu reprodukciju."
+                                    else
+                                        "Ova kolekcija nema izravno povezanih video datoteka.",
+                                    color = Color.LightGray,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+
+                        if (seriesDescription.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "Odaberi epizodu s popisa za izravnu reprodukciju.",
-                                color = Color.LightGray,
-                                fontSize = 13.sp
+                                text = seriesDescription,
+                                color = Color(0xFFCCCCCC),
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp
                             )
                         }
                     }
