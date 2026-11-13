@@ -1,56 +1,58 @@
 package com.example.mediastudio.ui.screens
 
 import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
-import android.view.View
+import android.view.KeyEvent
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
-import com.example.mediastudio.data.api.OpenSubtitlesModule
-import com.example.mediastudio.data.api.SrtCue
-import com.example.mediastudio.data.api.SubtitleOption
+import com.example.mediastudio.data.api.OpenSubtitlesService
+import com.example.mediastudio.data.api.SubtitleItem
 import com.example.mediastudio.data.api.VideoQualityOption
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
-fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
+data class SrtCue(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
 
 @Composable
 fun PlayerScreen(
@@ -61,84 +63,80 @@ fun PlayerScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val fallbackVideoUrl = "https://archive.org/download/$identifier/format=h.264"
+    val coroutineScope = rememberCoroutineScope()
+    val fallbackVideoUrl = "https://archive.org/download/$identifier/$identifier.mp4"
 
-    // Stanja za kvalitete videa
+    var isPlaying by remember { mutableStateOf(true) }
+    var isBuffering by remember { mutableStateOf(true) }
+    var currentPosition by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var showControls by remember { mutableStateOf(false) }
+    var controlsInteractionTick by remember { mutableIntStateOf(0) }
+
+    // Brzi statusni HUD (za -15s / +15s / kontinuirani seek / poruku za Back) bez otvaranja kontrola
+    var quickHudMessage by remember { mutableStateOf("") }
+    var quickHudTick by remember { mutableIntStateOf(0) }
+    var isContinuousSeeking by remember { mutableStateOf(false) }
+
+    // Stanja za kvalitetu videa
     var availableQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
     var selectedQuality by remember { mutableStateOf<VideoQualityOption?>(null) }
     var showQualityDialog by remember { mutableStateOf(false) }
 
-    // Stanja za brze Compose titlove (bez prekidanja videa)
-    var availableSubtitles by remember { mutableStateOf<List<SubtitleOption>>(emptyList()) }
-    var selectedSubtitle by remember { mutableStateOf<SubtitleOption?>(null) }
+    // Stanja za titlove (.srt)
+    var showSubtitleDialog by remember { mutableStateOf(false) }
+    var subtitleList by remember { mutableStateOf<List<SubtitleItem>>(emptyList()) }
+    var isLoadingSubtitles by remember { mutableStateOf(false) }
+    var activeSubtitleName by remember { mutableStateOf<String?>(null) }
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
     var currentSubtitleText by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableLongStateOf(0L) }
-    var isLoadingSubtitles by remember { mutableStateOf(false) }
 
-    var videoFps by remember { mutableStateOf(0f) }
-    var autoMatchedDone by remember { mutableStateOf(false) }
-    var showSubtitleDialog by remember { mutableStateOf(false) }
-    var areControlsVisible by remember { mutableStateOf(true) }
+    val rootFocusRequester = remember { FocusRequester() }
+    val centerPauseFocusRequester = remember { FocusRequester() }
 
+    // Optimizirani buffer (brzi start nakon 1.5s + duboki buffer od 50s za spore Archive.org servere)
+    val exoPlayer = remember {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15_000, // minBufferMs
+                50_000, // maxBufferMs
+                1_500,  // bufferForPlaybackMs (kreće odmah nakon 1.5s)
+                3_000   // bufferForPlaybackAfterRebufferMs
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) MediaStudio/1.0")
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+
+        ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
+            .build()
+    }
+
+    // Tipka BACK: prvi pritisak pauzira video, drugi pritisak izlazi iz playera
     BackHandler {
         when {
             showQualityDialog -> showQualityDialog = false
             showSubtitleDialog -> showSubtitleDialog = false
-            else -> onNavigateBack()
+            exoPlayer.isPlaying -> {
+                exoPlayer.pause()
+                isPlaying = false
+                quickHudMessage = "⏸ Pauzirano (pritisni Back ponovno za izlaz)"
+                quickHudTick++
+            }
+            else -> {
+                exoPlayer.stop()
+                onNavigateBack()
+            }
         }
     }
 
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context)
-            .setSeekBackIncrementMs(15000L)
-            .setSeekForwardIncrementMs(15000L)
-            .build()
-    }
-
-    // Promjena kvalitete videa (jedina situacija koja mijenja video stream)
-    fun applyQuality(option: VideoQualityOption) {
-        selectedQuality = option
-        val pos = if (exoPlayer.currentPosition > 0) exoPlayer.currentPosition else 0L
-        val wasPlaying = if (exoPlayer.playbackState == Player.STATE_IDLE) true else exoPlayer.isPlaying
-        exoPlayer.setMediaItem(MediaItem.fromUri(option.url), pos)
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = wasPlaying
-    }
-
-    // Trenutna promjena titla u memoriji - video stream se uopće ne dira!
-    fun applySubtitle(option: SubtitleOption?) {
-        selectedSubtitle = option
-        subtitleOffsetMs = 0L
-        if (option == null) {
-            parsedCues = emptyList()
-            currentSubtitleText = ""
-            return
-        }
-        scope.launch {
-            isLoadingSubtitles = true
-            val cues = OpenSubtitlesModule.downloadAndParseSubtitles(option.fileId)
-            parsedCues = cues
-            isLoadingSubtitles = false
-        }
-    }
-
-    // Petlja koja prati trenutno vrijeme videa i ispisuje odgovarajući redak titla
-    LaunchedEffect(parsedCues, subtitleOffsetMs) {
-        if (parsedCues.isEmpty()) {
-            currentSubtitleText = ""
-            return@LaunchedEffect
-        }
-        while (isActive) {
-            val posWithOffset = exoPlayer.currentPosition + subtitleOffsetMs
-            val activeCue = parsedCues.firstOrNull { posWithOffset in it.startMs..it.endMs }
-            currentSubtitleText = activeCue?.text ?: ""
-            delay(100L)
-        }
-    }
-
-    // 1. Dohvat kvaliteta videa i pokretanje najbolje rezolucije
     LaunchedEffect(identifier, directVideoUrl) {
         if (directVideoUrl.isNotEmpty()) {
             availableQualities = emptyList()
@@ -158,47 +156,74 @@ fun PlayerScreen(
         }
     }
 
-    // 2. Osluškivanje FPS-a videa
-    DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                val detectedFps = exoPlayer.videoFormat?.frameRate ?: 0f
-                if (detectedFps > 0f && videoFps == 0f) {
-                    videoFps = detectedFps
-                }
+    // Automatsko skrivanje quick HUD poruke nakon 2 sekunde
+    LaunchedEffect(quickHudTick) {
+        if (quickHudMessage.isNotEmpty()) {
+            delay(2000L)
+            if (!isContinuousSeeking) {
+                quickHudMessage = ""
             }
-        }
-        exoPlayer.addListener(listener)
-        onDispose {
-            exoPlayer.removeListener(listener)
-            exoPlayer.release()
         }
     }
 
-    // 3. Dohvat liste titlova s OpenSubtitlesa
-    LaunchedEffect(movieTitle, movieYear) {
-        availableSubtitles = OpenSubtitlesModule.searchAvailableSubtitles(movieTitle, movieYear)
-    }
-
-    // 4. Automatski odabir najboljeg titla po FPS-u
-    LaunchedEffect(availableSubtitles, videoFps) {
-        if (!autoMatchedDone && availableSubtitles.isNotEmpty()) {
-            val bestMatch = if (videoFps > 0f) {
-                availableSubtitles.firstOrNull { it.fps > 0f && abs(it.fps - videoFps) < 0.1f }
-                    ?: availableSubtitles.first()
-            } else {
-                availableSubtitles.first()
+    // Automatsko skrivanje kontrola playera nakon 5 sekundi neaktivnosti
+    LaunchedEffect(showControls, controlsInteractionTick, isPlaying, showQualityDialog, showSubtitleDialog) {
+        if (showControls && isPlaying && !showQualityDialog && !showSubtitleDialog) {
+            delay(5000L)
+            showControls = false
+            try {
+                rootFocusRequester.requestFocus()
+            } catch (_: Exception) {
             }
-            autoMatchedDone = true
-            applySubtitle(bestMatch)
+        } else if (!showControls) {
+            try {
+                rootFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
         }
     }
 
     DisposableEffect(Unit) {
-        val activity = context.findActivity()
+        val activity = context as? Activity
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isBuffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) {
+                    duration = exoPlayer.duration.coerceAtLeast(0L)
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+
         onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    LaunchedEffect(exoPlayer, parsedCues, subtitleOffsetMs) {
+        while (true) {
+            val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            currentPosition = pos
+            if (exoPlayer.duration > 0) duration = exoPlayer.duration
+
+            if (parsedCues.isNotEmpty()) {
+                val adjustedPos = pos - subtitleOffsetMs
+                val activeCue = parsedCues.firstOrNull { adjustedPos in it.startMs..it.endMs }
+                currentSubtitleText = activeCue?.text ?: ""
+            } else {
+                currentSubtitleText = ""
+            }
+            delay(200L)
         }
     }
 
@@ -206,19 +231,91 @@ fun PlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(rootFocusRequester)
+            .focusable()
+            .onPreviewKeyEvent { keyEvent ->
+                val native = keyEvent.nativeKeyEvent
+                val keyCode = native.keyCode
+
+                if (showQualityDialog || showSubtitleDialog) {
+                    return@onPreviewKeyEvent false
+                }
+
+                // 1. SREDINA KRUGA (DPAD_CENTER / ENTER):
+                // - Prvi pritisak (kad su kontrole skrivene) -> prikaže kontrole playera
+                // - Sljedeći pritisak (kad su kontrole vidljive) -> pauza / nastavak (ako nije fokusiran neki drugi gumb)
+                if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                    if (native.action == KeyEvent.ACTION_DOWN && native.repeatCount == 0) {
+                        if (!showControls) {
+                            showControls = true
+                            controlsInteractionTick++
+                            return@onPreviewKeyEvent true
+                        }
+                    }
+                    if (showControls) {
+                        controlsInteractionTick++
+                    }
+                    return@onPreviewKeyEvent false
+                }
+
+                // 2. LIJEVO / DESNO NA KRUGU DOK SU KONTROLE SKRIVENE:
+                // - Kratki pritisak (repeatCount == 0): skok 15 sekundi (-15s / +15s) bez kontrola
+                // - Zadržavanje (repeatCount > 0): kontinuirani seek videa bez prikaza kontrola
+                if (!showControls && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                    val isForward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    if (native.action == KeyEvent.ACTION_DOWN) {
+                        val stepMs = if (native.repeatCount == 0) 15_000L else 12_000L
+                        isContinuousSeeking = native.repeatCount > 0
+                        val targetPos = if (isForward) {
+                            (exoPlayer.currentPosition + stepMs).coerceAtMost(duration.coerceAtLeast(0L))
+                        } else {
+                            (exoPlayer.currentPosition - stepMs).coerceAtLeast(0L)
+                        }
+                        exoPlayer.seekTo(targetPos)
+                        currentPosition = targetPos
+                        quickHudMessage = if (isContinuousSeeking) {
+                            "${if (isForward) "⏩" else "⏪"} ${formatTime(targetPos)} / ${formatTime(duration)}"
+                        } else {
+                            "${if (isForward) "+15s ↻" else "↺ -15s"}  (${formatTime(targetPos)})"
+                        }
+                        quickHudTick++
+                        return@onPreviewKeyEvent true
+                    } else if (native.action == KeyEvent.ACTION_UP) {
+                        isContinuousSeeking = false
+                        quickHudTick++
+                        return@onPreviewKeyEvent true
+                    }
+                }
+
+                // 3. GORE / DOLJE DOK SU KONTROLE SKRIVENE -> prikaže kontrole
+                if (!showControls && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
+                    if (native.action == KeyEvent.ACTION_DOWN) {
+                        showControls = true
+                        controlsInteractionTick++
+                        return@onPreviewKeyEvent true
+                    }
+                }
+
+                if (showControls && native.action == KeyEvent.ACTION_DOWN) {
+                    controlsInteractionTick++
+                }
+                false
+            }
+            .clickable {
+                if (!showControls) {
+                    showControls = true
+                    controlsInteractionTick++
+                } else {
+                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                    controlsInteractionTick++
+                }
+            }
     ) {
         AndroidView(
-            factory = {
-                PlayerView(context).apply {
+            factory = { ctx ->
+                PlayerView(ctx).apply {
                     player = exoPlayer
-                    useController = true
-                    setShowRewindButton(true)
-                    setShowFastForwardButton(true)
-                    setControllerVisibilityListener(
-                        PlayerView.ControllerVisibilityListener { visibility ->
-                            areControlsVisible = (visibility == View.VISIBLE)
-                        }
-                    )
+                    useController = false
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -228,286 +325,330 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Prikaz teksta titla preko videa (automatski se podiže iznad trake kad su kontrole vidljive)
+        // Kružić učitavanja kad se video baferira
+        if (isBuffering) {
+            CircularProgressIndicator(
+                color = Color.Red,
+                modifier = Modifier.align(Alignment.Center).size(52.dp)
+            )
+        }
+
+        // Brzi HUD za -15s / +15s / kontinuirani seek / Pauzirano (bez otvaranja kontrola)
+        if (quickHudMessage.isNotEmpty() && !showControls) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 26.dp)
+                    .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(10.dp))
+                    .border(1.5.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = quickHudMessage,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
+        // Prikaz aktivnog titla na dnu ekrana
         if (currentSubtitleText.isNotEmpty()) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(
-                        start = 32.dp,
-                        end = 32.dp,
-                        bottom = if (areControlsVisible) 88.dp else 28.dp
-                    )
+                    .padding(bottom = if (showControls) 95.dp else 36.dp, start = 32.dp, end = 32.dp)
                     .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(6.dp))
                     .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
                 Text(
                     text = currentSubtitleText,
                     color = Color.White,
-                    fontSize = 19.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                    lineHeight = 25.sp
+                    textAlign = TextAlign.Center
                 )
             }
         }
 
-        // Gornja kontrolna traka
-        if (areControlsVisible) {
-            Row(
+        // Kontrole playera s jasnim bijelim fokusnim okvirom na svakom polju
+        if (showControls) {
+            LaunchedEffect(Unit) {
+                try {
+                    centerPauseFocusRequester.requestFocus()
+                } catch (_: Exception) {
+                }
+            }
+
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
-                        )
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f))
             ) {
-                // Lijevo: Povratak i naslov
+                // Gornja traka: Naziv + gumbi s fokusnim okvirom
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Povratak",
-                            tint = Color.White
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        PlayerFocusableIconButton(
+                            onClick = {
+                                exoPlayer.stop()
+                                onNavigateBack()
+                            },
+                            contentDescription = "Natrag"
+                        ) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Natrag", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = movieTitle,
+                            color = Color.White,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
                         )
                     }
-                    Text(
-                        text = movieTitle,
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (parsedCues.isNotEmpty()) {
+                            PlayerChipButton(
+                                label = "-0.5s",
+                                onClick = {
+                                    subtitleOffsetMs -= 500L
+                                    controlsInteractionTick++
+                                }
+                            )
+                            PlayerChipButton(
+                                label = "+0.5s",
+                                onClick = {
+                                    subtitleOffsetMs += 500L
+                                    controlsInteractionTick++
+                                }
+                            )
+                        }
+
+                        PlayerChipButton(
+                            label = "↺ Početak",
+                            onClick = {
+                                exoPlayer.seekTo(0L)
+                                exoPlayer.play()
+                                controlsInteractionTick++
+                            }
+                        )
+
+                        PlayerChipButton(
+                            label = "■ Stop",
+                            onClick = {
+                                exoPlayer.pause()
+                                exoPlayer.seekTo(0L)
+                                controlsInteractionTick++
+                            }
+                        )
+
+                        if (availableQualities.isNotEmpty()) {
+                            PlayerChipButton(
+                                label = selectedQuality?.label?.substringBefore(" ") ?: "HD",
+                                onClick = { showQualityDialog = true }
+                            )
+                        }
+
+                        PlayerChipButton(
+                            label = if (activeSubtitleName != null) "CC ✓" else "CC Titlovi",
+                            isHighlighted = activeSubtitleName != null,
+                            onClick = {
+                                showSubtitleDialog = true
+                                if (subtitleList.isEmpty()) {
+                                    isLoadingSubtitles = true
+                                    coroutineScope.launch {
+                                        subtitleList = OpenSubtitlesService.searchSubtitles(movieTitle, movieYear)
+                                        isLoadingSubtitles = false
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
 
-                // Desno: Sinkronizacija titla, Početak, Stop, Rezolucija, Titlovi (CC)
+                // Središnje kontrole s bijelim fokusnim okvirom
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Ručna sinkronizacija titlova (-0.5s / +0.5s) kad je titl aktivan
-                    if (selectedSubtitle != null) {
-                        OutlinedButton(
-                            onClick = { subtitleOffsetMs -= 500L },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("-0.5s", fontSize = 11.sp)
-                        }
-
-                        if (subtitleOffsetMs != 0L) {
-                            val offsetSec = subtitleOffsetMs / 1000.0
-                            Text(
-                                text = "${if (offsetSec > 0) "+" else ""}${"%.1f".format(offsetSec)}s",
-                                color = Color(0xFF4CAF50),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = { subtitleOffsetMs += 500L },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("+0.5s", fontSize = 11.sp)
-                        }
-                    }
-
-                    OutlinedButton(
+                    PlayerFocusableIconButton(
                         onClick = {
                             exoPlayer.seekTo(0L)
-                            exoPlayer.playWhenReady = true
+                            controlsInteractionTick++
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp)
+                        contentDescription = "Početak",
+                        sizeDp = 52
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Početak", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(3.dp))
-                        Text("Početak", fontSize = 11.sp)
+                        Icon(Icons.Default.SkipPrevious, contentDescription = "Početak", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
 
-                    OutlinedButton(
+                    PlayerFocusableIconButton(
                         onClick = {
-                            exoPlayer.stop()
-                            onNavigateBack()
+                            exoPlayer.seekTo((currentPosition - 15000L).coerceAtLeast(0L))
+                            controlsInteractionTick++
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp)
+                        contentDescription = "Natrag 15s",
+                        sizeDp = 52
                     ) {
-                        Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(3.dp))
-                        Text("Stop", fontSize = 11.sp)
+                        Icon(Icons.Default.Replay10, contentDescription = "Natrag 15s", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
 
-                    if (availableQualities.isNotEmpty()) {
-                        val currentResShort = selectedQuality?.label?.substringBefore(" ") ?: "Auto"
-                        OutlinedButton(
-                            onClick = { showQualityDialog = true },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                text = currentResShort,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
-                            )
-                        }
+                    PlayerFocusableIconButton(
+                        onClick = {
+                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            controlsInteractionTick++
+                        },
+                        contentDescription = "Pauza / Nastavi",
+                        sizeDp = 64,
+                        isPrimary = true,
+                        modifier = Modifier.focusRequester(centerPauseFocusRequester)
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Play/Pause",
+                            tint = Color.Black,
+                            modifier = Modifier.size(40.dp)
+                        )
                     }
 
-                    if (availableSubtitles.isNotEmpty()) {
-                        Button(
-                            onClick = { showSubtitleDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.85f)),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text(
-                                text = if (isLoadingSubtitles) "..." else "CC (${availableSubtitles.size})",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
-                            )
-                        }
+                    PlayerFocusableIconButton(
+                        onClick = {
+                            exoPlayer.seekTo((currentPosition + 15000L).coerceAtMost(duration))
+                            controlsInteractionTick++
+                        },
+                        contentDescription = "Naprijed 15s",
+                        sizeDp = 52
+                    ) {
+                        Icon(Icons.Default.Forward10, contentDescription = "Naprijed 15s", tint = Color.White, modifier = Modifier.size(32.dp))
+                    }
+                }
+
+                // Donji progress bar
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 24.dp, vertical = 14.dp)
+                ) {
+                    Slider(
+                        value = if (duration > 0) currentPosition.toFloat() else 0f,
+                        onValueChange = {
+                            exoPlayer.seekTo(it.toLong())
+                            controlsInteractionTick++
+                        },
+                        valueRange = 0f..(if (duration > 0) duration.toFloat() else 1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.Red,
+                            inactiveTrackColor = Color.Gray
+                        )
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val syncText = if (subtitleOffsetMs != 0L) "  |  Titl pomak: ${subtitleOffsetMs / 1000.0}s" else ""
+                        Text(
+                            text = "${formatTime(currentPosition)} / ${formatTime(duration)}$syncText",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }
         }
 
-        // Prozor (Dialog) za odabir kvalitete slike
+        // Dijalog za izbor rezolucije
         if (showQualityDialog) {
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = {
-                    Text("Kvaliteta videa", color = Color.White, fontWeight = FontWeight.Bold)
-                },
+                title = { Text("Odaberi rezoluciju videa", color = Color.White) },
                 text = {
-                    LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(availableQualities) { quality ->
-                            val isSelected = selectedQuality?.url == quality.url
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        applyQuality(quality)
-                                        showQualityDialog = false
-                                    }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = null,
-                                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = quality.label,
-                                    color = if (isSelected) Color.White else Color.LightGray,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
+                            DialogFocusableRow(
+                                label = quality.label,
+                                isSelected = quality == selectedQuality,
+                                onClick = {
+                                    val savedPos = exoPlayer.currentPosition
+                                    selectedQuality = quality
+                                    exoPlayer.setMediaItem(MediaItem.fromUri(quality.url), savedPos)
+                                    exoPlayer.prepare()
+                                    exoPlayer.playWhenReady = true
+                                    showQualityDialog = false
+                                }
+                            )
                         }
                     }
                 },
                 confirmButton = {
                     TextButton(onClick = { showQualityDialog = false }) {
-                        Text("Zatvori", color = Color.White)
+                        Text("Zatvori", color = Color.Red)
                     }
                 }
             )
         }
 
-        // Prozor (Dialog) za odabir titlova
+        // Dijalog za izbor .srt titlova
         if (showSubtitleDialog) {
             AlertDialog(
                 onDismissRequest = { showSubtitleDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = {
-                    Column {
-                        Text("Odaberi titl", color = Color.White, fontWeight = FontWeight.Bold)
-                        if (videoFps > 0f) {
-                            Text(
-                                text = "Detektiran video: ${"%.2f".format(videoFps)} FPS",
-                                color = Color.Gray,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                },
+                title = { Text("Odaberi titlove (.srt)", color = Color.White) },
                 text = {
-                    LazyColumn(modifier = Modifier.heightIn(max = 260.dp)) {
-                        item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        applySubtitle(null)
-                                        showSubtitleDialog = false
-                                    }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = selectedSubtitle == null,
-                                    onClick = null,
-                                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Bez titlova", color = Color.White)
-                            }
+                    if (isLoadingSubtitles) {
+                        Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Color.Red)
                         }
-
-                        items(availableSubtitles) { option ->
-                            val isSelected = selectedSubtitle?.fileId == option.fileId
-                            val fpsMatches = videoFps > 0f && option.fps > 0f && abs(option.fps - videoFps) < 0.1f
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        applySubtitle(option)
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.heightIn(max = 300.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            item {
+                                DialogFocusableRow(
+                                    label = "Isključi titlove",
+                                    isSelected = activeSubtitleName == null,
+                                    onClick = {
+                                        activeSubtitleName = null
+                                        parsedCues = emptyList()
+                                        currentSubtitleText = ""
+                                        subtitleOffsetMs = 0L
                                         showSubtitleDialog = false
                                     }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = null,
-                                    colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = option.title,
-                                        color = if (isSelected) Color.White else Color.LightGray,
-                                        fontSize = 14.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            }
+                            if (subtitleList.isEmpty()) {
+                                item {
+                                    Text("Nema pronađenih titlova za ovaj film.", color = Color.Gray, fontSize = 14.sp)
+                                }
+                            } else {
+                                items(subtitleList) { sub ->
+                                    DialogFocusableRow(
+                                        label = "[${sub.language}] ${sub.fileName}",
+                                        isSelected = activeSubtitleName == sub.fileName,
+                                        onClick = {
+                                            activeSubtitleName = sub.fileName
+                                            subtitleOffsetMs = 0L
+                                            showSubtitleDialog = false
+                                            coroutineScope.launch {
+                                                val srtContent = OpenSubtitlesService.downloadSubtitleContent(sub)
+                                                parsedCues = parseSrtContent(srtContent)
+                                            }
+                                        }
                                     )
-                                    if (fpsMatches) {
-                                        Text(
-                                            text = "✓ Odgovara FPS-u videa",
-                                            color = Color(0xFF4CAF50),
-                                            fontSize = 11.sp
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -515,10 +656,171 @@ fun PlayerScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = { showSubtitleDialog = false }) {
-                        Text("Zatvori", color = Color.White)
+                        Text("Zatvori", color = Color.Red)
                     }
                 }
             )
         }
     }
+}
+
+@Composable
+private fun PlayerChipButton(
+    label: String,
+    isHighlighted: Boolean = false,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .background(
+                color = when {
+                    isFocused -> Color.Red
+                    isHighlighted -> Color(0xFFB71C1C)
+                    else -> Color.Black.copy(alpha = 0.7f)
+                },
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isFocused) 3.dp else 1.5.dp,
+                color = if (isFocused) Color.White else Color.Gray,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun PlayerFocusableIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    sizeDp: Int = 46,
+    isPrimary: Boolean = false,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .size(sizeDp.dp)
+            .background(
+                color = when {
+                    isPrimary -> Color.White
+                    isFocused -> Color.Red
+                    else -> Color.Black.copy(alpha = 0.55f)
+                },
+                shape = CircleShape
+            )
+            .border(
+                width = if (isFocused) 3.5.dp else 1.5.dp,
+                color = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.7f),
+                shape = CircleShape
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun DialogFocusableRow(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                color = when {
+                    isFocused -> Color.Red
+                    isSelected -> Color(0xFF2E2E2E)
+                    else -> Color(0xFF222222)
+                },
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 1.dp,
+                color = if (isFocused) Color.White else Color.DarkGray,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 14.sp
+        )
+    }
+}
+
+private fun parseSrtContent(rawSrt: String): List<SrtCue> {
+    if (rawSrt.isBlank()) return emptyList()
+    val normalized = rawSrt.replace("\r\n", "\n").replace("\r", "\n")
+    val blocks = normalized.split(Regex("\n\\s*\n"))
+    val cues = mutableListOf<SrtCue>()
+    val timeRegex = Regex("(\\d{2}):(\\d{2}):(\\d{2})[,.](\\d{3})\\s*-->\\s*(\\d{2}):(\\d{2}):(\\d{2})[,.](\\d{3})")
+
+    for (block in blocks) {
+        val lines = block.trim().lines()
+        if (lines.size < 2) continue
+        val timeLineIndex = lines.indexOfFirst { it.contains("-->") }
+        if (timeLineIndex == -1) continue
+
+        val match = timeRegex.find(lines[timeLineIndex]) ?: continue
+        val startMs = toMillis(
+            match.groupValues[1].toLong(),
+            match.groupValues[2].toLong(),
+            match.groupValues[3].toLong(),
+            match.groupValues[4].toLong()
+        )
+        val endMs = toMillis(
+            match.groupValues[5].toLong(),
+            match.groupValues[6].toLong(),
+            match.groupValues[7].toLong(),
+            match.groupValues[8].toLong()
+        )
+        val text = lines.drop(timeLineIndex + 1)
+            .joinToString("\n")
+            .replace(Regex("<[^>]*>"), "")
+            .trim()
+
+        if (text.isNotEmpty()) {
+            cues.add(SrtCue(startMs, endMs, text))
+        }
+    }
+    return cues
+}
+
+private fun toMillis(h: Long, m: Long, s: Long, ms: Long): Long {
+    return h * 3600000L + m * 60000L + s * 1000L + ms
+}
+
+private fun formatTime(ms: Long): String {
+    if (ms <= 0L) return "00:00"
+    val totalSeconds = ms / 1000
+    val minutes = (totalSeconds / 60) % 60
+    val hours = totalSeconds / 3600
+    val seconds = totalSeconds % 60
+    return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes, seconds)
+    else String.format("%02d:%02d", minutes, seconds)
 }
