@@ -436,7 +436,7 @@ class HomeViewModel : ViewModel() {
                 )
             }
 
-            // GRUPIRANJE: Spajamo serije (Season 1, Season 2...) u jedan objekt na ekranu!
+            // Ovdje je ključ: agresivno čišćenje imena serije kako bi That 70s Show Season 3 i Season 4 bili stavljeni pod istu karticu
             val finalSorted = if (isSeriesCategory) {
                 val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
                 val mergedList = grouped.map { (baseTitle, group) ->
@@ -463,7 +463,7 @@ class HomeViewModel : ViewModel() {
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         return rawTitle
             .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
-            .replace(Regex("(?i)\\bpart\\s*\\d+\\b"), "")
+            .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)complete\\b"), "")
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
