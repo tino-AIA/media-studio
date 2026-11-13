@@ -78,14 +78,15 @@ class HomeViewModel : ViewModel() {
         "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
         "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
-        "orgy", "fetish", "nc-17"
+        "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance"
     )
 
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
         "20th century", "united artists", "disney", "fleischer", "republic pictures",
         "looney", "merrie melodies", "popeye", "superman", "felix the cat", "casper",
-        "alpha france", "nagisa oshima",
+        "alpha france", "alpha-france", "alphafrance", "nagisa oshima", "jess franco",
+        "lucio fulci", "max pecas", "joe d'amato", "tinto brass", "radley metzger",
         "hitchcock", "chaplin", "buster keaton", "fritz lang", "orson welles", "john ford",
         "howard hawks", "frank capra", "billy wilder", "george romero", "roger corman",
         "cary grant", "john wayne", "humphrey bogart", "james stewart", "vincent price",
@@ -96,9 +97,12 @@ class HomeViewModel : ViewModel() {
 
     private val safeFilter = "-subject:(erotic OR erotica OR xxx OR porn) " +
             "AND -title:(erotic OR erotica OR xxx OR porn OR \"realm of the senses\" OR \"bad girl\") " +
-            "AND -description:(pornography OR hardcore OR \"explicit sex\")"
+            "AND -description:(pornography OR hardcore OR \"explicit sex\") " +
+            "AND -collection:(adultvhs OR mensmagazines_post70s)"
 
-    private val moviesBase = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $safeFilter"
+    // Serverski filtar: minimalno 350 MB za igrane filmove kako bi server vratio dugometražne filmove, a ne 2-minutne klipove
+    private val featureSizeFilter = "item_size:[350000000 TO *]"
+    private val moviesBase = "mediatype:movies AND $featureSizeFilter AND -collection:(movie_trailers OR previews) AND $safeFilter"
 
     val genreDefinitions = listOf(
         GenreOption("Top 10 ovog mjeseca", "collection:feature_films AND $moviesBase", "month desc"),
@@ -115,14 +119,20 @@ class HomeViewModel : ViewModel() {
         GenreOption("Ratni", "$moviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "$moviesBase AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$moviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult OR subject:softcore OR subject:sexploitation OR title:\"realm of the senses\" OR title:\"empire des sens\" OR title:\"bad girl\" OR title:\"alpha france\" OR creator:\"alpha france\" OR description:\"alpha france\") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
+            query = "mediatype:movies AND item_size:[400000000 TO *] AND (" +
+                    "collection:(adultvhs OR mensmagazines_post70s) OR " +
+                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
+                    "identifier:(*alpha-france* OR *alphafrance* OR *realm-of-the-senses* OR *empire-des-sens*) OR " +
+                    "title:(\"alpha france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"bad girl\" OR \"jess franco\" OR \"tinto brass\") OR " +
+                    "creator:(\"alpha france\" OR \"nagisa oshima\" OR \"jess franco\" OR \"max pecas\" OR \"tinto brass\")" +
+                    ") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
@@ -170,7 +180,7 @@ class HomeViewModel : ViewModel() {
                 val deferredList = genreDefinitions.map { genre ->
                     async {
                         val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                        val fetchRows = 60
+                        val fetchRows = 45
                         val targetLimit = if (isMonthlyTop) 10 else 20
 
                         val (results, _) = fetchAndRankByRelevance(
@@ -209,7 +219,7 @@ class HomeViewModel : ViewModel() {
             _currentGenrePage.value = page
             try {
                 val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                val fetchRows = if (isMonthlyTop) 45 else 80
+                val fetchRows = if (isMonthlyTop) 45 else 75
                 val targetLimit = if (isMonthlyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
@@ -286,6 +296,11 @@ class HomeViewModel : ViewModel() {
                         titleLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
+                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
+                if (runtimeMinutes in 1..25 && !isAnimationCategory) {
+                    return@mapNotNull null
+                }
+
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
                     is String -> r.toDoubleOrNull() ?: 0.0
@@ -297,48 +312,19 @@ class HomeViewModel : ViewModel() {
                     else -> 0
                 }
 
-                // Izračun trajanja u minutama i veličine u MB radi odvajanja dugometražnih filmova od kratkih klipova
-                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 val itemSizeMb = parseSizeMb(doc.itemSize)
-
                 var score = 0.0
 
-                // 1. Primarni kriterij: dugometražni film vs. kratki klip
-                if (collectionText.lowercase().contains("feature_films")) {
-                    score += 80.0
-                }
+                if (collectionText.lowercase().contains("feature_films")) score += 80.0
+                if (runtimeMinutes >= 65) score += 160.0
+                if (itemSizeMb >= 700) score += 100.0
 
-                if (runtimeMinutes > 0) {
-                    when {
-                        runtimeMinutes >= 65 -> score += 160.0 // Cjelovečernji igrani film
-                        runtimeMinutes >= 45 -> score += 90.0  // Srednjemetražni / TV film
-                        runtimeMinutes < 15 && !isAnimationCategory -> score -= 250.0 // Kratki klip -> ide na kraj
-                        runtimeMinutes < 25 && !isAnimationCategory -> score -= 120.0
-                    }
-                } else if (itemSizeMb > 0) {
-                    // Ako nema podatka o trajanju, procjenjujemo po veličini datoteke
-                    when {
-                        itemSizeMb >= 500 -> score += 120.0 // Velika datoteka (dugometražni film)
-                        itemSizeMb >= 250 -> score += 60.0
-                        itemSizeMb < 120 && !isAnimationCategory -> score -= 200.0 // Mali klip -> ide na kraj
-                    }
-                }
-
-                // Dodatna provjera po ključnim riječima u naslovu za kratke isječke
-                val looksLikeShortClip = Regex("\\b(clip|scene|excerpt|promo|commercial|short|part \\d+ of)\\b")
-                    .containsMatchIn(titleLower)
-                if (looksLikeShortClip && !isAnimationCategory) {
-                    score -= 220.0
-                }
-
-                // 2. Ocjena ponderirana brojem recenzija
                 if (ratingVal > 0.0 && reviewsVal > 0) {
                     score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
                 }
 
-                // 3. Poznati studiji, redatelji i glumci
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
-                score += studioMatches * 18.0
+                score += studioMatches * 22.0
 
                 if (descText.length > 80) score += 10.0
                 if (creatorText.isNotBlank()) score += 8.0
@@ -368,7 +354,6 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    // Pretvara Archive.org runtime ("01:28:40", "45:12" ili sekunde "5400") u minute
     private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
         val raw = extractText(runtimeValue).trim()
         if (raw.isEmpty()) return 0
@@ -386,7 +371,6 @@ class HomeViewModel : ViewModel() {
         return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
     }
 
-    // Pretvara item_size (bajtove) u megabajte
     private fun parseSizeMb(sizeValue: Any?): Long {
         val bytes = when (sizeValue) {
             is Number -> sizeValue.toLong()
