@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.ArchiveMetadataModule
+import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SeriesEpisode
 import com.example.mediastudio.data.api.SeriesSeason
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -44,12 +45,16 @@ fun SeriesScreen(
     var seriesDescription by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
+    val firstArchiveId = series.identifier.split(",").first()
+    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+
     BackHandler {
         onBackClick()
     }
 
     LaunchedEffect(series.identifier) {
         isLoading = true
+        posterUrl = PosterFetcher.fetchPoster(series.title, isSeries = true, firstArchiveId)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
         seriesDescription = fullInfo.description
         seasons = fullInfo.seasons
@@ -117,7 +122,7 @@ fun SeriesScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Image(
-                                painter = rememberAsyncImagePainter("https://archive.org/services/img/${series.identifier}"),
+                                painter = rememberAsyncImagePainter(posterUrl),
                                 contentDescription = series.title,
                                 modifier = Modifier
                                     .width(100.dp)
@@ -156,7 +161,6 @@ fun SeriesScreen(
                             )
                         }
 
-                        // Horizontalni odabir sezona (Sezona 1, Sezona 2, Sezona 3...) ako serija ima više sezona
                         if (seasons.size > 1) {
                             Spacer(modifier = Modifier.height(14.dp))
                             LazyRow(
