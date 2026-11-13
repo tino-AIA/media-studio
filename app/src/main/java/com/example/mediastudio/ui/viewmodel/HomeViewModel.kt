@@ -72,15 +72,17 @@ class HomeViewModel : ViewModel() {
         .create(ArchiveSearchApi::class.java)
 
     private val blockedAdultKeywords = listOf(
-        "erotic", "erotica", "adult", "xxx", "sex", "nude", "nudity", "porn",
+        "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
-        "tammy stones", "softcore", "hardcore", "strip", "playboy", "penthouse",
-        "lust", "seduction", "orgy", "fetish", "sensual", "intimate", "unrated", "nc-17"
+        "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
+        "orgy", "fetish", "nc-17"
     )
 
+    // Poznati studiji, redatelji i glumci za podizanje relevantnosti pravih filmova na vrh
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
         "20th century", "united artists", "disney", "fleischer", "republic pictures",
+        "looney", "merrie melodies", "popeye", "superman", "felix the cat", "casper",
         "hitchcock", "chaplin", "buster keaton", "fritz lang", "orson welles", "john ford",
         "howard hawks", "frank capra", "billy wilder", "george romero", "roger corman",
         "cary grant", "john wayne", "humphrey bogart", "james stewart", "vincent price",
@@ -89,32 +91,33 @@ class HomeViewModel : ViewModel() {
         "imdb", "academy award", "oscar"
     )
 
-    private val safeFilter = "-subject:(erotic OR erotica OR adult OR xxx OR sex OR nudity OR porn) " +
-            "AND -title:(erotic OR erotica OR adult OR xxx OR sex OR nude OR \"realm of the senses\" OR \"bad girl\") " +
-            "AND -description:(pornography OR hardcore OR \"explicit sex\" OR \"adult film\")"
+    private val safeFilter = "-subject:(erotic OR erotica OR xxx OR porn) " +
+            "AND -title:(erotic OR erotica OR xxx OR porn OR \"realm of the senses\" OR \"bad girl\") " +
+            "AND -description:(pornography OR hardcore OR \"explicit sex\")"
 
-    private val featureBase = "collection:feature_films AND mediatype:movies AND $safeFilter"
+    // Cijela baza igranih filmova (uključuje feature_films, publicdomainmovies, vhsvault, film_noir itd.)
+    private val moviesBase = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $safeFilter"
 
     val genreDefinitions = listOf(
-        GenreOption("Top 10 ovog mjeseca", featureBase, "month desc"),
-        GenreOption("Najgledanije", featureBase, "downloads desc"),
-        GenreOption("Sci-Fi klasici", "$featureBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space)"),
-        GenreOption("Akcija i avantura", "$featureBase AND (subject:action OR subject:adventure OR subject:martial)"),
-        GenreOption("Triler i misterija", "$featureBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
-        GenreOption("Komedija", "$featureBase AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
-        GenreOption("Horor", "$featureBase AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire)"),
-        GenreOption("Drama", "$featureBase AND (subject:drama OR subject:melodrama)"),
-        GenreOption("Krimi", "$featureBase AND (subject:crime OR subject:gangster OR subject:detective)"),
-        GenreOption("Romantični", "$featureBase AND (subject:romance OR subject:romantic OR subject:love)"),
-        GenreOption("Vestern", "$featureBase AND (subject:western OR subject:westerns OR subject:cowboy)"),
-        GenreOption("Ratni", "$featureBase AND (subject:war OR subject:military OR subject:\"world war\")"),
+        GenreOption("Top 10 ovog mjeseca", "collection:feature_films AND $moviesBase", "month desc"),
+        GenreOption("Najgledanije", moviesBase, "downloads desc"),
+        GenreOption("Sci-Fi klasici", "$moviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
+        GenreOption("Akcija i avantura", "$moviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
+        GenreOption("Triler i misterija", "$moviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR collection:film_noir)"),
+        GenreOption("Komedija", "$moviesBase AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
+        GenreOption("Horor", "$moviesBase AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire OR subject:slasher)"),
+        GenreOption("Drama", "$moviesBase AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$moviesBase AND (subject:crime OR subject:gangster OR subject:detective OR subject:heist)"),
+        GenreOption("Romantični", "$moviesBase AND (subject:romance OR subject:romantic OR subject:love)"),
+        GenreOption("Vestern", "$moviesBase AND (subject:western OR subject:westerns OR subject:cowboy)"),
+        GenreOption("Ratni", "$moviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND $safeFilter AND (subject:animation OR subject:cartoon OR collection:animationandcartoons) AND (title:Disney OR title:Mickey OR title:Donald OR title:Popeye OR title:Superman OR title:Looney OR title:Bugs OR title:Betty OR title:Gulliver OR title:Tom OR title:Woody)",
+            query = "$moviesBase AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
-        GenreOption("Dokumentarni", "mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)"),
+        GenreOption("Dokumentarni", "$moviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult OR subject:softcore OR subject:sexploitation OR title:\"realm of the senses\" OR title:\"empire des sens\" OR title:\"bad girl\" OR title:\"alpha france\" OR creator:\"alpha france\" OR description:\"alpha france\") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
@@ -166,7 +169,7 @@ class HomeViewModel : ViewModel() {
                 val deferredList = genreDefinitions.map { genre ->
                     async {
                         val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                        val fetchRows = if (isMonthlyTop) 45 else 40
+                        val fetchRows = if (isMonthlyTop) 45 else 45
                         val targetLimit = if (isMonthlyTop) 10 else 20
 
                         val (results, _) = fetchAndRankByRelevance(
@@ -204,7 +207,6 @@ class HomeViewModel : ViewModel() {
             _currentGenrePage.value = page
             try {
                 val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                // Povlačimo 70 da nakon filtriranja trailera ostane punih 60 filmova po stranici
                 val fetchRows = if (isMonthlyTop) 45 else 70
                 val targetLimit = if (isMonthlyTop) 10 else pageSize
 
@@ -226,7 +228,6 @@ class HomeViewModel : ViewModel() {
                 } else {
                     _totalGenreMoviesCount.value = totalFound
                     val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
-                    // Ograničavamo na razuman maksimum od 100 stranica (6.000 filmova) po upitu
                     _totalGenrePages.value = calculatedPages.coerceAtMost(100)
                 }
             } catch (e: Exception) {
@@ -261,12 +262,15 @@ class HomeViewModel : ViewModel() {
                 val creatorText = extractText(doc.creator)
                 val descText = extractText(doc.description)
                 val collectionText = extractText(doc.collection)
+                val titleLower = finalTitle.lowercase()
                 val fullMetaLower = "$id $finalTitle $creatorText $descText $collectionText".lowercase()
 
+                // 1. Zaštita od 18+ u standardnim kategorijama
                 if (excludeAdult && isAdultContent(id, finalTitle)) {
                     return@mapNotNull null
                 }
 
+                // 2. U 18+ kategoriji izbacujemo Adult Swim, anime i crtiće
                 if (isAdultCategory) {
                     val isAnimeOrCartoon = fullMetaLower.contains("adult swim") ||
                             fullMetaLower.contains("anime") ||
@@ -275,9 +279,10 @@ class HomeViewModel : ViewModel() {
                     if (isAnimeOrCartoon) return@mapNotNull null
                 }
 
-                val isTrailerOrClip = fullMetaLower.contains("trailer") ||
-                        fullMetaLower.contains("preview") ||
-                        fullMetaLower.contains("tv spot")
+                // 3. Provjeravamo samo naslov za trailere/najave kako ne bismo odbacili filmove koji u opisu spominju trailer
+                val isTrailerOrClip = titleLower.contains("trailer") ||
+                        titleLower.contains("teaser") ||
+                        titleLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val ratingVal = when (val r = doc.avgRating) {
@@ -291,12 +296,15 @@ class HomeViewModel : ViewModel() {
                     else -> 0
                 }
 
+                // Bonus za dugometražne igrane filmove
                 var score = if (collectionText.lowercase().contains("feature_films")) 50.0 else 0.0
 
+                // Ocjena ponderirana brojem recenzija
                 if (ratingVal > 0.0 && reviewsVal > 0) {
                     score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
                 }
 
+                // Bonus za poznate studije, redatelje, glumce i IMDb reference
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
                 score += studioMatches * 18.0
 
