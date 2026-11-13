@@ -11,18 +11,13 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -36,7 +31,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,33 +42,54 @@ import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
+@Composable
+fun TvHighlightIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .background(
+                color = if (isFocused) Color.Red else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        content()
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
     onMovieClick: (ArchiveMovie) -> Unit,
     onSeriesClick: (ArchiveMovie) -> Unit,
-    onGenreSelect: (GenreOption) -> Unit
+    onGenreSelect: (GenreOption) -> Unit,
+    onOpenSearch: () -> Unit
 ) {
     val selectedTab by viewModel.selectedTab.collectAsState()
     val movieCategories by viewModel.movieCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
-    val globalSearchResults by viewModel.globalSearchResults.collectAsState()
-    val isSearchingGlobal by viewModel.isSearchingGlobal.collectAsState()
-
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    var searchQuery by remember { mutableStateOf("") }
 
-    BackHandler(enabled = drawerState.isOpen || searchQuery.isNotEmpty()) {
-        if (drawerState.isOpen) {
-            scope.launch { drawerState.close() }
-        } else if (searchQuery.isNotEmpty()) {
-            searchQuery = ""
-            viewModel.performGlobalSearch("")
-        }
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch { drawerState.close() }
     }
 
     val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
@@ -84,37 +99,31 @@ fun HomeScreen(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(260.dp),
+                modifier = Modifier.width(280.dp),
                 drawerContainerColor = Color(0xFF121212)
             ) {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
                         text = if (selectedTab == ContentTab.MOVIES) "Žanrovi filmova" else "Kategorije serija",
                         color = Color.White,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(12.dp)
                     )
                     Divider(color = Color.DarkGray)
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     activeDrawerList.forEach { genre ->
-                        NavigationDrawerItem(
-                            label = {
-                                Text(
-                                    text = genre.title,
-                                    color = if (genre.title.startsWith("18+")) Color(0xFFFF6B6B) else Color.White,
-                                    fontSize = 15.sp
-                                )
-                            },
-                            selected = false,
+                        DrawerFocusableItem(
+                            title = genre.title,
+                            isAdult = genre.title.startsWith("18+"),
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
                                     onGenreSelect(genre)
                                 }
-                            },
-                            colors = NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                            }
                         )
                     }
                     Spacer(modifier = Modifier.height(24.dp))
@@ -124,48 +133,38 @@ fun HomeScreen(
     ) {
         Scaffold(
             topBar = {
-                Column {
-                    TopAppBar(
-                        title = { Text("Media Studio", color = Color.White, fontWeight = FontWeight.Bold) },
-                        navigationIcon = {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                    )
-
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = {
-                            searchQuery = it
-                            viewModel.performGlobalSearch(it)
-                        },
+                Column(modifier = Modifier.padding(top = 6.dp)) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        placeholder = { Text("Pretraži cijeli Archive.org (npr. Alpha, Chaplin...)", color = Color.Gray) },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.Gray) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = {
-                                    searchQuery = ""
-                                    viewModel.performGlobalSearch("")
-                                }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Očisti", tint = Color.Gray)
-                                }
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color.Red,
-                            unfocusedBorderColor = Color.DarkGray
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
-                    )
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TvHighlightIconButton(
+                            onClick = { scope.launch { drawerState.open() } },
+                            contentDescription = "Izbornik žanrova"
+                        ) {
+                            Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
+                        }
 
+                        Text(
+                            text = "Media Studio",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 21.sp
+                        )
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Gumb za pretragu (otvara Netflix-stil TV pretragu s tipkovnicom na ekranu)
+                        SearchTriggerBar(
+                            onClick = onOpenSearch,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Dva menija ispod zaglavlja: FILMOVI i SERIJE
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -175,21 +174,13 @@ fun HomeScreen(
                         TabButton(
                             title = "🎬 Filmovi",
                             isSelected = selectedTab == ContentTab.MOVIES,
-                            onClick = {
-                                searchQuery = ""
-                                viewModel.performGlobalSearch("")
-                                viewModel.selectTab(ContentTab.MOVIES)
-                            },
+                            onClick = { viewModel.selectTab(ContentTab.MOVIES) },
                             modifier = Modifier.weight(1f)
                         )
                         TabButton(
                             title = "📺 Serije i kolekcije",
                             isSelected = selectedTab == ContentTab.SERIES,
-                            onClick = {
-                                searchQuery = ""
-                                viewModel.performGlobalSearch("")
-                                viewModel.selectTab(ContentTab.SERIES)
-                            },
+                            onClick = { viewModel.selectTab(ContentTab.SERIES) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -197,34 +188,7 @@ fun HomeScreen(
             },
             containerColor = Color.Black
         ) { paddingValues ->
-            if (searchQuery.trim().length >= 3) {
-                if (isSearchingGlobal) {
-                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.Red)
-                    }
-                } else if (globalSearchResults.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                        Text("Nema rezultata za \"$searchQuery\"", color = Color.Gray)
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 120.dp),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.fillMaxSize().padding(paddingValues)
-                    ) {
-                        items(globalSearchResults) { ratedItem ->
-                            RatedMovieGridCard(
-                                ratedMovie = ratedItem,
-                                onMovieClick = { item ->
-                                    if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
-                                }
-                            )
-                        }
-                    }
-                }
-            } else if (isLoading) {
+            if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.Red)
                 }
@@ -254,6 +218,81 @@ fun HomeScreen(
 }
 
 @Composable
+private fun DrawerFocusableItem(
+    title: String,
+    isAdult: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .background(
+                color = if (isFocused) Color(0xFF2B2B2B) else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = title,
+            color = if (isAdult) Color(0xFFFF6B6B) else Color.White,
+            fontSize = 15.sp,
+            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+private fun SearchTriggerBar(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .background(
+                color = if (isFocused) Color(0xFF2A2A2A) else Color(0xFF161616),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 3.dp else 1.dp,
+                color = if (isFocused) Color.White else Color.DarkGray,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = "Pretraži",
+            tint = if (isFocused) Color.White else Color.Gray,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "Pretraži filmove i serije...",
+            color = if (isFocused) Color.White else Color.Gray,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 private fun TabButton(
     title: String,
     isSelected: Boolean,
@@ -266,11 +305,11 @@ private fun TabButton(
     Box(
         modifier = modifier
             .background(
-                color = if (isSelected) Color.Red else Color(0xFF1A1A1A),
+                color = if (isSelected) Color.Red else if (isFocused) Color(0xFF2B2B2B) else Color(0xFF1A1A1A),
                 shape = RoundedCornerShape(10.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
+                width = if (isFocused) 3.dp else 1.dp,
                 color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
                 shape = RoundedCornerShape(10.dp)
             )
@@ -306,13 +345,17 @@ fun MovieCategoryRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 4.dp)
+                .background(
+                    color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp)
+                )
                 .border(
-                    width = if (isHeaderFocused) 2.dp else 0.dp,
+                    width = if (isHeaderFocused) 2.5.dp else 0.dp,
                     color = if (isHeaderFocused) Color.White else Color.Transparent,
                     shape = RoundedCornerShape(8.dp)
                 )
                 .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -326,7 +369,8 @@ fun MovieCategoryRow(
                 Text(
                     text = "Svi",
                     color = if (isHeaderFocused) Color.White else Color.Gray,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
                 )
                 Icon(
                     imageVector = Icons.Default.ChevronRight,
@@ -359,7 +403,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.dp else 1.5.dp
+    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
 
     Column(modifier = Modifier.width(162.dp)) {
         Box(
@@ -423,6 +467,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
+            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -438,7 +483,7 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.dp else 1.5.dp
+    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
 
     Column(modifier = Modifier.width(120.dp)) {
         Card(
@@ -462,6 +507,7 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
+            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
