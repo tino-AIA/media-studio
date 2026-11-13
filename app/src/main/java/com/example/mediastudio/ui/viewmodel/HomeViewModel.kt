@@ -14,6 +14,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import kotlin.math.ceil
 import kotlin.math.ln
 
 data class GenreOption(
@@ -31,7 +32,10 @@ data class RatedMovie(
 )
 
 private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
-private data class ArchiveResponseBody(val docs: List<RawArchiveDoc>?)
+private data class ArchiveResponseBody(
+    val numFound: Int?,
+    val docs: List<RawArchiveDoc>?
+)
 private data class RawArchiveDoc(
     val identifier: String?,
     val title: Any?,
@@ -50,7 +54,7 @@ private interface ArchiveSearchApi {
             "identifier", "title", "creator", "description", "collection", "avg_rating", "num_reviews"
         ),
         @Query("sort[]") sort: String = "downloads desc",
-        @Query("rows") rows: Int = 50,
+        @Query("rows") rows: Int = 60,
         @Query("page") page: Int = 1,
         @Query("output") output: String = "json"
     ): ArchiveSearchResponse
@@ -74,7 +78,6 @@ class HomeViewModel : ViewModel() {
         "lust", "seduction", "orgy", "fetish", "sensual", "intimate", "unrated", "nc-17"
     )
 
-    // Poznati studiji, redatelji i glumci za podizanje relevantnosti pravih filmova na vrh
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
         "20th century", "united artists", "disney", "fleischer", "republic pictures",
@@ -90,7 +93,6 @@ class HomeViewModel : ViewModel() {
             "AND -title:(erotic OR erotica OR adult OR xxx OR sex OR nude OR \"realm of the senses\" OR \"bad girl\") " +
             "AND -description:(pornography OR hardcore OR \"explicit sex\" OR \"adult film\")"
 
-    // Dugometražni igrani filmovi kao primarni kriterij
     private val featureBase = "collection:feature_films AND mediatype:movies AND $safeFilter"
 
     val genreDefinitions = listOf(
@@ -127,6 +129,7 @@ class HomeViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    // Stanja za zasebni ekran žanra s paginacijom (60 filmova po stranici)
     private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
     val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
 
@@ -135,6 +138,17 @@ class HomeViewModel : ViewModel() {
 
     private val _isGenreLoading = MutableStateFlow(false)
     val isGenreLoading: StateFlow<Boolean> = _isGenreLoading
+
+    private val _currentGenrePage = MutableStateFlow(1)
+    val currentGenrePage: StateFlow<Int> = _currentGenrePage
+
+    private val _totalGenrePages = MutableStateFlow(1)
+    val totalGenrePages: StateFlow<Int> = _totalGenrePages
+
+    private val _totalGenreMoviesCount = MutableStateFlow(0)
+    val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
+
+    val pageSize = 60
 
     init {
         loadAllCategories()
@@ -152,13 +166,14 @@ class HomeViewModel : ViewModel() {
                 val deferredList = genreDefinitions.map { genre ->
                     async {
                         val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                        val fetchRows = if (isMonthlyTop) 45 else 50
+                        val fetchRows = if (isMonthlyTop) 45 else 40
                         val targetLimit = if (isMonthlyTop) 10 else 20
 
-                        val results = fetchAndRankByRelevance(
+                        val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
                             rows = fetchRows,
+                            page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
                             preserveApiOrder = isMonthlyTop
@@ -177,24 +192,43 @@ class HomeViewModel : ViewModel() {
 
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
+        loadGenrePage(1)
+    }
+
+    fun loadGenrePage(page: Int) {
+        val genre = _selectedGenre.value ?: return
+        if (page < 1) return
+
         viewModelScope.launch {
             _isGenreLoading.value = true
-            _genreMovies.value = emptyList()
+            _currentGenrePage.value = page
             try {
                 val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                val fetchRows = if (isMonthlyTop) 45 else 90
-                val targetLimit = if (isMonthlyTop) 10 else 60
+                // Povlačimo 70 da nakon filtriranja trailera ostane punih 60 filmova po stranici
+                val fetchRows = if (isMonthlyTop) 45 else 70
+                val targetLimit = if (isMonthlyTop) 10 else pageSize
 
-                val results = fetchAndRankByRelevance(
+                val (results, totalFound) = fetchAndRankByRelevance(
                     query = genre.query,
                     apiSort = if (isMonthlyTop) "month desc" else "downloads desc",
                     rows = fetchRows,
+                    page = page,
                     excludeAdult = !genre.isAdultCategory,
                     isAdultCategory = genre.isAdultCategory,
                     preserveApiOrder = isMonthlyTop
-                ).take(targetLimit)
+                )
 
-                _genreMovies.value = results
+                _genreMovies.value = results.take(targetLimit)
+
+                if (isMonthlyTop) {
+                    _totalGenreMoviesCount.value = 10
+                    _totalGenrePages.value = 1
+                } else {
+                    _totalGenreMoviesCount.value = totalFound
+                    val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
+                    // Ograničavamo na razuman maksimum od 100 stranica (6.000 filmova) po upitu
+                    _totalGenrePages.value = calculatedPages.coerceAtMost(100)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -207,12 +241,15 @@ class HomeViewModel : ViewModel() {
         query: String,
         apiSort: String,
         rows: Int,
+        page: Int,
         excludeAdult: Boolean,
         isAdultCategory: Boolean,
         preserveApiOrder: Boolean
-    ): List<RatedMovie> {
+    ): Pair<List<RatedMovie>, Int> {
         return try {
-            val docs = api.searchMovies(query = query, sort = apiSort, rows = rows).response?.docs ?: emptyList()
+            val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
+            val docs = responseBody?.docs ?: emptyList()
+            val numFound = responseBody?.numFound ?: docs.size
 
             val scoredList = docs.mapNotNull { doc ->
                 val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -226,12 +263,10 @@ class HomeViewModel : ViewModel() {
                 val collectionText = extractText(doc.collection)
                 val fullMetaLower = "$id $finalTitle $creatorText $descText $collectionText".lowercase()
 
-                // 1. Zaštita od 18+ u standardnim kategorijama
                 if (excludeAdult && isAdultContent(id, finalTitle)) {
                     return@mapNotNull null
                 }
 
-                // 2. U 18+ kategoriji izbacujemo Adult Swim, anime i crtiće
                 if (isAdultCategory) {
                     val isAnimeOrCartoon = fullMetaLower.contains("adult swim") ||
                             fullMetaLower.contains("anime") ||
@@ -240,13 +275,11 @@ class HomeViewModel : ViewModel() {
                     if (isAnimeOrCartoon) return@mapNotNull null
                 }
 
-                // 3. Izbacujemo kratke trailere/isječke iz igranih kategorija
                 val isTrailerOrClip = fullMetaLower.contains("trailer") ||
                         fullMetaLower.contains("preview") ||
                         fullMetaLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
-                // Izračun ocjene i broja recenzija
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
                     is String -> r.toDoubleOrNull() ?: 0.0
@@ -258,20 +291,15 @@ class HomeViewModel : ViewModel() {
                     else -> 0
                 }
 
-                // Izračun bodova relevantnosti:
-                // - Bonus za dugometražni igrani film (feature_films)
                 var score = if (collectionText.lowercase().contains("feature_films")) 50.0 else 0.0
 
-                // - Ocjena ponderirana brojem recenzija (izbjegava amaterske videe s 1 ocjenom 5.0)
                 if (ratingVal > 0.0 && reviewsVal > 0) {
                     score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
                 }
 
-                // - Bonus za poznate studije, redatelje, glumce i IMDb reference
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
                 score += studioMatches * 18.0
 
-                // - Bonus ako postoji konkretan opis radnje i redatelj/studio
                 if (descText.length > 80) score += 10.0
                 if (creatorText.isNotBlank()) score += 8.0
 
@@ -288,14 +316,15 @@ class HomeViewModel : ViewModel() {
                 )
             }
 
-            if (preserveApiOrder) {
+            val finalSorted = if (preserveApiOrder) {
                 scoredList
             } else {
                 scoredList.sortedByDescending { it.relevanceScore }
             }
+            finalSorted to numFound
         } catch (e: Exception) {
             e.printStackTrace()
-            emptyList()
+            emptyList<RatedMovie>() to 0
         }
     }
 
