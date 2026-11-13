@@ -23,7 +23,8 @@ data class SeriesEpisode(
     val episodeNumber: Int,
     val title: String,
     val fileUrl: String,
-    val durationText: String
+    val itemIdentifier: String = "",
+    val durationText: String = ""
 )
 
 object ArchiveMetadataModule {
@@ -130,53 +131,92 @@ object ArchiveMetadataModule {
         return fetchMovieFullInfo(identifier).qualities
     }
 
+    // Dohvaća epizode iz pojedinačnog itema (npr. PS Cartoon Collection) ILI iz cijele kolekcije (collection:identifier)
     suspend fun fetchSeriesEpisodes(identifier: String): List<SeriesEpisode> = withContext(Dispatchers.IO) {
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
-            val filesArray = root.optJSONArray("files") ?: return@withContext emptyList()
+            val filesArray = root.optJSONArray("files")
 
             val rawEpisodes = mutableListOf<Pair<String, SeriesEpisode>>()
 
-            for (i in 0 until filesArray.length()) {
-                val fileObj = filesArray.optJSONObject(i) ?: continue
-                val name = fileObj.optString("name")
-                val source = fileObj.optString("source")
+            if (filesArray != null) {
+                for (i in 0 until filesArray.length()) {
+                    val fileObj = filesArray.optJSONObject(i) ?: continue
+                    val name = fileObj.optString("name")
+                    val source = fileObj.optString("source")
 
-                if (!name.endsWith(".mp4", ignoreCase = true)) continue
-                if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
+                    if (!name.endsWith(".mp4", ignoreCase = true) &&
+                        !name.endsWith(".mkv", ignoreCase = true) &&
+                        !name.endsWith(".avi", ignoreCase = true)
+                    ) continue
 
-                val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
-                if (sizeBytes < 5_000_000L) continue
+                    if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
 
-                val rawTitle = fileObj.optString("title").takeIf { it.isNotBlank() }
-                    ?: name.substringAfterLast("/").substringBeforeLast(".")
-                        .replace("_", " ")
-                        .replace("-", " ")
-                        .trim()
+                    val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
+                    if (sizeBytes in 1..2_000_000L) continue
 
-                val lengthSec = fileObj.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                val durationText = if (lengthSec > 0) {
-                    val mins = lengthSec / 60
-                    val secs = lengthSec % 60
-                    String.format("%d:%02d", mins, secs)
-                } else {
-                    ""
-                }
+                    val rawTitle = fileObj.optString("title").takeIf { it.isNotBlank() }
+                        ?: name.substringAfterLast("/").substringBeforeLast(".")
+                            .replace("_", " ")
+                            .replace("-", " ")
+                            .trim()
 
-                val encodedName = name.split("/").joinToString("/") { part ->
-                    java.net.URLEncoder.encode(part, "UTF-8").replace("+", "%20")
-                }
-                val fileUrl = "https://archive.org/download/$identifier/$encodedName"
+                    val lengthSec = fileObj.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                    val durationText = if (lengthSec > 0) {
+                        val mins = lengthSec / 60
+                        val secs = lengthSec % 60
+                        String.format("%d:%02d", mins, secs)
+                    } else {
+                        ""
+                    }
 
-                rawEpisodes.add(
-                    name.lowercase() to SeriesEpisode(
-                        episodeNumber = 0,
-                        title = rawTitle,
-                        fileUrl = fileUrl,
-                        durationText = durationText
+                    val encodedName = name.split("/").joinToString("/") { part ->
+                        java.net.URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                    }
+                    val fileUrl = "https://archive.org/download/$identifier/$encodedName"
+
+                    rawEpisodes.add(
+                        name.lowercase() to SeriesEpisode(
+                            episodeNumber = 0,
+                            title = rawTitle,
+                            fileUrl = fileUrl,
+                            itemIdentifier = identifier,
+                            durationText = durationText
+                        )
                     )
-                )
+                }
+            }
+
+            // Ako je odabrana stavka zapravo cijela kolekcija (npr. classic_tv), dohvaćamo epizode unutar nje
+            if (rawEpisodes.isEmpty()) {
+                val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$identifier+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=100&output=json"
+                val searchJson = JSONObject(URL(searchUrl).readText())
+                val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
+
+                if (docs != null) {
+                    for (i in 0 until docs.length()) {
+                        val doc = docs.optJSONObject(i) ?: continue
+                        val epId = doc.optString("identifier").takeIf { it.isNotBlank() } ?: continue
+                        val epTitle = doc.optString("title").takeIf { it.isNotBlank() }
+                            ?: epId.replace("_", " ").replace("-", " ")
+                        val runtime = doc.optString("runtime")
+
+                        // Dohvaćamo prvi najbolji MP4 iz te epizode
+                        val bestUrl = fetchAvailableQualities(epId).firstOrNull()?.url
+                            ?: "https://archive.org/download/$epId/$epId.mp4"
+
+                        rawEpisodes.add(
+                            epTitle.lowercase() to SeriesEpisode(
+                                episodeNumber = 0,
+                                title = epTitle,
+                                fileUrl = bestUrl,
+                                itemIdentifier = epId,
+                                durationText = runtime
+                            )
+                        )
+                    }
+                }
             }
 
             rawEpisodes
