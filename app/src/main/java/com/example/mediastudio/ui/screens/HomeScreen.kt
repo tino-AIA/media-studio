@@ -25,12 +25,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -110,14 +109,11 @@ fun HomeScreen(
     ) {
         Scaffold(
             topBar = {
-                // POPRAVLJENO: Blokada tipke "Gore" je sada samo na gornjem izborniku,
-                // tako da ne blokira ostatak aplikacije!
+                // OVO RJEŠAVA IZLAZAK: Sprječava Android TV-u da fokus pobjegne prema gore
                 Column(
                     modifier = Modifier
                         .padding(top = 6.dp)
-                        .onPreviewKeyEvent { 
-                            if (it.key == Key.DirectionUp) true else false 
-                        }
+                        .focusProperties { up = FocusRequester.Cancel }
                 ) {
                     Row(
                         modifier = Modifier
@@ -170,7 +166,6 @@ fun HomeScreen(
                 }
             },
             containerColor = Color.Black
-            // Uklonjen problematičan modifier iz Scaffolda
         ) { paddingValues ->
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
