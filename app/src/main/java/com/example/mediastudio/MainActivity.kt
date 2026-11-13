@@ -16,6 +16,7 @@ import com.example.mediastudio.ui.screens.DetailsScreen
 import com.example.mediastudio.ui.screens.GenreScreen
 import com.example.mediastudio.ui.screens.HomeScreen
 import com.example.mediastudio.ui.screens.PlayerScreen
+import com.example.mediastudio.ui.screens.SearchScreen
 import com.example.mediastudio.ui.screens.SeriesScreen
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 
@@ -33,12 +34,12 @@ class MainActivity : ComponentActivity() {
                 var selectedEpisodeTitle by remember { mutableStateOf("") }
                 var selectedEpisodeUrl by remember { mutableStateOf("") }
 
-                BackHandler(enabled = currentScreen != 0) {
+                BackHandler(enabled = currentScreen != 0 && currentScreen != 2) {
                     when (currentScreen) {
-                        2 -> currentScreen = if (selectedEpisodeUrl.isNotEmpty()) 4 else 1
                         1 -> currentScreen = previousScreen
                         3 -> currentScreen = 0
                         4 -> currentScreen = previousScreen
+                        5 -> currentScreen = 0
                     }
                 }
 
@@ -59,6 +60,9 @@ class MainActivity : ComponentActivity() {
                         onGenreSelect = { genre ->
                             homeViewModel.openGenre(genre)
                             currentScreen = 3
+                        },
+                        onOpenSearch = {
+                            currentScreen = 5
                         }
                     )
                     1 -> selectedMovie?.let { movie ->
@@ -108,6 +112,23 @@ class MainActivity : ComponentActivity() {
                             onBackClick = { currentScreen = previousScreen }
                         )
                     }
+                    5 -> SearchScreen(
+                        viewModel = homeViewModel,
+                        onMovieClick = { movie ->
+                            selectedMovie = movie
+                            selectedEpisodeUrl = ""
+                            previousScreen = 5
+                            currentScreen = 1
+                        },
+                        onSeriesClick = { series ->
+                            selectedMovie = series
+                            previousScreen = 5
+                            currentScreen = 4
+                        },
+                        onBackClick = {
+                            currentScreen = 0
+                        }
+                    )
                 }
             }
         }
