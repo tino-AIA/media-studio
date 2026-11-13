@@ -119,10 +119,14 @@ class HomeViewModel : ViewModel() {
     private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
             "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
+    // Izbacujemo Bollywood i slične azijske produkcije iz Top 10 kako bi dominirali američki/europski filmovi
+    private val westernFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil) " +
+            "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
+
     private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 prošlog tjedna", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter", "week desc"),
+        GenreOption("Top 10 prošlog tjedna", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $westernFilter", "week desc"),
         GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
@@ -136,14 +140,14 @@ class HomeViewModel : ViewModel() {
         GenreOption("Ratni", "$featureMoviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[250000000 TO *] AND $noJunkFilter AND (" +
+            query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND (" +
                     "collection:(adultvhs OR mensmagazines_post70s) OR " +
                     "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
                     "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\") OR " +
@@ -158,7 +162,7 @@ class HomeViewModel : ViewModel() {
     private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
+        GenreOption("Top 10 serija prošlog tjedna", "$seriesBase AND $westernFilter", "week desc", isSeriesCategory = true),
         GenreOption("Animirane kolekcije i crtići", "mediatype:movies AND (title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND $noJunkFilter AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
@@ -394,7 +398,9 @@ class HomeViewModel : ViewModel() {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder && !isAdultCategory && !isSeriesCategory) {
+                
+                // STROGI FILTAR TRAJANJA: Bilo koji film, crtić ili adult (ako nije serija) MORA biti duži od 19 minuta
+                if (runtimeMinutes in 1..19 && !isSeriesCategory) {
                     return@mapNotNull null
                 }
 
