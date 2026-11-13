@@ -46,21 +46,25 @@ data class SeriesFullInfo(
 
 object PosterFetcher {
     private val cache = mutableMapOf<String, String>()
-    // Bitan detalj: Koristimo besplatan TMDB ključ za profesionalne plakate
     private const val TMDB_API_KEY = "3e9f4c3a726ea7247a32d164627d2c38" 
+    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        val cacheKey = "${isSeries}_$title"
+        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").replace(Regex("(?i)season\\s*\\d+.*"), "").trim()
+        val cacheKey = "${isSeries}_$cleanTitle"
         if (cache.containsKey(cacheKey)) return@withContext cache[cacheKey]!!
 
         val fallback = "https://archive.org/services/img/$archiveId"
+        if (cleanTitle.isBlank() || cleanTitle.length < 3) return@withContext fallback
+
         try {
-            val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
             val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
+            
+            // 1. Pokušaj preko TMDB
             val type = if (isSeries) "tv" else "movie"
             val url = URL("https://api.themoviedb.org/3/search/$type?api_key=$TMDB_API_KEY&query=$encoded")
-            
             val conn = url.openConnection() as HttpURLConnection
+            conn.setRequestProperty("User-Agent", USER_AGENT)
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
             if (conn.responseCode == 200) {
@@ -72,6 +76,41 @@ object PosterFetcher {
                         val fullUrl = "https://image.tmdb.org/t/p/w500$posterPath"
                         cache[cacheKey] = fullUrl
                         return@withContext fullUrl
+                    }
+                }
+            }
+
+            // 2. Ako je serija, a TMDB nije našao, pokušaj TVmaze
+            if (isSeries) {
+                val tvMazeUrl = URL("https://api.tvmaze.com/singlesearch/shows?q=$encoded")
+                val tvMazeConn = tvMazeUrl.openConnection() as HttpURLConnection
+                tvMazeConn.setRequestProperty("User-Agent", USER_AGENT)
+                tvMazeConn.connectTimeout = 2500
+                if (tvMazeConn.responseCode == 200) {
+                    val tvMazeJson = JSONObject(tvMazeConn.inputStream.bufferedReader().use { it.readText() })
+                    val img = tvMazeJson.optJSONObject("image")?.optString("original")
+                    if (!img.isNullOrBlank()) {
+                        cache[cacheKey] = img
+                        return@withContext img
+                    }
+                }
+            }
+
+            // 3. Pokušaj iTunes API kao zadnju šansu
+            val itunesType = if (isSeries) "tvSeason" else "movie"
+            val itunesUrl = URL("https://itunes.apple.com/search?term=$encoded&entity=$itunesType&limit=1")
+            val itunesConn = itunesUrl.openConnection() as HttpURLConnection
+            itunesConn.setRequestProperty("User-Agent", USER_AGENT)
+            itunesConn.connectTimeout = 2500
+            if (itunesConn.responseCode == 200) {
+                val itunesJson = JSONObject(itunesConn.inputStream.bufferedReader().use { it.readText() })
+                val results = itunesJson.optJSONArray("results")
+                if (results != null && results.length() > 0) {
+                    val artwork = results.optJSONObject(0)?.optString("artworkUrl100")
+                    if (!artwork.isNullOrBlank()) {
+                        val highRes = artwork.replace("100x100bb", "600x900bb")
+                        cache[cacheKey] = highRes
+                        return@withContext highRes
                     }
                 }
             }
@@ -278,7 +317,6 @@ object ArchiveMetadataModule {
                             )
                         }
                     } else {
-                        // Advanced search za kolekcije
                         val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$cleanId+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
                         val searchJson = JSONObject(URL(searchUrl).readText())
                         val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
@@ -393,7 +431,7 @@ object ArchiveMetadataModule {
             val encoded = URLEncoder.encode(cleanName, "UTF-8")
             val searchUrl = "https://api.tvmaze.com/singlesearch/shows?q=$encoded&embed=episodes"
             val conn = URL(searchUrl).openConnection() as HttpURLConnection
-            conn.setRequestProperty("User-Agent", "MediaStudio/1.0")
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
             if (conn.responseCode != 200) return emptyMap()
