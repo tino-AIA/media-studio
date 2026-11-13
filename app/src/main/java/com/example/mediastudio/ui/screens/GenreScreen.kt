@@ -143,7 +143,7 @@ fun GenreScreen(
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
-                // RIJEŠENO PREKLAPANJE: Puno veći bottom padding tako da paginacija ne skriva zadnji red
+                // RIJEŠENO PREKLAPANJE: Dodan bottom = 95.dp
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 95.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
