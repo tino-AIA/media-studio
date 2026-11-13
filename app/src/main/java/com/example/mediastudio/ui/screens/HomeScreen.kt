@@ -36,40 +36,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
+import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
-
-@Composable
-fun TvHighlightIconButton(
-    onClick: () -> Unit,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .background(
-                color = if (isFocused) Color.Red else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        content()
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,6 +66,7 @@ fun HomeScreen(
 
     val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
     val activeDrawerList = if (selectedTab == ContentTab.MOVIES) viewModel.movieGenreDefinitions else viewModel.seriesGenreDefinitions
+    val isSeriesTab = selectedTab == ContentTab.SERIES
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -105,7 +78,7 @@ fun HomeScreen(
                 Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
-                        text = if (selectedTab == ContentTab.MOVIES) "Žanrovi filmova" else "Kategorije serija",
+                        text = if (isSeriesTab) "Kategorije serija" else "Žanrovi filmova",
                         color = Color.White,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -157,14 +130,12 @@ fun HomeScreen(
 
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        // Gumb za pretragu (otvara Netflix-stil TV pretragu s tipkovnicom na ekranu)
                         SearchTriggerBar(
                             onClick = onOpenSearch,
                             modifier = Modifier.weight(1f)
                         )
                     }
 
-                    // Dva menija ispod zaglavlja: FILMOVI i SERIJE
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -179,7 +150,7 @@ fun HomeScreen(
                         )
                         TabButton(
                             title = "📺 Serije i kolekcije",
-                            isSelected = selectedTab == ContentTab.SERIES,
+                            isSelected = isSeriesTab,
                             onClick = { viewModel.selectTab(ContentTab.SERIES) },
                             modifier = Modifier.weight(1f)
                         )
@@ -204,13 +175,14 @@ fun HomeScreen(
                             genre = genre,
                             movies = itemsList,
                             isNetflixTop10 = isTop10,
+                            isSeries = isSeriesTab,
                             onMovieClick = { item ->
-                                if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
+                                if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
                             },
                             onHeaderClick = { onGenreSelect(genre) }
                         )
                     }
-                    item { Spacer(modifier = Modifier.height(30.dp)) }
+                    item { Spacer(modifier = Modifier.height(40.dp)) }
                 }
             }
         }
@@ -332,6 +304,7 @@ fun MovieCategoryRow(
     genre: GenreOption,
     movies: List<ArchiveMovie>,
     isNetflixTop10: Boolean = false,
+    isSeries: Boolean,
     onMovieClick: (ArchiveMovie) -> Unit,
     onHeaderClick: () -> Unit
 ) {
@@ -387,9 +360,9 @@ fun MovieCategoryRow(
         ) {
             itemsIndexed(movies) { index, movie ->
                 if (isNetflixTop10) {
-                    NetflixTop10Card(movie = movie, rankNumber = index + 1, onMovieClick = onMovieClick)
+                    NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick)
                 } else {
-                    MovieCard(movie = movie, onMovieClick = onMovieClick)
+                    MovieCard(movie = movie, isSeries = isSeries, onMovieClick = onMovieClick)
                 }
             }
         }
@@ -398,14 +371,21 @@ fun MovieCategoryRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (ArchiveMovie) -> Unit) {
+fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    
+    val firstArchiveId = movie.identifier.split(",").first()
+    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
 
-    Column(modifier = Modifier.width(162.dp)) {
+    LaunchedEffect(movie.title) {
+        posterUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+    }
+
+    Column(modifier = Modifier.width(162.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
                 .width(162.dp)
@@ -423,7 +403,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
                 onClick = { onMovieClick(movie) }
             ) {
                 Image(
-                    painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
+                    painter = rememberAsyncImagePainter(posterUrl),
                     contentDescription = movie.title,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
@@ -469,23 +449,31 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, onMovieClick: (Archiv
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
+            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 44.dp)
+            modifier = Modifier.fillMaxWidth().padding(start = 28.dp)
         )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
+fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    
+    val firstArchiveId = movie.identifier.split(",").first()
+    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
 
-    Column(modifier = Modifier.width(120.dp)) {
+    LaunchedEffect(movie.title) {
+        posterUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+    }
+
+    Column(modifier = Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Card(
             modifier = Modifier
                 .width(120.dp)
@@ -497,7 +485,7 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
             onClick = { onMovieClick(movie) }
         ) {
             Image(
-                painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
+                painter = rememberAsyncImagePainter(posterUrl),
                 contentDescription = movie.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
@@ -509,8 +497,10 @@ fun MovieCard(movie: ArchiveMovie, onMovieClick: (ArchiveMovie) -> Unit) {
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
+            textAlign = TextAlign.Center, // CENTRIRANI NASLOV
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
