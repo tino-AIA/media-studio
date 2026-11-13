@@ -40,7 +40,7 @@ private suspend fun translateToCroatian(text: String): String = withContext(Disp
 
         for (chunk in chunks) {
             val encoded = URLEncoder.encode(chunk, "UTF-8")
-            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=hr&dt=t&q=$encoded"
+            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
             val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")

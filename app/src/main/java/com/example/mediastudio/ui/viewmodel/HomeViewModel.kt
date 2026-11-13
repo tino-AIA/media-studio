@@ -6,7 +6,9 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -17,12 +19,17 @@ import retrofit2.http.Query
 import kotlin.math.ceil
 import kotlin.math.ln
 
+enum class ContentTab {
+    MOVIES, SERIES
+}
+
 data class GenreOption(
     val title: String,
     val query: String,
     val defaultSort: String = "downloads desc",
     val isAdultCategory: Boolean = false,
-    val isAnimationCategory: Boolean = false
+    val isAnimationCategory: Boolean = false,
+    val isSeriesCategory: Boolean = false
 )
 
 data class RatedMovie(
@@ -78,7 +85,14 @@ class HomeViewModel : ViewModel() {
         "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
         "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
-        "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance"
+        "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance",
+        "servante perverse"
+    )
+
+    private val junkNonMovieKeywords = listOf(
+        "speedrun", "longplay", "walkthrough", "playthrough", "gameplay",
+        "snes", "nes", "ps1", "ps2", "n64", "gameboy", "arcade",
+        "lecture", "seminar", "webinar", "conference", "symposium", "tutorial", "course"
     )
 
     private val notableCinemaKeywords = listOf(
@@ -100,12 +114,13 @@ class HomeViewModel : ViewModel() {
             "AND -description:(pornography OR hardcore OR \"explicit sex\") " +
             "AND -collection:(adultvhs OR mensmagazines_post70s)"
 
-    // Serverski filtar: minimalno 350 MB za igrane filmove kako bi server vratio dugometražne filmove, a ne 2-minutne klipove
-    private val featureSizeFilter = "item_size:[350000000 TO *]"
-    private val moviesBase = "mediatype:movies AND $featureSizeFilter AND -collection:(movie_trailers OR previews) AND $safeFilter"
+    private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar) " +
+            "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
-    val genreDefinitions = listOf(
-        GenreOption("Top 10 ovog mjeseca", "collection:feature_films AND $moviesBase", "month desc"),
+    private val moviesBase = "mediatype:movies AND item_size:[450000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter"
+
+    val movieGenreDefinitions = listOf(
+        GenreOption("Top 10 prošlog tjedna", "collection:feature_films AND $moviesBase", "week desc"),
         GenreOption("Najgledanije", moviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$moviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$moviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
@@ -119,30 +134,55 @@ class HomeViewModel : ViewModel() {
         GenreOption("Ratni", "$moviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "mediatype:movies AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$moviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[400000000 TO *] AND (" +
+            query = "mediatype:movies AND item_size:[500000000 TO *] AND $noJunkFilter AND (" +
                     "collection:(adultvhs OR mensmagazines_post70s) OR " +
-                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
-                    "identifier:(*alpha-france* OR *alphafrance* OR *realm-of-the-senses* OR *empire-des-sens*) OR " +
+                    "subject:(erotic OR erotica OR softcore OR sexploitation) OR " +
+                    "identifier:(*alpha-france* OR *alphafrance* OR *realm-of-the-senses* OR *empire-des-sens* OR *servante-perverse*) OR " +
                     "title:(\"alpha france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"bad girl\" OR \"jess franco\" OR \"tinto brass\") OR " +
                     "creator:(\"alpha france\" OR \"nagisa oshima\" OR \"jess franco\" OR \"max pecas\" OR \"tinto brass\")" +
-                    ") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
+                    ") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon OR education OR lecture)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
     )
 
-    private val _homeCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
-    val homeCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _homeCategories
+    private val seriesBase = "(collection:(classic_tv OR television OR television_inbox) OR subject:(\"tv series\" OR \"television series\" OR season OR episodes OR collection)) AND $noJunkFilter AND $safeFilter"
+
+    val seriesGenreDefinitions = listOf(
+        GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
+        GenreOption("Animirane kolekcije i crtići", "(title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND mediatype:movies AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom) OR title:(three stooges OR lucy OR beverly hillbillies OR laurel and hardy))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Vestern i avanturističke serije", "$seriesBase AND (subject:(western OR adventure) OR title:(bonanza OR lone ranger OR zorro OR robin hood))", "downloads desc", isSeriesCategory = true)
+    )
+
+    private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
+    val selectedTab: StateFlow<ContentTab> = _selectedTab
+
+    private val _movieCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val movieCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _movieCategories
+
+    private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _globalSearchResults = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val globalSearchResults: StateFlow<List<RatedMovie>> = _globalSearchResults
+
+    private val _isSearchingGlobal = MutableStateFlow(false)
+    val isSearchingGlobal: StateFlow<Boolean> = _isSearchingGlobal
+
+    private var searchJob: Job? = null
 
     private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
     val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
@@ -165,7 +205,45 @@ class HomeViewModel : ViewModel() {
     val pageSize = 60
 
     init {
-        loadAllCategories()
+        loadAllContent()
+    }
+
+    fun selectTab(tab: ContentTab) {
+        _selectedTab.value = tab
+    }
+
+    fun performGlobalSearch(query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 3) {
+            _globalSearchResults.value = emptyList()
+            _isSearchingGlobal.value = false
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(450L)
+            _isSearchingGlobal.value = true
+            try {
+                val safeQuery = trimmed.replace("\"", "")
+                val archiveQuery = "mediatype:movies AND $noJunkFilter AND (title:\"$safeQuery\" OR title:$safeQuery* OR identifier:*${safeQuery.replace(" ", "-")}* OR creator:\"$safeQuery\")"
+                val (results, _) = fetchAndRankByRelevance(
+                    query = archiveQuery,
+                    apiSort = "downloads desc",
+                    rows = 60,
+                    page = 1,
+                    excludeAdult = false,
+                    isAdultCategory = false,
+                    isAnimationCategory = true,
+                    preserveApiOrder = false
+                )
+                _globalSearchResults.value = results
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isSearchingGlobal.value = false
+            }
+        }
     }
 
     private fun isAdultContent(id: String, title: String): Boolean {
@@ -173,30 +251,46 @@ class HomeViewModel : ViewModel() {
         return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
     }
 
-    private fun loadAllCategories() {
+    private fun loadAllContent() {
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val deferredList = genreDefinitions.map { genre ->
+                val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
-                        val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                        val fetchRows = 45
-                        val targetLimit = if (isMonthlyTop) 10 else 20
-
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = fetchRows,
+                            rows = 45,
                             page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
-                            preserveApiOrder = isMonthlyTop
+                            preserveApiOrder = isWeeklyTop
                         )
-                        genre to results.map { it.movie }.take(targetLimit)
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
                 }
-                _homeCategories.value = deferredList.map { it.await() }.filter { it.second.isNotEmpty() }
+
+                val seriesDeferred = seriesGenreDefinitions.map { genre ->
+                    async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = 40,
+                            page = 1,
+                            excludeAdult = true,
+                            isAdultCategory = false,
+                            isAnimationCategory = genre.isAnimationCategory,
+                            preserveApiOrder = isWeeklyTop
+                        )
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                    }
+                }
+
+                _movieCategories.value = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                _seriesCategories.value = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -218,24 +312,24 @@ class HomeViewModel : ViewModel() {
             _isGenreLoading.value = true
             _currentGenrePage.value = page
             try {
-                val isMonthlyTop = genre.title == "Top 10 ovog mjeseca"
-                val fetchRows = if (isMonthlyTop) 45 else 75
-                val targetLimit = if (isMonthlyTop) 10 else pageSize
+                val isWeeklyTop = genre.title.startsWith("Top 10")
+                val fetchRows = if (isWeeklyTop) 45 else 75
+                val targetLimit = if (isWeeklyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
                     query = genre.query,
-                    apiSort = if (isMonthlyTop) "month desc" else "downloads desc",
+                    apiSort = if (isWeeklyTop) "week desc" else "downloads desc",
                     rows = fetchRows,
                     page = page,
                     excludeAdult = !genre.isAdultCategory,
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
-                    preserveApiOrder = isMonthlyTop
+                    preserveApiOrder = isWeeklyTop
                 )
 
                 _genreMovies.value = results.take(targetLimit)
 
-                if (isMonthlyTop) {
+                if (isWeeklyTop) {
                     _totalGenreMoviesCount.value = 10
                     _totalGenrePages.value = 1
                 } else {
@@ -278,6 +372,10 @@ class HomeViewModel : ViewModel() {
                 val collectionText = extractText(doc.collection)
                 val titleLower = finalTitle.lowercase()
                 val fullMetaLower = "$id $finalTitle $creatorText $descText $collectionText".lowercase()
+
+                if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) {
+                    return@mapNotNull null
+                }
 
                 if (excludeAdult && isAdultContent(id, finalTitle)) {
                     return@mapNotNull null

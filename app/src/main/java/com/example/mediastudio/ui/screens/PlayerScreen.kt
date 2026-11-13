@@ -57,6 +57,7 @@ fun PlayerScreen(
     identifier: String,
     movieTitle: String,
     movieYear: String = "",
+    directVideoUrl: String = "",
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -138,15 +139,23 @@ fun PlayerScreen(
     }
 
     // 1. Dohvat kvaliteta videa i pokretanje najbolje rezolucije
-    LaunchedEffect(identifier) {
-        val qualities = ArchiveMetadataModule.fetchAvailableQualities(identifier)
-        availableQualities = qualities
-        val bestQuality = qualities.firstOrNull()
-        selectedQuality = bestQuality
-        val startUrl = bestQuality?.url ?: fallbackVideoUrl
-        exoPlayer.setMediaItem(MediaItem.fromUri(startUrl), 0L)
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
+    LaunchedEffect(identifier, directVideoUrl) {
+        if (directVideoUrl.isNotEmpty()) {
+            availableQualities = emptyList()
+            selectedQuality = null
+            exoPlayer.setMediaItem(MediaItem.fromUri(directVideoUrl), 0L)
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        } else {
+            val qualities = ArchiveMetadataModule.fetchAvailableQualities(identifier)
+            availableQualities = qualities
+            val bestQuality = qualities.firstOrNull()
+            selectedQuality = bestQuality
+            val startUrl = bestQuality?.url ?: fallbackVideoUrl
+            exoPlayer.setMediaItem(MediaItem.fromUri(startUrl), 0L)
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        }
     }
 
     // 2. Osluškivanje FPS-a videa

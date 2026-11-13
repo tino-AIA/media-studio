@@ -16,6 +16,7 @@ import com.example.mediastudio.ui.screens.DetailsScreen
 import com.example.mediastudio.ui.screens.GenreScreen
 import com.example.mediastudio.ui.screens.HomeScreen
 import com.example.mediastudio.ui.screens.PlayerScreen
+import com.example.mediastudio.ui.screens.SeriesScreen
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 
 class MainActivity : ComponentActivity() {
@@ -29,13 +30,15 @@ class MainActivity : ComponentActivity() {
                 var previousScreen by remember { mutableIntStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
                 var selectedMovieYear by remember { mutableStateOf("") }
+                var selectedEpisodeTitle by remember { mutableStateOf("") }
+                var selectedEpisodeUrl by remember { mutableStateOf("") }
 
-                // Presreće sistemsku tipku Back na mobitelu i Firestick daljinskom upravljaču
                 BackHandler(enabled = currentScreen != 0) {
                     when (currentScreen) {
-                        2 -> currentScreen = 1 // Iz playera natrag u detalje filma
-                        1 -> currentScreen = previousScreen // Iz detalja natrag u žanr ili na početni ekran
-                        3 -> currentScreen = 0 // Iz ekrana žanra natrag na početni ekran
+                        2 -> currentScreen = if (selectedEpisodeUrl.isNotEmpty()) 4 else 1
+                        1 -> currentScreen = previousScreen
+                        3 -> currentScreen = 0
+                        4 -> currentScreen = previousScreen
                     }
                 }
 
@@ -44,8 +47,14 @@ class MainActivity : ComponentActivity() {
                         viewModel = homeViewModel,
                         onMovieClick = { movie -> 
                             selectedMovie = movie
+                            selectedEpisodeUrl = ""
                             previousScreen = 0
                             currentScreen = 1
+                        },
+                        onSeriesClick = { series ->
+                            selectedMovie = series
+                            previousScreen = 0
+                            currentScreen = 4
                         },
                         onGenreSelect = { genre ->
                             homeViewModel.openGenre(genre)
@@ -57,6 +66,7 @@ class MainActivity : ComponentActivity() {
                             movie = movie,
                             onPlayClick = { year ->
                                 selectedMovieYear = year
+                                selectedEpisodeUrl = ""
                                 currentScreen = 2
                             },
                             onBackClick = { currentScreen = previousScreen }
@@ -65,20 +75,39 @@ class MainActivity : ComponentActivity() {
                     2 -> selectedMovie?.let { movie ->
                         PlayerScreen(
                             identifier = movie.identifier,
-                            movieTitle = movie.title,
+                            movieTitle = if (selectedEpisodeUrl.isNotEmpty()) selectedEpisodeTitle else movie.title,
                             movieYear = selectedMovieYear,
-                            onNavigateBack = { currentScreen = 1 }
+                            directVideoUrl = selectedEpisodeUrl,
+                            onNavigateBack = {
+                                currentScreen = if (selectedEpisodeUrl.isNotEmpty()) 4 else 1
+                            }
                         )
                     }
                     3 -> GenreScreen(
                         viewModel = homeViewModel,
-                        onMovieClick = { movie ->
-                            selectedMovie = movie
+                        onMovieClick = { item ->
+                            selectedMovie = item
                             previousScreen = 3
-                            currentScreen = 1
+                            if (homeViewModel.selectedGenre.value?.isSeriesCategory == true) {
+                                currentScreen = 4
+                            } else {
+                                selectedEpisodeUrl = ""
+                                currentScreen = 1
+                            }
                         },
                         onBackClick = { currentScreen = 0 }
                     )
+                    4 -> selectedMovie?.let { series ->
+                        SeriesScreen(
+                            series = series,
+                            onEpisodeClick = { episode ->
+                                selectedEpisodeTitle = "${series.title} - ${episode.title}"
+                                selectedEpisodeUrl = episode.fileUrl
+                                currentScreen = 2
+                            },
+                            onBackClick = { currentScreen = previousScreen }
+                        )
+                    }
                 }
             }
         }

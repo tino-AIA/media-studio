@@ -3,6 +3,7 @@ package com.example.mediastudio.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -10,6 +11,9 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -32,11 +37,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
@@ -46,25 +53,32 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     viewModel: HomeViewModel,
     onMovieClick: (ArchiveMovie) -> Unit,
+    onSeriesClick: (ArchiveMovie) -> Unit,
     onGenreSelect: (GenreOption) -> Unit
 ) {
-    val homeCategories by viewModel.homeCategories.collectAsState()
+    val selectedTab by viewModel.selectedTab.collectAsState()
+    val movieCategories by viewModel.movieCategories.collectAsState()
+    val seriesCategories by viewModel.seriesCategories.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+
+    val globalSearchResults by viewModel.globalSearchResults.collectAsState()
+    val isSearchingGlobal by viewModel.isSearchingGlobal.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
 
-    // Zatvara bočni izbornik pritiskom na sistemsku tipku Back (mobitel ili Firestick daljinski)
-    BackHandler(enabled = drawerState.isOpen) {
-        scope.launch { drawerState.close() }
+    BackHandler(enabled = drawerState.isOpen || searchQuery.isNotEmpty()) {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else if (searchQuery.isNotEmpty()) {
+            searchQuery = ""
+            viewModel.performGlobalSearch("")
+        }
     }
 
-    val filteredCategories = remember(homeCategories, searchQuery) {
-        homeCategories.map { (genre, movies) ->
-            genre to movies.filter { it.title.contains(searchQuery, true) }
-        }.filter { it.second.isNotEmpty() }
-    }
+    val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
+    val activeDrawerList = if (selectedTab == ContentTab.MOVIES) viewModel.movieGenreDefinitions else viewModel.seriesGenreDefinitions
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -76,15 +90,15 @@ fun HomeScreen(
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
-                        text = "Žanrovi",
+                        text = if (selectedTab == ContentTab.MOVIES) "Žanrovi filmova" else "Kategorije serija",
                         color = Color.White,
-                        fontSize = 24.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(16.dp)
                     )
                     Divider(color = Color.DarkGray)
 
-                    viewModel.genreDefinitions.forEach { genre ->
+                    activeDrawerList.forEach { genre ->
                         NavigationDrawerItem(
                             label = {
                                 Text(
@@ -120,14 +134,28 @@ fun HomeScreen(
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
                     )
+
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = {
+                            searchQuery = it
+                            viewModel.performGlobalSearch(it)
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                        placeholder = { Text("Pretraži filmove...", color = Color.Gray) },
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        placeholder = { Text("Pretraži cijeli Archive.org (npr. Alpha, Chaplin...)", color = Color.Gray) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.Gray) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = {
+                                    searchQuery = ""
+                                    viewModel.performGlobalSearch("")
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Očisti", tint = Color.Gray)
+                                }
+                            }
+                        },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
@@ -137,11 +165,66 @@ fun HomeScreen(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
                     )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TabButton(
+                            title = "🎬 Filmovi",
+                            isSelected = selectedTab == ContentTab.MOVIES,
+                            onClick = {
+                                searchQuery = ""
+                                viewModel.performGlobalSearch("")
+                                viewModel.selectTab(ContentTab.MOVIES)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TabButton(
+                            title = "📺 Serije i kolekcije",
+                            isSelected = selectedTab == ContentTab.SERIES,
+                            onClick = {
+                                searchQuery = ""
+                                viewModel.performGlobalSearch("")
+                                viewModel.selectTab(ContentTab.SERIES)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             },
             containerColor = Color.Black
         ) { paddingValues ->
-            if (isLoading) {
+            if (searchQuery.trim().length >= 3) {
+                if (isSearchingGlobal) {
+                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color.Red)
+                    }
+                } else if (globalSearchResults.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
+                        Text("Nema rezultata za \"$searchQuery\"", color = Color.Gray)
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 120.dp),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxSize().padding(paddingValues)
+                    ) {
+                        items(globalSearchResults) { ratedItem ->
+                            RatedMovieGridCard(
+                                ratedMovie = ratedItem,
+                                onMovieClick = { item ->
+                                    if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
+                                }
+                            )
+                        }
+                    }
+                }
+            } else if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.Red)
                 }
@@ -151,13 +234,15 @@ fun HomeScreen(
                         .fillMaxSize()
                         .padding(paddingValues)
                 ) {
-                    items(filteredCategories) { (genre, movies) ->
-                        val isTop10 = (genre.title == "Top 10 ovog mjeseca")
+                    items(activeCategories) { (genre, itemsList) ->
+                        val isTop10 = genre.title.startsWith("Top 10")
                         MovieCategoryRow(
                             genre = genre,
-                            movies = movies,
+                            movies = itemsList,
                             isNetflixTop10 = isTop10,
-                            onMovieClick = onMovieClick,
+                            onMovieClick = { item ->
+                                if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
+                            },
                             onHeaderClick = { onGenreSelect(genre) }
                         )
                     }
@@ -165,6 +250,41 @@ fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TabButton(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .background(
+                color = if (isSelected) Color.Red else Color(0xFF1A1A1A),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 1.dp,
+                color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -182,7 +302,6 @@ fun MovieCategoryRow(
     val isHeaderFocused by headerInteraction.collectIsFocusedAsState()
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        // Klikabilni naslov žanra s vidljivim fokusom za daljinski upravljač
         Row(
             modifier = Modifier
                 .fillMaxWidth()
