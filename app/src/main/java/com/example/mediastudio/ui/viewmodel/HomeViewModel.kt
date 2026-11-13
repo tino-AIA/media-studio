@@ -93,7 +93,8 @@ class HomeViewModel : ViewModel() {
         "speedrun", "longplay", "walkthrough", "playthrough", "gameplay",
         "snes", "nes", "ps1", "ps2", "n64", "gameboy", "arcade",
         "lecture", "seminar", "webinar", "conference", "symposium", "tutorial", "course",
-        "electricsheep", "capcut", "beat-edits", "dvd cover", "dvd covers", "site tour"
+        "electricsheep", "capcut", "beat-edits", "dvd cover", "dvd covers", "site tour",
+        "youtube videos", "kaczynski", "writings collection", "manifesto"
     )
 
     private val notableCinemaKeywords = listOf(
@@ -115,10 +116,9 @@ class HomeViewModel : ViewModel() {
             "AND -description:(pornography OR hardcore OR \"explicit sex\") " +
             "AND -collection:(adultvhs OR mensmagazines_post70s)"
 
-    private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\") " +
+    private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
             "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
-    // Strogi filtar za cjelovečernje filmove (collection:feature_films + item_size >= 380 MB)
     private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter"
 
     val movieGenreDefinitions = listOf(
@@ -143,23 +143,23 @@ class HomeViewModel : ViewModel() {
         GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[350000000 TO *] AND $noJunkFilter AND (" +
-                    "collection:adultvhs OR collection:mensmagazines_post70s OR " +
-                    "subject:erotic OR subject:erotica OR subject:softcore OR subject:sexploitation OR " +
-                    "title:\"alpha france\" OR title:\"alpha-france\" OR creator:\"alpha france\" OR description:\"alpha france\" OR " +
-                    "title:\"realm of the senses\" OR title:\"empire des sens\" OR title:\"servante perverse\" OR " +
-                    "title:\"bad girl\" OR creator:\"jess franco\" OR creator:\"tinto brass\" OR creator:\"max pecas\" OR creator:\"nagisa oshima\"" +
-                    ") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon OR education OR lecture)",
+            query = "mediatype:movies AND item_size:[250000000 TO *] AND $noJunkFilter AND (" +
+                    "collection:(adultvhs OR mensmagazines_post70s) OR " +
+                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
+                    "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\") OR " +
+                    "creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"max pecas\" OR \"nagisa oshima\" OR \"joe d'amato\" OR \"radley metzger\") OR " +
+                    "description:(\"alpha france\" OR \"empire des sens\" OR \"realm of the senses\")" +
+                    ") AND -title:\"adult swim\" AND -subject:(cartoon OR lecture)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
     )
 
-    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR season OR episodes OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter"
+    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter"
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
-        GenreOption("Animirane kolekcije i crtići", "mediatype:movies AND (title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Animirane kolekcije i crtići", "mediatype:movies AND (title:(\"cartoon collection\" OR \"looney tunes\" OR \"popeye\" OR \"tom and jerry\" OR \"pink panther\" OR \"flintstones\" OR \"scooby\") OR collection:animationandcartoons) AND $noJunkFilter AND $safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom) OR title:(three stooges OR lucy OR beverly hillbillies OR laurel and hardy))", "downloads desc", isSeriesCategory = true),
@@ -227,7 +227,6 @@ class HomeViewModel : ViewModel() {
             delay(450L)
             _isSearchingGlobal.value = true
             try {
-                // Razdvajamo riječi s AND kako bi pronašlo i "In the Realm of the Senses" i "Alpha France"
                 val words = trimmed.split(Regex("\\s+")).filter { it.length >= 2 }
                 val tokenClause = if (words.isNotEmpty()) {
                     words.joinToString(" AND ") { w -> "(title:$w* OR creator:$w* OR description:$w*)" }
@@ -235,11 +234,11 @@ class HomeViewModel : ViewModel() {
                     "(title:\"$trimmed\" OR creator:\"$trimmed\")"
                 }
 
-                val archiveQuery = "mediatype:movies AND item_size:[200000000 TO *] AND $noJunkFilter AND ($tokenClause)"
+                val archiveQuery = "mediatype:movies AND item_size:[150000000 TO *] AND $noJunkFilter AND ($tokenClause)"
                 val (results, _) = fetchAndRankByRelevance(
                     query = archiveQuery,
                     apiSort = "downloads desc",
-                    rows = 70,
+                    rows = 80,
                     page = 1,
                     excludeAdult = false,
                     isAdultCategory = false,
@@ -270,7 +269,7 @@ class HomeViewModel : ViewModel() {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = 70,
+                            rows = if (isWeeklyTop) 120 else 70,
                             page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
@@ -287,7 +286,7 @@ class HomeViewModel : ViewModel() {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = 70,
+                            rows = if (isWeeklyTop) 120 else 70,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -322,7 +321,7 @@ class HomeViewModel : ViewModel() {
             _currentGenrePage.value = page
             try {
                 val isWeeklyTop = genre.title.startsWith("Top 10")
-                val fetchRows = if (isWeeklyTop) 70 else 95
+                val fetchRows = if (isWeeklyTop) 120 else 80
                 val targetLimit = if (isWeeklyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
@@ -390,12 +389,8 @@ class HomeViewModel : ViewModel() {
                     return@mapNotNull null
                 }
 
-                if (isAdultCategory) {
-                    val isAnimeOrCartoon = fullMetaLower.contains("adult swim") ||
-                            fullMetaLower.contains("anime") ||
-                            fullMetaLower.contains("cartoon") ||
-                            fullMetaLower.contains("animation")
-                    if (isAnimeOrCartoon) return@mapNotNull null
+                if (isAdultCategory && titleLower.contains("adult swim")) {
+                    return@mapNotNull null
                 }
 
                 val isTrailerOrClip = titleLower.contains("trailer") ||
@@ -404,7 +399,7 @@ class HomeViewModel : ViewModel() {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder) {
+                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder && !isAdultCategory) {
                     return@mapNotNull null
                 }
 
@@ -432,7 +427,7 @@ class HomeViewModel : ViewModel() {
                 }
 
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
-                score += studioMatches * 25.0
+                score += studioMatches * 35.0
 
                 if (descText.length > 80) score += 10.0
                 if (creatorText.isNotBlank()) score += 8.0
