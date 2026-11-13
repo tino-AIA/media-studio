@@ -39,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -162,7 +163,6 @@ fun HomeScreen(
                 }
             },
             containerColor = Color.Black,
-            // BLOKADA IZLAZA: Ako pritisneš gore na vrhu ekrana, zaustavljamo signal!
             modifier = Modifier
                 .onPreviewKeyEvent { if (it.key == Key.DirectionUp) true else false }
                 .focusable()
@@ -416,10 +416,12 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     
     val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+    var posterUrl by remember { mutableStateOf("") }
+    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
 
     LaunchedEffect(movie.title) {
-        posterUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
     }
 
     Column(modifier = Modifier.width(162.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -439,12 +441,30 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
             ) {
-                Image(
-                    painter = rememberAsyncImagePainter(posterUrl),
-                    contentDescription = movie.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                // PAMETNI COIL IMAGE LOADER ZA ZAŠTITU OD PRAZNIH PLAKATA
+                val painter = rememberAsyncImagePainter(
+                    model = posterUrl.ifBlank { fallbackUrl }
                 )
+                
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (painter.state is AsyncImagePainter.State.Loading) {
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                    }
+                    Image(
+                        painter = painter,
+                        contentDescription = movie.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    if (painter.state is AsyncImagePainter.State.Error) {
+                        Image(
+                            painter = rememberAsyncImagePainter(fallbackUrl),
+                            contentDescription = movie.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
             }
 
             val numberFontSize = if (rankNumber == 10) 86.sp else 96.sp
@@ -481,7 +501,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
-        // Podesili smo širinu naslova da bude ista kao kartica (162.dp) i centrirali tekst
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
@@ -505,10 +524,12 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     
     val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+    var posterUrl by remember { mutableStateOf("") }
+    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
 
     LaunchedEffect(movie.title) {
-        posterUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
     }
 
     Column(modifier = Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -522,15 +543,31 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
             interactionSource = interactionSource,
             onClick = { onMovieClick(movie) }
         ) {
-            Image(
-                painter = rememberAsyncImagePainter(posterUrl),
-                contentDescription = movie.title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+            val painter = rememberAsyncImagePainter(
+                model = posterUrl.ifBlank { fallbackUrl }
             )
+            
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (painter.state is AsyncImagePainter.State.Loading) {
+                    CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                }
+                Image(
+                    painter = painter,
+                    contentDescription = movie.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                if (painter.state is AsyncImagePainter.State.Error) {
+                    Image(
+                        painter = rememberAsyncImagePainter(fallbackUrl),
+                        contentDescription = movie.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            }
         }
         Spacer(modifier = Modifier.height(6.dp))
-        // Podesili smo širinu naslova da bude točno 120.dp i savršeno centrirali tekst
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
