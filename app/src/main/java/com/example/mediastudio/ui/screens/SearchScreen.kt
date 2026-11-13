@@ -119,7 +119,7 @@ fun SearchScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true, // ONEMOGUĆUJE pojavljivanje sistemske tipkovnice preko cijelog ekrana
-                    placeholder = { Text("Upiši naziv filma ili serije...", color = Color.Gray, fontSize = 14.sp) },
+                    placeholder = { Text("Upiši naziv film/serije...", color = Color.Gray, fontSize = 14.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Red) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
@@ -271,35 +271,6 @@ fun SearchScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun TvHighlightIconButton(
-    onClick: () -> Unit,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .background(
-                color = if (isFocused) Color.Red else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        content()
     }
 }
 
