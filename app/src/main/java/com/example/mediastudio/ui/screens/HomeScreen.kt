@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -157,7 +158,9 @@ fun HomeScreen(
                     }
                 }
             },
-            containerColor = Color.Black
+            containerColor = Color.Black,
+            // BLOKADA IZLASKA: Prazan fokus hvatač na dnu hijerarhije (ako D-pad ne nađe ništa drugo)
+            modifier = Modifier.focusable() 
         ) { paddingValues ->
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
