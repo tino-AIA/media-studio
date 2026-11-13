@@ -2,8 +2,10 @@ package com.example.mediastudio.data.api
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
+import java.net.URLEncoder
 
 data class VideoQualityOption(
     val label: String,
@@ -27,26 +29,21 @@ data class SeriesEpisode(
     val durationText: String = ""
 )
 
+data class SeriesFullInfo(
+    val description: String,
+    val episodes: List<SeriesEpisode>
+)
+
 object ArchiveMetadataModule {
+    private val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".m4v", ".mov", ".ogv", ".webm")
+
     suspend fun fetchMovieFullInfo(identifier: String): MovieFullInfo = withContext(Dispatchers.IO) {
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
             val metadata = root.optJSONObject("metadata")
 
-            val rawDesc = when (val d = metadata?.opt("description")) {
-                is String -> d
-                is org.json.JSONArray -> (0 until d.length()).joinToString("\n") { d.optString(it) }
-                else -> ""
-            }
-            val cleanDesc = rawDesc
-                .replace(Regex("<[^>]*>"), " ")
-                .replace("&quot;", "\"")
-                .replace("&amp;", "&")
-                .replace("&apos;", "'")
-                .replace(Regex("\\s+"), " ")
-                .trim()
-                .ifEmpty { "Opis za ovaj naslov trenutno nije dostupan." }
+            val cleanDesc = parseCleanDescription(metadata)
 
             val rawDate = metadata?.optString("date", "")?.takeIf { it.isNotEmpty() }
                 ?: metadata?.optString("year", "") ?: ""
@@ -54,7 +51,7 @@ object ArchiveMetadataModule {
 
             val rawDirector = when (val c = metadata?.opt("director") ?: metadata?.opt("creator")) {
                 is String -> c
-                is org.json.JSONArray -> (0 until c.length()).joinToString(", ") { c.optString(it) }
+                is JSONArray -> (0 until c.length()).joinToString(", ") { c.optString(it) }
                 else -> ""
             }
 
@@ -67,10 +64,12 @@ object ArchiveMetadataModule {
                     val name = fileObj.optString("name")
                     val format = fileObj.optString("format")
 
-                    if (name.endsWith(".mp4", ignoreCase = true) ||
-                        format.contains("MPEG4", ignoreCase = true) ||
-                        format.contains("h.264", ignoreCase = true)
-                    ) {
+                    val isVideoFile = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
+                            format.contains("MPEG4", ignoreCase = true) ||
+                            format.contains("h.264", ignoreCase = true) ||
+                            format.contains("Matroska", ignoreCase = true)
+
+                    if (isVideoFile) {
                         val height = fileObj.optString("height").toIntOrNull() ?: 0
                         val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
                         val sizeMb = sizeBytes / (1024 * 1024)
@@ -95,7 +94,7 @@ object ArchiveMetadataModule {
 
                         val fullLabel = if (sizeText.isNotEmpty()) "$resLabel ($sizeText)" else resLabel
                         val encodedName = name.split("/").joinToString("/") { part ->
-                            java.net.URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                            URLEncoder.encode(part, "UTF-8").replace("+", "%20")
                         }
                         val url = "https://archive.org/download/$identifier/$encodedName"
 
@@ -131,13 +130,16 @@ object ArchiveMetadataModule {
         return fetchMovieFullInfo(identifier).qualities
     }
 
-    // Dohvaća epizode iz pojedinačnog itema (npr. PS Cartoon Collection) ILI iz cijele kolekcije (collection:identifier)
-    suspend fun fetchSeriesEpisodes(identifier: String): List<SeriesEpisode> = withContext(Dispatchers.IO) {
+    // Dohvaća opis serije preveden na hrvatski + sve epizode (podržava sve video formate i podkolekcije)
+    suspend fun fetchSeriesFullInfo(identifier: String): SeriesFullInfo = withContext(Dispatchers.IO) {
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
-            val filesArray = root.optJSONArray("files")
+            val metadata = root.optJSONObject("metadata")
+            val rawDesc = parseCleanDescription(metadata)
+            val translatedDesc = translateTextToCroatian(rawDesc)
 
+            val filesArray = root.optJSONArray("files")
             val rawEpisodes = mutableListOf<Pair<String, SeriesEpisode>>()
 
             if (filesArray != null) {
@@ -145,16 +147,18 @@ object ArchiveMetadataModule {
                     val fileObj = filesArray.optJSONObject(i) ?: continue
                     val name = fileObj.optString("name")
                     val source = fileObj.optString("source")
+                    val format = fileObj.optString("format")
 
-                    if (!name.endsWith(".mp4", ignoreCase = true) &&
-                        !name.endsWith(".mkv", ignoreCase = true) &&
-                        !name.endsWith(".avi", ignoreCase = true)
-                    ) continue
+                    val isVideo = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
+                            format.contains("MPEG4", ignoreCase = true) ||
+                            format.contains("Matroska", ignoreCase = true) ||
+                            format.contains("Ogg Video", ignoreCase = true)
 
+                    if (!isVideo) continue
                     if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
 
                     val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
-                    if (sizeBytes in 1..2_000_000L) continue
+                    if (sizeBytes in 1..1_500_000L) continue
 
                     val rawTitle = fileObj.optString("title").takeIf { it.isNotBlank() }
                         ?: name.substringAfterLast("/").substringBeforeLast(".")
@@ -172,7 +176,7 @@ object ArchiveMetadataModule {
                     }
 
                     val encodedName = name.split("/").joinToString("/") { part ->
-                        java.net.URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
                     }
                     val fileUrl = "https://archive.org/download/$identifier/$encodedName"
 
@@ -188,7 +192,7 @@ object ArchiveMetadataModule {
                 }
             }
 
-            // Ako je odabrana stavka zapravo cijela kolekcija (npr. classic_tv), dohvaćamo epizode unutar nje
+            // Ako je riječ o kolekciji s više zasebnih stavki (collection:identifier)
             if (rawEpisodes.isEmpty()) {
                 val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$identifier+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=100&output=json"
                 val searchJson = JSONObject(URL(searchUrl).readText())
@@ -202,7 +206,6 @@ object ArchiveMetadataModule {
                             ?: epId.replace("_", " ").replace("-", " ")
                         val runtime = doc.optString("runtime")
 
-                        // Dohvaćamo prvi najbolji MP4 iz te epizode
                         val bestUrl = fetchAvailableQualities(epId).firstOrNull()?.url
                             ?: "https://archive.org/download/$epId/$epId.mp4"
 
@@ -219,15 +222,56 @@ object ArchiveMetadataModule {
                 }
             }
 
-            rawEpisodes
+            // Grupiramo po nazivu epizode (ako ista epizoda postoji i u .mp4 i u .mkv, preferiramo .mp4)
+            val finalEpisodes = rawEpisodes
+                .sortedWith(compareBy<Pair<String, SeriesEpisode>> { it.first }
+                    .thenBy { if (it.second.fileUrl.endsWith(".mp4", true)) 0 else 1 })
                 .distinctBy { it.second.title.lowercase() }
-                .sortedBy { it.first }
                 .mapIndexed { idx, pair ->
                     pair.second.copy(episodeNumber = idx + 1)
                 }
+
+            SeriesFullInfo(
+                description = translatedDesc,
+                episodes = finalEpisodes
+            )
         } catch (e: Exception) {
             e.printStackTrace()
-            emptyList()
+            SeriesFullInfo("Opis nije moguće učitati.", emptyList())
+        }
+    }
+
+    private fun parseCleanDescription(metadata: JSONObject?): String {
+        val rawDesc = when (val d = metadata?.opt("description")) {
+            is String -> d
+            is JSONArray -> (0 until d.length()).joinToString("\n") { d.optString(it) }
+            else -> ""
+        }
+        return rawDesc
+            .replace(Regex("<[^>]*>"), " ")
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&apos;", "'")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifEmpty { "Opis za ovaj naslov trenutno nije dostupan." }
+    }
+
+    private fun translateTextToCroatian(text: String): String {
+        if (text.isBlank() || text.startsWith("Opis za ovaj naslov")) return text
+        return try {
+            val encoded = URLEncoder.encode(text.take(1800), "UTF-8")
+            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
+            val response = URL(urlStr).readText()
+            val jsonArray = JSONArray(response)
+            val sentences = jsonArray.getJSONArray(0)
+            val sb = StringBuilder()
+            for (i in 0 until sentences.length()) {
+                sb.append(sentences.getJSONArray(i).getString(0))
+            }
+            sb.toString().ifBlank { text }
+        } catch (e: Exception) {
+            text
         }
     }
 }
