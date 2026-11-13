@@ -46,6 +46,8 @@ data class SeriesFullInfo(
 
 object PosterFetcher {
     private val cache = mutableMapOf<String, String>()
+    // Bitan detalj: Koristimo besplatan TMDB ključ za profesionalne plakate
+    private const val TMDB_API_KEY = "3e9f4c3a726ea7247a32d164627d2c38" 
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
         val cacheKey = "${isSeries}_$title"
@@ -53,35 +55,23 @@ object PosterFetcher {
 
         val fallback = "https://archive.org/services/img/$archiveId"
         try {
-            val encoded = URLEncoder.encode(title, "UTF-8")
-            if (isSeries) {
-                val url = URL("https://api.tvmaze.com/singlesearch/shows?q=$encoded")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 2500
-                conn.readTimeout = 2500
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    val img = json.optJSONObject("image")?.optString("original")
-                    if (!img.isNullOrBlank()) {
-                        cache[cacheKey] = img
-                        return@withContext img
-                    }
-                }
-            } else {
-                val url = URL("https://itunes.apple.com/search?term=$encoded&entity=movie&limit=1")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 2500
-                conn.readTimeout = 2500
-                if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    val results = json.optJSONArray("results")
-                    if (results != null && results.length() > 0) {
-                        val artwork = results.optJSONObject(0)?.optString("artworkUrl100")
-                        if (!artwork.isNullOrBlank()) {
-                            val highRes = artwork.replace("100x100bb", "600x900bb")
-                            cache[cacheKey] = highRes
-                            return@withContext highRes
-                        }
+            val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+            val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
+            val type = if (isSeries) "tv" else "movie"
+            val url = URL("https://api.themoviedb.org/3/search/$type?api_key=$TMDB_API_KEY&query=$encoded")
+            
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            if (conn.responseCode == 200) {
+                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val results = json.optJSONArray("results")
+                if (results != null && results.length() > 0) {
+                    val posterPath = results.optJSONObject(0)?.optString("poster_path")
+                    if (!posterPath.isNullOrBlank() && posterPath != "null") {
+                        val fullUrl = "https://image.tmdb.org/t/p/w500$posterPath"
+                        cache[cacheKey] = fullUrl
+                        return@withContext fullUrl
                     }
                 }
             }
@@ -243,7 +233,7 @@ object ArchiveMetadataModule {
                                 .trim()
                                 .takeIf { it.isNotBlank() } ?: baseFileName
 
-                            val (seasonNum, epNum) = parseSeasonAndEpisode("$name $rawTitle $showTitle")
+                            val (seasonNum, epNum) = parseSeasonAndEpisode("$name $rawTitle $showTitle $cleanId")
                             val officialName = if (seasonNum > 0 && epNum > 0) officialEpisodeTitles[seasonNum to epNum] else null
 
                             val cleanSeriesName = cleanSeriesTitleForSearch(seriesTitleHint.ifBlank { showTitle })
@@ -380,7 +370,7 @@ object ArchiveMetadataModule {
             }
         }
         val seasonOnly = Regex("(?i)Season\\s*(\\d{1,2})\\b").find(text)
-        val s = seasonOnly?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val s = seasonOnly?.groupValues?.get(1)?.toIntOrNull() ?: 0
         
         val epOnly = Regex("(?i)(?:Episode|Ep\\.?|Part)\\s*(\\d{1,3})\\b").find(text)
         val e = epOnly?.groupValues?.get(1)?.toIntOrNull() ?: 0
