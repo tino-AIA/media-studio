@@ -42,16 +42,30 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
-import com.example.mediastudio.data.api.OpenSubtitlesService
-import com.example.mediastudio.data.api.SubtitleItem
 import com.example.mediastudio.data.api.VideoQualityOption
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.zip.GZIPInputStream
 
 data class SrtCue(
     val startMs: Long,
     val endMs: Long,
     val text: String
+)
+
+data class PlayerSubtitleOption(
+    val fileName: String,
+    val language: String,
+    val downloadUrl: String,
+    val isGzipped: Boolean = false
 )
 
 @Composable
@@ -85,7 +99,7 @@ fun PlayerScreen(
 
     // Stanja za titlove (.srt)
     var showSubtitleDialog by remember { mutableStateOf(false) }
-    var subtitleList by remember { mutableStateOf<List<SubtitleItem>>(emptyList()) }
+    var subtitleList by remember { mutableStateOf<List<PlayerSubtitleOption>>(emptyList()) }
     var isLoadingSubtitles by remember { mutableStateOf(false) }
     var activeSubtitleName by remember { mutableStateOf<String?>(null) }
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
@@ -243,7 +257,7 @@ fun PlayerScreen(
 
                 // 1. SREDINA KRUGA (DPAD_CENTER / ENTER):
                 // - Prvi pritisak (kad su kontrole skrivene) -> prikaže kontrole playera
-                // - Sljedeći pritisak (kad su kontrole vidljive) -> pauza / nastavak (ako nije fokusiran neki drugi gumb)
+                // - Sljedeći pritisak (kad su kontrole vidljive) -> pauza / nastavak
                 if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
                     if (native.action == KeyEvent.ACTION_DOWN && native.repeatCount == 0) {
                         if (!showControls) {
@@ -325,7 +339,6 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Kružić učitavanja kad se video baferira
         if (isBuffering) {
             CircularProgressIndicator(
                 color = Color.Red,
@@ -465,7 +478,7 @@ fun PlayerScreen(
                                 if (subtitleList.isEmpty()) {
                                     isLoadingSubtitles = true
                                     coroutineScope.launch {
-                                        subtitleList = OpenSubtitlesService.searchSubtitles(movieTitle, movieYear)
+                                        subtitleList = searchAllSubtitles(identifier, movieTitle, movieYear)
                                         isLoadingSubtitles = false
                                     }
                                 }
@@ -644,7 +657,7 @@ fun PlayerScreen(
                                             subtitleOffsetMs = 0L
                                             showSubtitleDialog = false
                                             coroutineScope.launch {
-                                                val srtContent = OpenSubtitlesService.downloadSubtitleContent(sub)
+                                                val srtContent = downloadSubtitleText(sub)
                                                 parsedCues = parseSrtContent(srtContent)
                                             }
                                         }
@@ -770,6 +783,104 @@ private fun DialogFocusableRow(
             fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 14.sp
         )
+    }
+}
+
+// Samostalni dohvat titlova iz Archive.org metapodataka i OpenSubtitles baze
+private suspend fun searchAllSubtitles(
+    identifier: String,
+    movieTitle: String,
+    movieYear: String
+): List<PlayerSubtitleOption> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<PlayerSubtitleOption>()
+
+    // 1. Provjeri postoje li ugrađeni .srt titlovi u samoj Archive.org mapi filma
+    try {
+        val metaJson = JSONObject(URL("https://archive.org/metadata/$identifier").readText())
+        val files = metaJson.optJSONArray("files")
+        if (files != null) {
+            for (i in 0 until files.length()) {
+                val f = files.optJSONObject(i) ?: continue
+                val name = f.optString("name")
+                if (name.endsWith(".srt", ignoreCase = true)) {
+                    val encoded = name.split("/").joinToString("/") { part ->
+                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                    }
+                    results.add(
+                        PlayerSubtitleOption(
+                            fileName = name.substringAfterLast("/"),
+                            language = "Archive",
+                            downloadUrl = "https://archive.org/download/$identifier/$encoded",
+                            isGzipped = false
+                        )
+                    )
+                }
+            }
+        }
+    } catch (_: Exception) {
+    }
+
+    // 2. Pretraži OpenSubtitles REST bazu (HR, SR, BS, EN)
+    try {
+        val cleanTitle = movieTitle
+            .replace(Regex("\\(\\d{4}\\)"), "")
+            .replace(Regex("\\b(19\\d{2}|20\\d{2})\\b"), "")
+            .replace(Regex("[^a-zA-Z0-9\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .lowercase()
+
+        val encodedQuery = URLEncoder.encode(cleanTitle, "UTF-8")
+        val langs = listOf("hrv", "srp", "bos", "eng")
+        for (lang in langs) {
+            try {
+                val apiUrl = "https://rest.opensubtitles.org/search/query-$encodedQuery/sublanguageid-$lang"
+                val conn = URL(apiUrl).openConnection() as HttpURLConnection
+                conn.setRequestProperty("User-Agent", "TemporaryUserAgent")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                if (conn.responseCode == 200) {
+                    val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+                    for (i in 0 until arr.length().coerceAtMost(5)) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val subFile = obj.optString("SubFileName")
+                        val dlLink = obj.optString("SubDownloadLink")
+                        if (subFile.isNotBlank() && dlLink.isNotBlank()) {
+                            results.add(
+                                PlayerSubtitleOption(
+                                    fileName = subFile,
+                                    language = lang.uppercase(),
+                                    downloadUrl = dlLink,
+                                    isGzipped = dlLink.endsWith(".gz", ignoreCase = true)
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    } catch (_: Exception) {
+    }
+
+    results.distinctBy { it.downloadUrl }
+}
+
+private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = withContext(Dispatchers.IO) {
+    try {
+        val conn = URL(sub.downloadUrl).openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "TemporaryUserAgent")
+        conn.connectTimeout = 7000
+        conn.readTimeout = 7000
+        val bytes = conn.inputStream.use { it.readBytes() }
+        if (sub.isGzipped) {
+            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } else {
+            String(bytes, Charsets.UTF_8)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        ""
     }
 }
 
