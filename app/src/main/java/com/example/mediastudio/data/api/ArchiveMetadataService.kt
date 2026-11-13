@@ -160,11 +160,18 @@ object ArchiveMetadataModule {
                     val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
                     if (sizeBytes in 1..1_500_000L) continue
 
-                    val rawTitle = fileObj.optString("title").takeIf { it.isNotBlank() }
-                        ?: name.substringAfterLast("/").substringBeforeLast(".")
-                            .replace("_", " ")
-                            .replace("-", " ")
-                            .trim()
+                    // Uklanjamo ".ia" sufiks iz naziva epizode (npr. Pilot Movie.ia.mp4 -> Pilot Movie)
+                    val baseFileName = name.substringAfterLast("/")
+                        .substringBeforeLast(".")
+                        .removeSuffix(".ia")
+                        .replace("_", " ")
+                        .replace("-", " ")
+                        .trim()
+
+                    val rawTitle = fileObj.optString("title")
+                        .removeSuffix(".ia")
+                        .trim()
+                        .takeIf { it.isNotBlank() } ?: baseFileName
 
                     val lengthSec = fileObj.optString("length").toDoubleOrNull()?.toInt() ?: 0
                     val durationText = if (lengthSec > 0) {
@@ -181,7 +188,7 @@ object ArchiveMetadataModule {
                     val fileUrl = "https://archive.org/download/$identifier/$encodedName"
 
                     rawEpisodes.add(
-                        name.lowercase() to SeriesEpisode(
+                        baseFileName.lowercase() to SeriesEpisode(
                             episodeNumber = 0,
                             title = rawTitle,
                             fileUrl = fileUrl,
@@ -223,8 +230,8 @@ object ArchiveMetadataModule {
 
             val finalEpisodes = rawEpisodes
                 .sortedWith(compareBy<Pair<String, SeriesEpisode>> { it.first }
-                    .thenBy { if (it.second.fileUrl.endsWith(".mp4", true)) 0 else 1 })
-                .distinctBy { it.second.title.lowercase() }
+                    .thenBy { if (it.second.fileUrl.endsWith(".mp4", true) && !it.second.fileUrl.contains(".ia.mp4")) 0 else 1 })
+                .distinctBy { it.second.title.lowercase().removeSuffix(".ia").trim() }
                 .mapIndexed { idx, pair ->
                     pair.second.copy(episodeNumber = idx + 1)
                 }
