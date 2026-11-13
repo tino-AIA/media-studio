@@ -2,6 +2,7 @@ package com.example.mediastudio
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
@@ -28,6 +29,15 @@ class MainActivity : ComponentActivity() {
                 var previousScreen by remember { mutableIntStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
                 var selectedMovieYear by remember { mutableStateOf("") }
+
+                // Presreće sistemsku tipku Back na mobitelu i Firestick daljinskom upravljaču
+                BackHandler(enabled = currentScreen != 0) {
+                    when (currentScreen) {
+                        2 -> currentScreen = 1 // Iz playera natrag u detalje filma
+                        1 -> currentScreen = previousScreen // Iz detalja natrag u žanr ili na početni ekran
+                        3 -> currentScreen = 0 // Iz ekrana žanra natrag na početni ekran
+                    }
+                }
 
                 when (currentScreen) {
                     0 -> HomeScreen(
