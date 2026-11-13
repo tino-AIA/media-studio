@@ -50,7 +50,18 @@ object PosterFetcher {
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").replace(Regex("(?i)season\\s*\\d+.*"), "").trim()
+        // We use the same aggressive cleaning strategy used for grouping
+        val cleanTitle = title
+            .replace(Regex("\\(\\d{4}\\)"), "")
+            .replace(Regex("(?i)season\\s*\\d+.*"), "")
+            .replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized)"), "")
+            .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
+            .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
+            .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
+            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
         val cacheKey = "${isSeries}_$cleanTitle"
         if (cache.containsKey(cacheKey)) return@withContext cache[cacheKey]!!
 
@@ -317,6 +328,7 @@ object ArchiveMetadataModule {
                             )
                         }
                     } else {
+                        // Advanced search za kolekcije
                         val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$cleanId+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
                         val searchJson = JSONObject(URL(searchUrl).readText())
                         val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
@@ -419,6 +431,7 @@ object ArchiveMetadataModule {
     private fun cleanSeriesTitleForSearch(rawTitle: String): String {
         return rawTitle
             .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
+            .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
