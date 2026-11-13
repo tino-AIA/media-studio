@@ -21,6 +21,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -28,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -62,6 +65,8 @@ fun GenreScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                // OVO RJEŠAVA IZLAZAK GORE NA GENRE EKRANU
+                modifier = Modifier.focusProperties { up = FocusRequester.Cancel },
                 title = {
                     Column {
                         Text(
@@ -143,8 +148,8 @@ fun GenreScreen(
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
-                // RIJEŠENO PREKLAPANJE: Dodan bottom = 95.dp
-                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 95.dp),
+                // ZNAČAJNO POVEĆAN BOTTOM PADDING KAKO BI PAGINACIJA BILA ISPOD NASLOVA
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
@@ -211,10 +216,12 @@ fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: 
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
 
     val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+    var posterUrl by remember { mutableStateOf("") }
+    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
 
     LaunchedEffect(movie.title) {
-        posterUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
     }
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -232,12 +239,29 @@ fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: 
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
             ) {
-                Image(
-                    painter = rememberAsyncImagePainter(posterUrl),
-                    contentDescription = movie.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                val painter = rememberAsyncImagePainter(
+                    model = posterUrl.ifBlank { fallbackUrl }
                 )
+                
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (painter.state is AsyncImagePainter.State.Loading) {
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                    }
+                    Image(
+                        painter = painter,
+                        contentDescription = movie.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    if (painter.state is AsyncImagePainter.State.Error) {
+                        Image(
+                            painter = rememberAsyncImagePainter(fallbackUrl),
+                            contentDescription = movie.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
             }
 
             if (ratedMovie.rating.isNotEmpty()) {
@@ -264,7 +288,7 @@ fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: 
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
-            textAlign = TextAlign.Center, // CENTRIRANI NASLOV
+            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth()
