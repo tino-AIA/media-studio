@@ -29,6 +29,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -159,8 +162,10 @@ fun HomeScreen(
                 }
             },
             containerColor = Color.Black,
-            // BLOKADA IZLASKA: Prazan fokus hvatač na dnu hijerarhije
-            modifier = Modifier.focusable() 
+            // BLOKADA IZLAZA: Ako pritisneš gore na vrhu ekrana, zaustavljamo signal!
+            modifier = Modifier
+                .onPreviewKeyEvent { if (it.key == Key.DirectionUp) true else false }
+                .focusable()
         ) { paddingValues ->
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
@@ -189,6 +194,35 @@ fun HomeScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun TvHighlightIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .background(
+                color = if (isFocused) Color.Red else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        content()
     }
 }
 
@@ -447,6 +481,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
+        // Podesili smo širinu naslova da bude ista kao kartica (162.dp) i centrirali tekst
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
@@ -455,7 +490,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(start = 28.dp)
+            modifier = Modifier.width(162.dp).padding(start = 28.dp)
         )
     }
 }
@@ -495,15 +530,16 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
             )
         }
         Spacer(modifier = Modifier.height(6.dp))
+        // Podesili smo širinu naslova da bude točno 120.dp i savršeno centrirali tekst
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
             fontSize = 12.sp,
-            textAlign = TextAlign.Center, // CENTRIRANI NASLOV
+            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.width(120.dp)
         )
     }
 }
