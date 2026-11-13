@@ -15,7 +15,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -119,6 +118,7 @@ fun SearchScreen(
                         viewModel.performGlobalSearch(it)
                     },
                     modifier = Modifier.fillMaxWidth(),
+                    readOnly = true, // ONEMOGUĆUJE pojavljivanje sistemske tipkovnice preko cijelog ekrana
                     placeholder = { Text("Upiši naziv filma ili serije...", color = Color.Gray, fontSize = 14.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Red) },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -131,14 +131,6 @@ fun SearchScreen(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
                         onSearch = {
-                            viewModel.performGlobalSearch(query)
-                            focusManager.clearFocus()
-                        },
-                        onNext = {
-                            viewModel.performGlobalSearch(query)
-                            focusManager.clearFocus()
-                        },
-                        onDone = {
                             viewModel.performGlobalSearch(query)
                             focusManager.clearFocus()
                         }
@@ -267,6 +259,7 @@ fun SearchScreen(
                                 items(searchResults) { ratedItem ->
                                     RatedMovieGridCard(
                                         ratedMovie = ratedItem,
+                                        isSeries = selectedTab == ContentTab.SERIES,
                                         onMovieClick = { item ->
                                             if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
                                         }
@@ -278,6 +271,35 @@ fun SearchScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun TvHighlightIconButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .background(
+                color = if (isFocused) Color.Red else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        content()
     }
 }
 
