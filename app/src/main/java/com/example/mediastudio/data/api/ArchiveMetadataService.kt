@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
@@ -130,14 +131,13 @@ object ArchiveMetadataModule {
         return fetchMovieFullInfo(identifier).qualities
     }
 
-    // Dohvaća opis serije preveden na hrvatski + sve epizode (podržava sve video formate i podkolekcije)
     suspend fun fetchSeriesFullInfo(identifier: String): SeriesFullInfo = withContext(Dispatchers.IO) {
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
             val metadata = root.optJSONObject("metadata")
             val rawDesc = parseCleanDescription(metadata)
-            val translatedDesc = translateTextToCroatian(rawDesc)
+            val translatedDesc = translateToCroatianSentenceBySentence(rawDesc)
 
             val filesArray = root.optJSONArray("files")
             val rawEpisodes = mutableListOf<Pair<String, SeriesEpisode>>()
@@ -192,7 +192,6 @@ object ArchiveMetadataModule {
                 }
             }
 
-            // Ako je riječ o kolekciji s više zasebnih stavki (collection:identifier)
             if (rawEpisodes.isEmpty()) {
                 val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$identifier+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=100&output=json"
                 val searchJson = JSONObject(URL(searchUrl).readText())
@@ -222,7 +221,6 @@ object ArchiveMetadataModule {
                 }
             }
 
-            // Grupiramo po nazivu epizode (ako ista epizoda postoji i u .mp4 i u .mkv, preferiramo .mp4)
             val finalEpisodes = rawEpisodes
                 .sortedWith(compareBy<Pair<String, SeriesEpisode>> { it.first }
                     .thenBy { if (it.second.fileUrl.endsWith(".mp4", true)) 0 else 1 })
@@ -257,19 +255,32 @@ object ArchiveMetadataModule {
             .ifEmpty { "Opis za ovaj naslov trenutno nije dostupan." }
     }
 
-    private fun translateTextToCroatian(text: String): String {
+    private fun translateToCroatianSentenceBySentence(text: String): String {
         if (text.isBlank() || text.startsWith("Opis za ovaj naslov")) return text
         return try {
-            val encoded = URLEncoder.encode(text.take(1800), "UTF-8")
-            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
-            val response = URL(urlStr).readText()
-            val jsonArray = JSONArray(response)
-            val sentences = jsonArray.getJSONArray(0)
-            val sb = StringBuilder()
-            for (i in 0 until sentences.length()) {
-                sb.append(sentences.getJSONArray(i).getString(0))
+            val limitedText = text.take(2200)
+            val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
+            val translatedBuilder = StringBuilder()
+
+            for (sentence in sentences) {
+                val trimmed = sentence.trim()
+                if (trimmed.isEmpty()) continue
+                val encoded = URLEncoder.encode(trimmed, "UTF-8")
+                val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
+                val conn = URL(urlStr).openConnection() as HttpURLConnection
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+
+                val response = conn.inputStream.bufferedReader().use { it.readText() }
+                val jsonArray = JSONArray(response)
+                val parts = jsonArray.getJSONArray(0)
+                for (i in 0 until parts.length()) {
+                    translatedBuilder.append(parts.getJSONArray(i).getString(0))
+                }
+                translatedBuilder.append(" ")
             }
-            sb.toString().ifBlank { text }
+            translatedBuilder.toString().trim().ifBlank { text }
         } catch (e: Exception) {
             text
         }
