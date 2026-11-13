@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.SeriesEpisode
+import com.example.mediastudio.data.api.SeriesSeason
 import com.example.mediastudio.data.model.ArchiveMovie
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,7 +39,8 @@ fun SeriesScreen(
     onEpisodeClick: (SeriesEpisode) -> Unit,
     onBackClick: () -> Unit
 ) {
-    var episodes by remember { mutableStateOf<List<SeriesEpisode>>(emptyList()) }
+    var seasons by remember { mutableStateOf<List<SeriesSeason>>(emptyList()) }
+    var selectedSeasonIndex by remember { mutableIntStateOf(0) }
     var seriesDescription by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
@@ -47,11 +50,15 @@ fun SeriesScreen(
 
     LaunchedEffect(series.identifier) {
         isLoading = true
-        val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier)
+        val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
         seriesDescription = fullInfo.description
-        episodes = fullInfo.episodes
+        seasons = fullInfo.seasons
+        selectedSeasonIndex = 0
         isLoading = false
     }
+
+    val activeSeason = seasons.getOrNull(selectedSeasonIndex)
+    val visibleEpisodes = activeSeason?.episodes ?: emptyList()
 
     Scaffold(
         topBar = {
@@ -67,8 +74,10 @@ fun SeriesScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         if (!isLoading) {
+                            val totalEps = seasons.sumOf { it.episodes.size }
+                            val seasonInfo = if (seasons.size > 1) "${seasons.size} sezona • " else ""
                             Text(
-                                text = "Pronađeno ${episodes.size} epizoda / nastavaka",
+                                text = "${seasonInfo}Ukupno $totalEps epizoda",
                                 color = Color.Gray,
                                 fontSize = 12.sp
                             )
@@ -76,7 +85,10 @@ fun SeriesScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick) {
+                    TvHighlightIconButton(
+                        onClick = onBackClick,
+                        contentDescription = "Povratak"
+                    ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
                 },
@@ -99,7 +111,7 @@ fun SeriesScreen(
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
                 item {
-                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
@@ -124,8 +136,8 @@ fun SeriesScreen(
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = if (episodes.isNotEmpty())
-                                        "Odaberi epizodu s popisa za izravnu reprodukciju."
+                                    text = if (visibleEpisodes.isNotEmpty())
+                                        "Odaberi sezonu i pokreni željenu epizodu."
                                     else
                                         "Ova kolekcija nema izravno povezanih video datoteka.",
                                     color = Color.LightGray,
@@ -143,14 +155,65 @@ fun SeriesScreen(
                                 lineHeight = 20.sp
                             )
                         }
+
+                        // Horizontalni odabir sezona (Sezona 1, Sezona 2, Sezona 3...) ako serija ima više sezona
+                        if (seasons.size > 1) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(seasons.size) { index ->
+                                    val season = seasons[index]
+                                    SeasonChipButton(
+                                        title = "${season.seasonTitle} (${season.episodes.size})",
+                                        isSelected = index == selectedSeasonIndex,
+                                        onClick = { selectedSeasonIndex = index }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
-                items(episodes) { episode ->
+                items(visibleEpisodes) { episode ->
                     EpisodeRowItem(episode = episode, onClick = { onEpisodeClick(episode) })
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SeasonChipButton(
+    title: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .background(
+                color = if (isSelected) Color.Red else if (isFocused) Color(0xFF2B2B2B) else Color(0xFF1A1A1A),
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isFocused) 3.dp else 1.dp,
+                color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp
+        )
     }
 }
 
@@ -170,7 +233,7 @@ private fun EpisodeRowItem(
                 shape = RoundedCornerShape(10.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 1.dp,
+                width = if (isFocused) 3.dp else 1.dp,
                 color = if (isFocused) Color.White else Color.DarkGray,
                 shape = RoundedCornerShape(10.dp)
             )
@@ -195,7 +258,7 @@ private fun EpisodeRowItem(
                     text = episode.title,
                     color = Color.White,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
