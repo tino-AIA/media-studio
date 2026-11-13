@@ -9,8 +9,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -40,6 +42,16 @@ fun GenreScreen(
     val selectedGenre by viewModel.selectedGenre.collectAsState()
     val genreMovies by viewModel.genreMovies.collectAsState()
     val isLoading by viewModel.isGenreLoading.collectAsState()
+    val currentPage by viewModel.currentGenrePage.collectAsState()
+    val totalPages by viewModel.totalGenrePages.collectAsState()
+    val totalCount by viewModel.totalGenreMoviesCount.collectAsState()
+
+    val gridState = rememberLazyGridState()
+
+    // Kad se promijeni stranica, automatski skrolaj na vrh nove stranice
+    LaunchedEffect(currentPage) {
+        gridState.scrollToItem(0)
+    }
 
     BackHandler {
         onBackClick()
@@ -56,11 +68,13 @@ fun GenreScreen(
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp
                         )
-                        Text(
-                            text = "Poredano po ocjenama publike",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
+                        if (totalCount > 0) {
+                            Text(
+                                text = "Stranica $currentPage od $totalPages • Ukupno $totalCount filmova",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -88,6 +102,7 @@ fun GenreScreen(
             }
         } else {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -101,6 +116,54 @@ fun GenreScreen(
                         ratedMovie = ratedItem,
                         onMovieClick = onMovieClick
                     )
+                }
+
+                // Kontrole za listanje stranica na dnu popisa (ako ima više od 1 stranice)
+                if (totalPages > 1) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 20.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.loadGenrePage(currentPage - 1) },
+                                enabled = currentPage > 1,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White,
+                                    disabledContentColor = Color.DarkGray
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("◀ Prethodna", fontSize = 13.sp)
+                            }
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            Text(
+                                text = "$currentPage / $totalPages",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            Button(
+                                onClick = { viewModel.loadGenrePage(currentPage + 1) },
+                                enabled = currentPage < totalPages,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Red,
+                                    disabledContainerColor = Color.DarkGray
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Sljedeća ▶", color = Color.White, fontSize = 13.sp)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -139,7 +202,6 @@ fun RatedMovieGridCard(
                     contentScale = ContentScale.Crop
                 )
 
-                // Oznaka ocjene u gornjem desnom kutu postera (npr. ★ 4.8)
                 if (ratedMovie.rating.isNotEmpty()) {
                     Box(
                         modifier = Modifier
