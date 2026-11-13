@@ -105,7 +105,7 @@ class MainActivity : ComponentActivity() {
                         SeriesScreen(
                             series = series,
                             onEpisodeClick = { episode ->
-                                selectedEpisodeTitle = "${series.title} - ${episode.title}"
+                                selectedEpisodeTitle = episode.subtitleSearchQuery.ifBlank { "${series.title} - ${episode.title}" }
                                 selectedEpisodeUrl = episode.fileUrl
                                 currentScreen = 2
                             },
