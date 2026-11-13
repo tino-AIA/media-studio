@@ -117,7 +117,7 @@ class HomeViewModel : ViewModel() {
         GenreOption("Dokumentarni", "mediatype:movies AND $safeFilter AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "collection:feature_films AND mediatype:movies AND (subject:erotic OR subject:erotica OR title:\"realm of the senses\" OR title:\"bad girl\") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
+            query = "mediatype:movies AND (subject:erotic OR subject:erotica OR subject:adult OR subject:softcore OR subject:sexploitation OR title:\"realm of the senses\" OR title:\"empire des sens\" OR title:\"bad girl\" OR title:\"alpha france\" OR creator:\"alpha france\" OR description:\"alpha france\") AND -title:\"adult swim\" AND -subject:(animation OR anime OR cartoon)",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
