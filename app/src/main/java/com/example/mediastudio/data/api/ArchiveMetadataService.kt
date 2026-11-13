@@ -47,24 +47,24 @@ data class SeriesFullInfo(
 object PosterFetcher {
     private val cache = mutableMapOf<String, String>()
     private const val TMDB_API_KEY = "3e9f4c3a726ea7247a32d164627d2c38" 
-    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    private const val OMDB_API_KEY = "thewdb" // OMDB public fallback key
+    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        // EKSTREMNO ČIŠĆENJE ZA TMDB: Skidamo sve oznake epizoda, kvalitete videa, godina i sufiksa
+        // Agresivno čišćenje imena kako bi API dobio samo suštinu filma
         var cleanTitle = title
             .replace(Regex("\\(\\d{4}\\)"), "")
-            .replace(Regex("(?i)\\b(video\\s*quality|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol\\.?\\s*\\d+|part\\s*\\d+)\\b.*"), "")
+            .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol\\.?\\s*\\d+|part\\s*\\d+|episode\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)season\\s*\\d+.*"), "")
-            .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
-            .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
             
-        // Neki id-evi su čišći od naslova na archive.org (npr za The Big Trees)
+        // Ako je naslov prekratak ili oštećen, koristimo Archive ID koji je često puno točniji
         if (cleanTitle.length < 3) {
              cleanTitle = archiveId.replace("_", " ").replace("-", " ")
                  .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol|part)\\b.*"), "")
+                 .replace(Regex("\\d{4}"), "")
                  .trim()
         }
 
@@ -77,7 +77,7 @@ object PosterFetcher {
         try {
             val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
             
-            // 1. Pokušaj preko TMDB
+            // 1. Pokušaj TMDB
             val type = if (isSeries) "tv" else "movie"
             val url = URL("https://api.themoviedb.org/3/search/$type?api_key=$TMDB_API_KEY&query=$encoded")
             val conn = url.openConnection() as HttpURLConnection
@@ -97,7 +97,23 @@ object PosterFetcher {
                 }
             }
 
-            // 2. Ako je serija, a TMDB nije našao, pokušaj TVmaze
+            // 2. Ako TMDB zakaže, pokušaj OMDB API kao jaku rezervu
+            val omdbType = if (isSeries) "series" else "movie"
+            val omdbUrl = URL("https://www.omdbapi.com/?t=$encoded&type=$omdbType&apikey=$OMDB_API_KEY")
+            val omdbConn = omdbUrl.openConnection() as HttpURLConnection
+            omdbConn.setRequestProperty("User-Agent", USER_AGENT)
+            omdbConn.connectTimeout = 2500
+            if (omdbConn.responseCode == 200) {
+                val omdbJson = JSONObject(omdbConn.inputStream.bufferedReader().use { it.readText() })
+                val poster = omdbJson.optString("Poster")
+                if (poster.isNotBlank() && poster != "N/A" && poster.startsWith("http")) {
+                    val httpsPoster = poster.replace("http://", "https://")
+                    cache[cacheKey] = httpsPoster
+                    return@withContext httpsPoster
+                }
+            }
+
+            // 3. Ako je serija, pokušaj i TVMaze
             if (isSeries) {
                 val tvMazeUrl = URL("https://api.tvmaze.com/singlesearch/shows?q=$encoded")
                 val tvMazeConn = tvMazeUrl.openConnection() as HttpURLConnection
@@ -107,27 +123,9 @@ object PosterFetcher {
                     val tvMazeJson = JSONObject(tvMazeConn.inputStream.bufferedReader().use { it.readText() })
                     val img = tvMazeJson.optJSONObject("image")?.optString("original")
                     if (!img.isNullOrBlank()) {
-                        cache[cacheKey] = img
-                        return@withContext img
-                    }
-                }
-            }
-
-            // 3. Pokušaj iTunes API kao zadnju šansu
-            val itunesType = if (isSeries) "tvSeason" else "movie"
-            val itunesUrl = URL("https://itunes.apple.com/search?term=$encoded&entity=$itunesType&limit=1")
-            val itunesConn = itunesUrl.openConnection() as HttpURLConnection
-            itunesConn.setRequestProperty("User-Agent", USER_AGENT)
-            itunesConn.connectTimeout = 2500
-            if (itunesConn.responseCode == 200) {
-                val itunesJson = JSONObject(itunesConn.inputStream.bufferedReader().use { it.readText() })
-                val results = itunesJson.optJSONArray("results")
-                if (results != null && results.length() > 0) {
-                    val artwork = results.optJSONObject(0)?.optString("artworkUrl100")
-                    if (!artwork.isNullOrBlank()) {
-                        val highRes = artwork.replace("100x100bb", "600x900bb")
-                        cache[cacheKey] = highRes
-                        return@withContext highRes
+                        val httpsImg = img.replace("http://", "https://")
+                        cache[cacheKey] = httpsImg
+                        return@withContext httpsImg
                     }
                 }
             }
