@@ -243,6 +243,7 @@ class HomeViewModel : ViewModel() {
                     excludeAdult = false,
                     isAdultCategory = false,
                     isAnimationCategory = true,
+                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
                     preserveApiOrder = false
                 )
                 _globalSearchResults.value = results
@@ -274,6 +275,7 @@ class HomeViewModel : ViewModel() {
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
+                            isSeriesCategory = false,
                             preserveApiOrder = isWeeklyTop
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
@@ -291,6 +293,7 @@ class HomeViewModel : ViewModel() {
                             excludeAdult = true,
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
+                            isSeriesCategory = true,
                             preserveApiOrder = isWeeklyTop
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
@@ -332,6 +335,7 @@ class HomeViewModel : ViewModel() {
                     excludeAdult = !genre.isAdultCategory,
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
+                    isSeriesCategory = genre.isSeriesCategory,
                     preserveApiOrder = isWeeklyTop
                 )
 
@@ -361,6 +365,7 @@ class HomeViewModel : ViewModel() {
         excludeAdult: Boolean,
         isAdultCategory: Boolean,
         isAnimationCategory: Boolean,
+        isSeriesCategory: Boolean,
         preserveApiOrder: Boolean
     ): Pair<List<RatedMovie>, Int> {
         return try {
@@ -381,25 +386,15 @@ class HomeViewModel : ViewModel() {
                 val titleLower = finalTitle.lowercase()
                 val fullMetaLower = "$id $finalTitle $creatorText $descText $collectionText".lowercase()
 
-                if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) {
-                    return@mapNotNull null
-                }
+                if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
+                if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
+                if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
 
-                if (excludeAdult && isAdultContent(id, finalTitle)) {
-                    return@mapNotNull null
-                }
-
-                if (isAdultCategory && titleLower.contains("adult swim")) {
-                    return@mapNotNull null
-                }
-
-                val isTrailerOrClip = titleLower.contains("trailer") ||
-                        titleLower.contains("teaser") ||
-                        titleLower.contains("tv spot")
+                val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder && !isAdultCategory) {
+                if (runtimeMinutes in 1..25 && !isAnimationCategory && !preserveApiOrder && !isAdultCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
 
@@ -420,7 +415,7 @@ class HomeViewModel : ViewModel() {
                 if (collectionText.lowercase().contains("feature_films")) score += 90.0
                 if (runtimeMinutes >= 65) score += 170.0
                 if (itemSizeMb >= 600) score += 140.0
-                if (itemSizeMb in 1..150 && !isAnimationCategory) score -= 240.0
+                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory) score -= 240.0
 
                 if (ratingVal > 0.0 && reviewsVal > 0) {
                     score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
@@ -432,11 +427,7 @@ class HomeViewModel : ViewModel() {
                 if (descText.length > 80) score += 10.0
                 if (creatorText.isNotBlank()) score += 8.0
 
-                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 2) {
-                    String.format("%.1f", ratingVal)
-                } else {
-                    ""
-                }
+                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 2) String.format("%.1f", ratingVal) else ""
 
                 RatedMovie(
                     movie = ArchiveMovie(identifier = id, title = finalTitle),
@@ -445,11 +436,23 @@ class HomeViewModel : ViewModel() {
                 )
             }
 
-            val finalSorted = if (preserveApiOrder) {
-                scoredList
+            // GRUPIRANJE: Ako je riječ o serijama, spajamo iste serije (Season 1, Season 2...) u jedan objekt!
+            val finalSorted = if (isSeriesCategory) {
+                val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
+                val mergedList = grouped.map { (baseTitle, group) ->
+                    val mergedIds = group.joinToString(",") { it.movie.identifier }
+                    val bestItem = group.maxByOrNull { it.relevanceScore } ?: group.first()
+                    RatedMovie(
+                        movie = ArchiveMovie(identifier = mergedIds, title = baseTitle),
+                        rating = bestItem.rating,
+                        relevanceScore = bestItem.relevanceScore
+                    )
+                }.sortedByDescending { it.relevanceScore }
+                if (preserveApiOrder) mergedList else mergedList
             } else {
-                scoredList.sortedByDescending { it.relevanceScore }
+                if (preserveApiOrder) scoredList else scoredList.sortedByDescending { it.relevanceScore }
             }
+            
             finalSorted to numFound
         } catch (e: Exception) {
             e.printStackTrace()
@@ -457,10 +460,20 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
+        return rawTitle
+            .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
+            .replace(Regex("(?i)\\bpart\\s*\\d+\\b"), "")
+            .replace(Regex("(?i)complete\\b"), "")
+            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { rawTitle }
+    }
+
     private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
         val raw = extractText(runtimeValue).trim()
         if (raw.isEmpty()) return 0
-
         if (raw.contains(":")) {
             val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
             return when (parts.size) {
@@ -469,7 +482,6 @@ class HomeViewModel : ViewModel() {
                 else -> 0
             }
         }
-
         val numeric = raw.toDoubleOrNull() ?: return 0
         return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
     }
