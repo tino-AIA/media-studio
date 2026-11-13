@@ -97,6 +97,7 @@ class HomeViewModel : ViewModel() {
         "youtube videos", "kaczynski", "writings collection", "manifesto"
     )
 
+    // PROŠIRENO: Dodani japanski i europski velikani, studiji te nagrade za ogroman ranking boost!
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
         "20th century", "united artists", "disney", "fleischer", "republic pictures",
@@ -108,7 +109,8 @@ class HomeViewModel : ViewModel() {
         "cary grant", "john wayne", "humphrey bogart", "james stewart", "vincent price",
         "bela lugosi", "boris karloff", "peter lorre", "gary cooper", "ingrid bergman",
         "audrey hepburn", "christopher lee", "peter cushing", "stan laurel", "oliver hardy",
-        "imdb", "academy award", "oscar"
+        "toho", "kurosawa", "mizoguchi", "ozu", "ghibli", "miyazaki", "anime", 
+        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion" 
     )
 
     private val safeFilter = "-subject:(erotic OR erotica OR xxx OR porn) " +
@@ -119,15 +121,17 @@ class HomeViewModel : ViewModel() {
     private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
             "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
-    private val westernFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil) " +
-            "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
+    // MAINSTREAM FILTER: Trajno izbacivanje Bollywooda i istočnjačkih kategorija iz SVIH upita
+    private val mainstreamFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil OR kannada OR marathi OR bengali OR urdu OR hindi OR desi) " +
+            "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR mar OR kan OR guj OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
             
     private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
 
-    private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND$onlyMoviesFilter"
+    // Ubačen mainstreamFilter u bazu svakog upita za filmove
+    private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 prošlog tjedna", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND$safeFilter AND $westernFilter AND$onlyMoviesFilter", "week desc"),
+        GenreOption("Top 10 prošlog tjedna", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "week desc"),
         GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
@@ -141,14 +145,14 @@ class HomeViewModel : ViewModel() {
         GenreOption("Ratni", "$featureMoviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND$onlyMoviesFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND$onlyMoviesFilter AND (" +
+            query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
                     "collection:(adultvhs OR mensmagazines_post70s) OR " +
                     "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
                     "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\") OR " +
@@ -160,12 +164,12 @@ class HomeViewModel : ViewModel() {
         )
     )
 
-    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND$safeFilter"
+    // Ubačen mainstreamFilter u bazu svakog upita za serije
+    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija prošlog tjedna", "$seriesBase AND$westernFilter", "week desc", isSeriesCategory = true),
-        // Ovdje je dodan novi upit koji traži Disney, WB i specifične likove
-        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR donald OR goofy OR pluto OR \"bugs bunny\" OR \"daffy duck\" OR \"tom and jerry\")) AND $noJunkFilter AND$safeFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
+        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR donald OR goofy OR pluto OR \"bugs bunny\" OR \"daffy duck\" OR \"tom and jerry\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom) OR title:(three stooges OR lucy OR beverly hillbillies OR laurel and hardy))", "downloads desc", isSeriesCategory = true),
@@ -282,7 +286,7 @@ class HomeViewModel : ViewModel() {
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
                             isSeriesCategory = false,
-                            preserveApiOrder = isWeeklyTop
+                            preserveApiOrder = false // Promijenjeno u false da bi SE SVE sortiralo po našem ocjenjivanju!
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -300,7 +304,7 @@ class HomeViewModel : ViewModel() {
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
                             isSeriesCategory = true,
-                            preserveApiOrder = isWeeklyTop
+                            preserveApiOrder = false // Promijenjeno u false da bi SE SVE sortiralo po našem ocjenjivanju!
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -342,7 +346,7 @@ class HomeViewModel : ViewModel() {
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
                     isSeriesCategory = genre.isSeriesCategory,
-                    preserveApiOrder = isWeeklyTop
+                    preserveApiOrder = false // Uvijek forsiramo naše moćno ocjenjivanje!
                 )
 
                 _genreMovies.value = results.take(targetLimit)
@@ -416,24 +420,31 @@ class HomeViewModel : ViewModel() {
                 }
 
                 val itemSizeMb = parseSizeMb(doc.itemSize)
+                
+                // NOVI ALGORITAM ZA BODOVANJE (SORTIRANJE)
                 var score = 0.0
 
-                if (collectionText.lowercase().contains("feature_films")) score += 90.0
-                if (runtimeMinutes >= 65) score += 170.0
-                if (itemSizeMb >= 600) score += 140.0
-                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory) score -= 240.0
-
-                if (ratingVal > 0.0 && reviewsVal > 0) {
-                    score += ratingVal * ln(reviewsVal.toDouble() + 1.5) * 8.0
+                // 1. Ogroman prioritet: Službeni IMDb Rating
+                if (ratingVal > 0.0) {
+                    score += ratingVal * 1000.0 // Npr. ocjena 4.5 donosi 4500 bodova!
+                    if (reviewsVal > 0) {
+                        score += ln(reviewsVal.toDouble() + 1.0) * 300.0 // Bonus za količinu glasova
+                    }
+                } else {
+                    // Dajemo bazu da ne ispadne s popisa, ali ostaje na dnu
+                    score += 500.0
                 }
 
+                // 2. Prioritet: Mainstream / Europski / Američki / Japanski klasični studiji
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
-                score += studioMatches * 35.0
+                score += studioMatches * 800.0 // Ogroman boost ako u opisu stoji Warner, Toho, Oscar, Hitchcock...
 
-                if (descText.length > 80) score += 10.0
-                if (creatorText.isNotBlank()) score += 8.0
+                if (collectionText.lowercase().contains("feature_films")) score += 200.0
+                if (runtimeMinutes >= 70) score += 300.0
+                if (itemSizeMb >= 600) score += 100.0
+                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory) score -= 500.0
 
-                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 2) String.format("%.1f", ratingVal) else ""
+                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
 
                 RatedMovie(
                     movie = ArchiveMovie(identifier = id, title = finalTitle),
@@ -453,9 +464,11 @@ class HomeViewModel : ViewModel() {
                         relevanceScore = bestItem.relevanceScore
                     )
                 }.sortedByDescending { it.relevanceScore }
-                if (preserveApiOrder) mergedList else mergedList
+                
+                // Sada SVE, pa i Top 10, prolazi kroz naše strogo ocjenjivanje!
+                mergedList 
             } else {
-                if (preserveApiOrder) scoredList else scoredList.sortedByDescending { it.relevanceScore }
+                scoredList.sortedByDescending { it.relevanceScore }
             }
             
             finalSorted to numFound
@@ -471,7 +484,6 @@ class HomeViewModel : ViewModel() {
             .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)complete\\b"), "")
             .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
-            // NOVO: Agresivno micanje oznaka tipa S04E02 ili Episode 5 kako bi se spojili!
             .replace(Regex("(?i)\\bS\\d{1,2}E\\d{1,3}\\b.*"), "") 
             .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "")
             .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
