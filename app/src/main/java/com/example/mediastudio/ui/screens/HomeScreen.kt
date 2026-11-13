@@ -159,7 +159,7 @@ fun HomeScreen(
                 }
             },
             containerColor = Color.Black,
-            // BLOKADA IZLASKA: Prazan fokus hvatač na dnu hijerarhije (ako D-pad ne nađe ništa drugo)
+            // BLOKADA IZLASKA: Prazan fokus hvatač na dnu hijerarhije
             modifier = Modifier.focusable() 
         ) { paddingValues ->
             if (isLoading) {
