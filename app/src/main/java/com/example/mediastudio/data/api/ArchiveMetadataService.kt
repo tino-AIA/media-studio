@@ -44,6 +44,54 @@ data class SeriesFullInfo(
     val episodes: List<SeriesEpisode>
 )
 
+object PosterFetcher {
+    private val cache = mutableMapOf<String, String>()
+
+    suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
+        val cacheKey = "${isSeries}_$title"
+        if (cache.containsKey(cacheKey)) return@withContext cache[cacheKey]!!
+
+        val fallback = "https://archive.org/services/img/$archiveId"
+        try {
+            val encoded = URLEncoder.encode(title, "UTF-8")
+            if (isSeries) {
+                val url = URL("https://api.tvmaze.com/singlesearch/shows?q=$encoded")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 2500
+                conn.readTimeout = 2500
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    val img = json.optJSONObject("image")?.optString("original")
+                    if (!img.isNullOrBlank()) {
+                        cache[cacheKey] = img
+                        return@withContext img
+                    }
+                }
+            } else {
+                val url = URL("https://itunes.apple.com/search?term=$encoded&entity=movie&limit=1")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 2500
+                conn.readTimeout = 2500
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    val results = json.optJSONArray("results")
+                    if (results != null && results.length() > 0) {
+                        val artwork = results.optJSONObject(0)?.optString("artworkUrl100")
+                        if (!artwork.isNullOrBlank()) {
+                            val highRes = artwork.replace("100x100bb", "600x900bb")
+                            cache[cacheKey] = highRes
+                            return@withContext highRes
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        
+        cache[cacheKey] = fallback
+        fallback
+    }
+}
+
 object ArchiveMetadataModule {
     private val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".m4v", ".mov", ".ogv", ".webm")
 
@@ -140,140 +188,140 @@ object ArchiveMetadataModule {
         return fetchMovieFullInfo(identifier).qualities
     }
 
-    suspend fun fetchSeriesFullInfo(identifier: String, seriesTitleHint: String = ""): SeriesFullInfo = withContext(Dispatchers.IO) {
+    suspend fun fetchSeriesFullInfo(identifiersStr: String, seriesTitleHint: String = ""): SeriesFullInfo = withContext(Dispatchers.IO) {
         try {
-            val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
-            val root = JSONObject(jsonStr)
-            val metadata = root.optJSONObject("metadata")
-
-            val showTitle = metadata?.optString("title")?.takeIf { it.isNotBlank() }
-                ?: seriesTitleHint.ifBlank { identifier.replace("_", " ").replace("-", " ") }
-
-            val rawDesc = parseCleanDescription(metadata)
-            val translatedDesc = translateToCroatianSentenceBySentence(rawDesc)
-
-            // Dohvat službenih TVmaze / IMDb naziva epizoda za seriju (mapa (sezona, epizoda) -> službeni naziv)
-            val officialEpisodeTitles = fetchOfficialEpisodeTitles(showTitle)
-
-            val filesArray = root.optJSONArray("files")
+            val ids = identifiersStr.split(",")
+            var firstDesc = ""
             val rawEpisodes = mutableListOf<SeriesEpisode>()
+            val officialEpisodeTitles = fetchOfficialEpisodeTitles(seriesTitleHint)
 
-            if (filesArray != null) {
-                for (i in 0 until filesArray.length()) {
-                    val fileObj = filesArray.optJSONObject(i) ?: continue
-                    val name = fileObj.optString("name")
-                    val source = fileObj.optString("source")
-                    val format = fileObj.optString("format")
+            for (id in ids) {
+                val cleanId = id.trim()
+                if (cleanId.isEmpty()) continue
 
-                    val isVideo = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
-                            format.contains("MPEG4", ignoreCase = true) ||
-                            format.contains("Matroska", ignoreCase = true) ||
-                            format.contains("Ogg Video", ignoreCase = true)
+                try {
+                    val jsonStr = URL("https://archive.org/metadata/$cleanId").readText()
+                    val root = JSONObject(jsonStr)
+                    val metadata = root.optJSONObject("metadata")
+                    
+                    val showTitle = metadata?.optString("title")?.takeIf { it.isNotBlank() }
+                        ?: seriesTitleHint.ifBlank { cleanId.replace("_", " ").replace("-", " ") }
 
-                    if (!isVideo) continue
-                    if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
-
-                    val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
-                    if (sizeBytes in 1..1_500_000L) continue
-
-                    val baseFileName = name.substringAfterLast("/")
-                        .substringBeforeLast(".")
-                        .removeSuffix(".ia")
-                        .replace("_", " ")
-                        .replace("-", " ")
-                        .trim()
-
-                    val rawTitle = fileObj.optString("title")
-                        .removeSuffix(".ia")
-                        .trim()
-                        .takeIf { it.isNotBlank() } ?: baseFileName
-
-                    val (seasonNum, epNum) = parseSeasonAndEpisode("$name $rawTitle")
-
-                    // Ako imamo službeni TVmaze/IMDb naziv za ovu sezonu i epizodu, koristimo ga
-                    val officialName = if (seasonNum > 0 && epNum > 0) {
-                        officialEpisodeTitles[seasonNum to epNum]
-                    } else null
-
-                    val cleanSeriesName = cleanSeriesTitleForSearch(showTitle)
-                    val codeTag = if (seasonNum > 0 && epNum > 0) {
-                        String.format("S%02dE%02d", seasonNum, epNum)
-                    } else ""
-
-                    val displayTitle = when {
-                        officialName != null && codeTag.isNotEmpty() -> "$codeTag - $officialName"
-                        officialName != null -> officialName
-                        else -> rawTitle
+                    if (firstDesc.isEmpty()) {
+                        val rawDesc = parseCleanDescription(metadata)
+                        firstDesc = translateToCroatianSentenceBySentence(rawDesc)
                     }
 
-                    val subQuery = when {
-                        codeTag.isNotEmpty() -> "$cleanSeriesName $codeTag"
-                        officialName != null -> "$cleanSeriesName $officialName"
-                        else -> "$cleanSeriesName $rawTitle"
-                    }
+                    val filesArray = root.optJSONArray("files")
+                    if (filesArray != null && filesArray.length() > 0) {
+                        for (i in 0 until filesArray.length()) {
+                            val fileObj = filesArray.optJSONObject(i) ?: continue
+                            val name = fileObj.optString("name")
+                            val source = fileObj.optString("source")
+                            val format = fileObj.optString("format")
 
-                    val lengthSec = fileObj.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                    val durationText = if (lengthSec > 0) {
-                        val mins = lengthSec / 60
-                        val secs = lengthSec % 60
-                        String.format("%d:%02d", mins, secs)
-                    } else {
-                        ""
-                    }
+                            val isVideo = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
+                                    format.contains("MPEG4", ignoreCase = true) ||
+                                    format.contains("Matroska", ignoreCase = true) ||
+                                    format.contains("Ogg Video", ignoreCase = true)
 
-                    val encodedName = name.split("/").joinToString("/") { part ->
-                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
-                    }
-                    val fileUrl = "https://archive.org/download/$identifier/$encodedName"
+                            if (!isVideo) continue
+                            if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
 
-                    rawEpisodes.add(
-                        SeriesEpisode(
-                            seasonNumber = if (seasonNum > 0) seasonNum else 1,
-                            episodeNumber = epNum,
-                            title = displayTitle,
-                            subtitleSearchQuery = subQuery.trim(),
-                            fileUrl = fileUrl,
-                            itemIdentifier = identifier,
-                            durationText = durationText
-                        )
-                    )
-                }
-            }
+                            val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
+                            if (sizeBytes in 1..1_500_000L) continue
 
-            // Ako je riječ o kolekciji s više zasebnih stavki (collection:identifier)
-            if (rawEpisodes.isEmpty()) {
-                val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$identifier+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
-                val searchJson = JSONObject(URL(searchUrl).readText())
-                val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
+                            val baseFileName = name.substringAfterLast("/")
+                                .substringBeforeLast(".")
+                                .removeSuffix(".ia")
+                                .replace("_", " ")
+                                .replace("-", " ")
+                                .trim()
 
-                if (docs != null) {
-                    for (i in 0 until docs.length()) {
-                        val doc = docs.optJSONObject(i) ?: continue
-                        val epId = doc.optString("identifier").takeIf { it.isNotBlank() } ?: continue
-                        val epTitle = doc.optString("title").takeIf { it.isNotBlank() }
-                            ?: epId.replace("_", " ").replace("-", " ")
-                        val runtime = doc.optString("runtime")
+                            val rawTitle = fileObj.optString("title")
+                                .removeSuffix(".ia")
+                                .trim()
+                                .takeIf { it.isNotBlank() } ?: baseFileName
 
-                        val (seasonNum, epNum) = parseSeasonAndEpisode("$epId $epTitle")
-                        val bestUrl = fetchAvailableQualities(epId).firstOrNull()?.url
-                            ?: "https://archive.org/download/$epId/$epId.mp4"
+                            val (seasonNum, epNum) = parseSeasonAndEpisode("$name $rawTitle $showTitle")
+                            val officialName = if (seasonNum > 0 && epNum > 0) officialEpisodeTitles[seasonNum to epNum] else null
 
-                        rawEpisodes.add(
-                            SeriesEpisode(
-                                seasonNumber = if (seasonNum > 0) seasonNum else 1,
-                                episodeNumber = epNum,
-                                title = epTitle,
-                                subtitleSearchQuery = epTitle,
-                                fileUrl = bestUrl,
-                                itemIdentifier = epId,
-                                durationText = runtime
+                            val cleanSeriesName = cleanSeriesTitleForSearch(seriesTitleHint.ifBlank { showTitle })
+                            val codeTag = if (seasonNum > 0 && epNum > 0) String.format("S%02dE%02d", seasonNum, epNum) else ""
+
+                            val displayTitle = when {
+                                officialName != null && codeTag.isNotEmpty() -> "$codeTag - $officialName"
+                                officialName != null -> officialName
+                                else -> rawTitle
+                            }
+
+                            val subQuery = when {
+                                codeTag.isNotEmpty() -> "$cleanSeriesName $codeTag"
+                                officialName != null -> "$cleanSeriesName $officialName"
+                                else -> "$cleanSeriesName $rawTitle"
+                            }
+
+                            val lengthSec = fileObj.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                            val durationText = if (lengthSec > 0) {
+                                val mins = lengthSec / 60
+                                val secs = lengthSec % 60
+                                String.format("%d:%02d", mins, secs)
+                            } else {
+                                ""
+                            }
+
+                            val encodedName = name.split("/").joinToString("/") { part ->
+                                URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                            }
+                            val fileUrl = "https://archive.org/download/$cleanId/$encodedName"
+
+                            rawEpisodes.add(
+                                SeriesEpisode(
+                                    seasonNumber = if (seasonNum > 0) seasonNum else 1,
+                                    episodeNumber = epNum,
+                                    title = displayTitle,
+                                    subtitleSearchQuery = subQuery.trim(),
+                                    fileUrl = fileUrl,
+                                    itemIdentifier = cleanId,
+                                    durationText = durationText
+                                )
                             )
-                        )
+                        }
+                    } else {
+                        // Advanced search za kolekcije
+                        val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$cleanId+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
+                        val searchJson = JSONObject(URL(searchUrl).readText())
+                        val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
+
+                        if (docs != null) {
+                            for (i in 0 until docs.length()) {
+                                val doc = docs.optJSONObject(i) ?: continue
+                                val epId = doc.optString("identifier").takeIf { it.isNotBlank() } ?: continue
+                                val epTitle = doc.optString("title").takeIf { it.isNotBlank() }
+                                    ?: epId.replace("_", " ").replace("-", " ")
+                                val runtime = doc.optString("runtime")
+
+                                val (seasonNum, epNum) = parseSeasonAndEpisode("$epId $epTitle $showTitle")
+                                val bestUrl = fetchAvailableQualities(epId).firstOrNull()?.url
+                                    ?: "https://archive.org/download/$epId/$epId.mp4"
+
+                                rawEpisodes.add(
+                                    SeriesEpisode(
+                                        seasonNumber = if (seasonNum > 0) seasonNum else 1,
+                                        episodeNumber = epNum,
+                                        title = epTitle,
+                                        subtitleSearchQuery = epTitle,
+                                        fileUrl = bestUrl,
+                                        itemIdentifier = epId,
+                                        durationText = runtime
+                                    )
+                                )
+                            }
+                        }
                     }
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
 
-            // Grupiramo po sezonama i unutar svake sezone sortiramo epizode od 1. nadalje
             val distinctEpisodes = rawEpisodes
                 .sortedWith(
                     compareBy<SeriesEpisode> { it.seasonNumber }
@@ -306,7 +354,7 @@ object ArchiveMetadataModule {
             val allFlatEpisodes = groupedBySeason.flatMap { it.episodes }
 
             SeriesFullInfo(
-                description = translatedDesc,
+                description = firstDesc,
                 seasons = groupedBySeason,
                 episodes = allFlatEpisodes
             )
@@ -316,7 +364,6 @@ object ArchiveMetadataModule {
         }
     }
 
-    // Parsira S01E02, 1x02, Season 1 Episode 2, S1 E2, E01 itd.
     private fun parseSeasonAndEpisode(text: String): Pair<Int, Int> {
         val patterns = listOf(
             Regex("(?i)\\bS(\\d{1,2})\\s*[-_.]?\\s*E(\\d{1,3})\\b"),
@@ -332,11 +379,13 @@ object ArchiveMetadataModule {
                 return s to e
             }
         }
-        val epOnly = Regex("(?i)(?:Episode|Ep\\.?)\\s*(\\d{1,3})\\b").find(text)
-        if (epOnly != null) {
-            return 1 to (epOnly.groupValues[1].toIntOrNull() ?: 0)
-        }
-        return 1 to 0
+        val seasonOnly = Regex("(?i)Season\\s*(\\d{1,2})\\b").find(text)
+        val s = seasonOnly?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        
+        val epOnly = Regex("(?i)(?:Episode|Ep\\.?|Part)\\s*(\\d{1,3})\\b").find(text)
+        val e = epOnly?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        
+        return s to e
     }
 
     private fun cleanSeriesTitleForSearch(rawTitle: String): String {
@@ -347,7 +396,6 @@ object ArchiveMetadataModule {
             .trim()
     }
 
-    // Dohvaća službene TVmaze / IMDb nazive epizoda po sezonama i broju epizode
     private fun fetchOfficialEpisodeTitles(rawSeriesTitle: String): Map<Pair<Int, Int>, String> {
         return try {
             val cleanName = cleanSeriesTitleForSearch(rawSeriesTitle)
@@ -356,8 +404,8 @@ object ArchiveMetadataModule {
             val searchUrl = "https://api.tvmaze.com/singlesearch/shows?q=$encoded&embed=episodes"
             val conn = URL(searchUrl).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "MediaStudio/1.0")
-            conn.connectTimeout = 4500
-            conn.readTimeout = 4500
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
             if (conn.responseCode != 200) return emptyMap()
 
             val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
@@ -408,8 +456,8 @@ object ArchiveMetadataModule {
                 val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
                 val conn = URL(urlStr).openConnection() as HttpURLConnection
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
+                conn.connectTimeout = 4000
+                conn.readTimeout = 4000
 
                 val response = conn.inputStream.bufferedReader().use { it.readText() }
                 val jsonArray = JSONArray(response)
