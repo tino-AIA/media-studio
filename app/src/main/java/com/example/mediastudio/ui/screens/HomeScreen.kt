@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
@@ -53,6 +54,11 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
+
+    // Zatvara bočni izbornik pritiskom na sistemsku tipku Back (mobitel ili Firestick daljinski)
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch { drawerState.close() }
+    }
 
     val filteredCategories = remember(homeCategories, searchQuery) {
         homeCategories.map { (genre, movies) ->
@@ -172,14 +178,22 @@ fun MovieCategoryRow(
 ) {
     if (movies.isEmpty()) return
     val displayTitle = if (isNetflixTop10) "🔥 ${genre.title}" else genre.title
+    val headerInteraction = remember { MutableInteractionSource() }
+    val isHeaderFocused by headerInteraction.collectIsFocusedAsState()
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        // Klikabilni naslov žanra sa strelicom koji otvara cijeli žanr poredan po ocjenama
+        // Klikabilni naslov žanra s vidljivim fokusom za daljinski upravljač
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onHeaderClick() }
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .border(
+                    width = if (isHeaderFocused) 2.dp else 0.dp,
+                    color = if (isHeaderFocused) Color.White else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -192,13 +206,13 @@ fun MovieCategoryRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Svi",
-                    color = Color.Gray,
+                    color = if (isHeaderFocused) Color.White else Color.Gray,
                     fontSize = 13.sp
                 )
                 Icon(
                     imageVector = Icons.Default.ChevronRight,
                     contentDescription = "Otvori žanr",
-                    tint = Color.Gray,
+                    tint = if (isHeaderFocused) Color.White else Color.Gray,
                     modifier = Modifier.size(20.dp)
                 )
             }
