@@ -53,6 +53,7 @@ import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.charset.Charset
 import java.util.zip.GZIPInputStream
 
 data class SrtCue(
@@ -87,17 +88,14 @@ fun PlayerScreen(
     var showControls by remember { mutableStateOf(false) }
     var controlsInteractionTick by remember { mutableIntStateOf(0) }
 
-    // Brzi statusni HUD (za -15s / +15s / kontinuirani seek / poruku za Back) bez otvaranja kontrola
     var quickHudMessage by remember { mutableStateOf("") }
     var quickHudTick by remember { mutableIntStateOf(0) }
     var isContinuousSeeking by remember { mutableStateOf(false) }
 
-    // Stanja za kvalitetu videa
     var availableQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
     var selectedQuality by remember { mutableStateOf<VideoQualityOption?>(null) }
     var showQualityDialog by remember { mutableStateOf(false) }
 
-    // Stanja za titlove (.srt)
     var showSubtitleDialog by remember { mutableStateOf(false) }
     var subtitleList by remember { mutableStateOf<List<PlayerSubtitleOption>>(emptyList()) }
     var isLoadingSubtitles by remember { mutableStateOf(false) }
@@ -109,14 +107,13 @@ fun PlayerScreen(
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
-    // Optimizirani buffer (brzi start nakon 1.5s + duboki buffer od 50s za spore Archive.org servere)
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15_000, // minBufferMs
-                50_000, // maxBufferMs
-                1_500,  // bufferForPlaybackMs (kreće odmah nakon 1.5s)
-                3_000   // bufferForPlaybackAfterRebufferMs
+                15_000, 
+                50_000, 
+                1_500,  
+                3_000   
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -133,7 +130,6 @@ fun PlayerScreen(
             .build()
     }
 
-    // Tipka BACK: prvi pritisak pauzira video, drugi pritisak izlazi iz playera
     BackHandler {
         when {
             showQualityDialog -> showQualityDialog = false
@@ -170,7 +166,6 @@ fun PlayerScreen(
         }
     }
 
-    // Automatsko skrivanje quick HUD poruke nakon 2 sekunde
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
             delay(2000L)
@@ -180,7 +175,6 @@ fun PlayerScreen(
         }
     }
 
-    // Automatsko skrivanje kontrola playera nakon 5 sekundi neaktivnosti
     LaunchedEffect(showControls, controlsInteractionTick, isPlaying, showQualityDialog, showSubtitleDialog) {
         if (showControls && isPlaying && !showQualityDialog && !showSubtitleDialog) {
             delay(5000L)
@@ -255,9 +249,6 @@ fun PlayerScreen(
                     return@onPreviewKeyEvent false
                 }
 
-                // 1. SREDINA KRUGA (DPAD_CENTER / ENTER):
-                // - Prvi pritisak (kad su kontrole skrivene) -> prikaže kontrole playera
-                // - Sljedeći pritisak (kad su kontrole vidljive) -> pauza / nastavak
                 if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
                     if (native.action == KeyEvent.ACTION_DOWN && native.repeatCount == 0) {
                         if (!showControls) {
@@ -272,9 +263,6 @@ fun PlayerScreen(
                     return@onPreviewKeyEvent false
                 }
 
-                // 2. LIJEVO / DESNO NA KRUGU DOK SU KONTROLE SKRIVENE:
-                // - Kratki pritisak (repeatCount == 0): skok 15 sekundi (-15s / +15s) bez kontrola
-                // - Zadržavanje (repeatCount > 0): kontinuirani seek videa bez prikaza kontrola
                 if (!showControls && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
                     val isForward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
                     if (native.action == KeyEvent.ACTION_DOWN) {
@@ -301,7 +289,6 @@ fun PlayerScreen(
                     }
                 }
 
-                // 3. GORE / DOLJE DOK SU KONTROLE SKRIVENE -> prikaže kontrole
                 if (!showControls && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
                     if (native.action == KeyEvent.ACTION_DOWN) {
                         showControls = true
@@ -346,7 +333,6 @@ fun PlayerScreen(
             )
         }
 
-        // Brzi HUD za -15s / +15s / kontinuirani seek / Pauzirano (bez otvaranja kontrola)
         if (quickHudMessage.isNotEmpty() && !showControls) {
             Box(
                 modifier = Modifier
@@ -365,7 +351,6 @@ fun PlayerScreen(
             }
         }
 
-        // Prikaz aktivnog titla na dnu ekrana
         if (currentSubtitleText.isNotEmpty()) {
             Box(
                 modifier = Modifier
@@ -384,7 +369,6 @@ fun PlayerScreen(
             }
         }
 
-        // Kontrole playera s jasnim bijelim fokusnim okvirom na svakom polju
         if (showControls) {
             LaunchedEffect(Unit) {
                 try {
@@ -398,7 +382,6 @@ fun PlayerScreen(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.45f))
             ) {
-                // Gornja traka: Naziv + gumbi s fokusnim okvirom
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -487,7 +470,6 @@ fun PlayerScreen(
                     }
                 }
 
-                // Središnje kontrole s bijelim fokusnim okvirom
                 Row(
                     modifier = Modifier.align(Alignment.Center),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
@@ -545,7 +527,6 @@ fun PlayerScreen(
                     }
                 }
 
-                // Donji progress bar
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -582,7 +563,6 @@ fun PlayerScreen(
             }
         }
 
-        // Dijalog za izbor rezolucije
         if (showQualityDialog) {
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
@@ -614,7 +594,6 @@ fun PlayerScreen(
             )
         }
 
-        // Dijalog za izbor .srt titlova
         if (showSubtitleDialog) {
             AlertDialog(
                 onDismissRequest = { showSubtitleDialog = false },
@@ -786,7 +765,6 @@ private fun DialogFocusableRow(
     }
 }
 
-// Samostalni dohvat titlova iz Archive.org metapodataka i OpenSubtitles baze
 private suspend fun searchAllSubtitles(
     identifier: String,
     movieTitle: String,
@@ -794,7 +772,6 @@ private suspend fun searchAllSubtitles(
 ): List<PlayerSubtitleOption> = withContext(Dispatchers.IO) {
     val results = mutableListOf<PlayerSubtitleOption>()
 
-    // 1. Provjeri postoje li ugrađeni .srt titlovi u samoj Archive.org mapi filma
     try {
         val metaJson = JSONObject(URL("https://archive.org/metadata/$identifier").readText())
         val files = metaJson.optJSONArray("files")
@@ -820,7 +797,6 @@ private suspend fun searchAllSubtitles(
     } catch (_: Exception) {
     }
 
-    // 2. Pretraži OpenSubtitles REST bazu (HR, SR, BS, EN)
     try {
         val cleanTitle = movieTitle
             .replace(Regex("\\(\\d{4}\\)"), "")
@@ -866,6 +842,7 @@ private suspend fun searchAllSubtitles(
     results.distinctBy { it.downloadUrl }
 }
 
+// FIX: Force subtitle text download to correctly decode Windows-1250 / ISO-8859-2 if UTF-8 fails for Croatian characters (č,ć,ž,š,đ)
 private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = withContext(Dispatchers.IO) {
     try {
         val conn = URL(sub.downloadUrl).openConnection() as HttpURLConnection
@@ -873,11 +850,22 @@ private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = wi
         conn.connectTimeout = 7000
         conn.readTimeout = 7000
         val bytes = conn.inputStream.use { it.readBytes() }
-        if (sub.isGzipped) {
-            GZIPInputStream(ByteArrayInputStream(bytes)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        
+        val rawText = if (sub.isGzipped) {
+            GZIPInputStream(ByteArrayInputStream(bytes)).readBytes()
         } else {
-            String(bytes, Charsets.UTF_8)
+            bytes
         }
+
+        // 1. Try strict UTF-8 first
+        var text = String(rawText, Charsets.UTF_8)
+
+        // 2. If UTF-8 fails (shows replacement character ), fallback to Windows-1250 (common for HR/SR)
+        if (text.contains("")) {
+            text = String(rawText, Charset.forName("windows-1250"))
+        }
+
+        text
     } catch (e: Exception) {
         e.printStackTrace()
         ""
