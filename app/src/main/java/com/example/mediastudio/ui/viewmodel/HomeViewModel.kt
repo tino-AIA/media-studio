@@ -92,12 +92,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
+    // AŽURIRANO: Prošireni ključni pojmovi za izbacivanje iz normalnih žanrova
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
         "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
         "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance",
-        "servante perverse"
+        "servante perverse", "nsfw", "nude", "naked", "sex", "masturbating", 
+        "hot", "amateur home video", "vintage porn", "erotik film", "baise moi", 
+        "fick mich", "schulmädchen"
     )
 
     private val junkNonMovieKeywords = listOf(
@@ -164,13 +167,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             isAnimationCategory = true
         ),
         GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
+        
+        // AŽURIRANO: Snažan 18+ filter temeljen na oznakama (vintage porn, classic adult, Ernst Hofbauer, Eurociné...)
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
                     "collection:(adultvhs OR mensmagazines_post70s) OR " +
-                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
-                    "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\") OR " +
-                    "creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"max pecas\" OR \"nagisa oshima\" OR \"joe d'amato\" OR \"radley metzger\") OR " +
+                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\" OR porn OR \"vintage porn\" OR nsfw OR \"erotic cinema\" OR \"classic adult\" OR \"retro porn\" OR \"cult adult\" OR \"adult vhs\") OR " +
+                    "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\" OR \"schulmädchen-report\" OR \"deep throat\" OR \"female vampire\") OR " +
+                    "creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"max pecas\" OR \"nagisa oshima\" OR \"joe d'amato\" OR \"radley metzger\" OR \"eurociné\" OR \"ernst hofbauer\" OR \"virginie despentes\") OR " +
                     "description:(\"alpha france\" OR \"empire des sens\" OR \"realm of the senses\")" +
                     ") AND -title:\"adult swim\" AND -subject:(cartoon OR lecture)",
             defaultSort = "downloads desc",
@@ -198,7 +203,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
-    // NOVO: Upravljanje automatskim Hero Carouselom
+    // NOVO: Upravljanje Hero Carouselom - sadrži par (ArchiveMovie, Boolean koji označava je li serija)
     private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
     val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
 
@@ -496,7 +501,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..22 && !isSeriesCategory) {
+                
+                // AŽURIRANO: Odbacuje svaki video kraći od 15 minuta (ako piše 1-14 min)
+                if (runtimeMinutes in 1..14) {
                     return@mapNotNull null
                 }
 
