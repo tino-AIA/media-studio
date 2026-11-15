@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
                 var selectedEpisodeTitle by remember { mutableStateOf("") }
                 var selectedEpisodeUrl by remember { mutableStateOf("") }
 
+                // LOGIKA 2. KORAKA: Kad si u Detaljima (1) ili Sezonama (4), Back te vraća u točan katalog (previousScreen)
                 BackHandler(enabled = currentScreen != 0 && currentScreen != 2) {
                     when (currentScreen) {
                         1 -> currentScreen = previousScreen
@@ -83,6 +84,7 @@ class MainActivity : ComponentActivity() {
                             movieYear = selectedMovieYear,
                             directVideoUrl = selectedEpisodeUrl,
                             onNavigateBack = {
+                                // LOGIKA 1. KORAKA: Izlaskom iz playera vraćaš se u Detalje (1) ili Sezone (4)
                                 currentScreen = if (selectedEpisodeUrl.isNotEmpty()) 4 else 1
                             }
                         )
