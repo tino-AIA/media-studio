@@ -23,8 +23,9 @@ import retrofit2.http.Query
 import kotlin.math.ceil
 import kotlin.math.ln
 
+// Dodana kategorija za koncerte
 enum class ContentTab {
-    MOVIES, SERIES, FAVORITES
+    MOVIES, SERIES, CONCERTS, FAVORITES
 }
 
 data class GenreOption(
@@ -33,7 +34,8 @@ data class GenreOption(
     val defaultSort: String = "downloads desc",
     val isAdultCategory: Boolean = false,
     val isAnimationCategory: Boolean = false,
-    val isSeriesCategory: Boolean = false
+    val isSeriesCategory: Boolean = false,
+    val isConcertCategory: Boolean = false
 )
 
 data class RatedMovie(
@@ -92,7 +94,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // AŽURIRANO: Prošireni ključni pojmovi za izbacivanje iz normalnih žanrova
+    // AŽURIRANO: Još stroži filtar
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
@@ -108,7 +110,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "snes", "nes", "ps1", "ps2", "n64", "gameboy", "arcade",
         "lecture", "seminar", "webinar", "conference", "symposium", "tutorial", "course",
         "electricsheep", "capcut", "beat-edits", "dvd cover", "dvd covers", "site tour",
-        "youtube videos", "kaczynski", "writings collection", "manifesto"
+        "youtube videos", "kaczynski", "writings collection", "manifesto", "home movie", "home movies"
     )
 
     private val notableCinemaKeywords = listOf(
@@ -123,7 +125,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "bela lugosi", "boris karloff", "peter lorre", "gary cooper", "ingrid bergman",
         "audrey hepburn", "christopher lee", "peter cushing", "stan laurel", "oliver hardy",
         "toho", "kurosawa", "mizoguchi", "ozu", "ghibli", "miyazaki", "anime", 
-        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion" 
+        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion", "vhs movies", "vhsvault"
     )
 
     private val megaFranchises = listOf(
@@ -138,18 +140,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             "AND -collection:(adultvhs OR mensmagazines_post70s)"
 
     private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
-            "AND -subject:(speedrun OR gameplay OR lecture OR education)"
+            "AND -subject:(speedrun OR gameplay OR lecture OR education OR \"home movies\" OR \"home video\")"
 
     private val mainstreamFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil OR kannada OR marathi OR bengali OR urdu OR hindi OR desi) " +
             "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR mar OR kan OR guj OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
             
     private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
 
-    private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
+    // AŽURIRANO: Strože povlačenje dugometražnih filmova na vrh
+    private val featureMoviesBase = "mediatype:movies AND (collection:(feature_films OR vhsvault OR vhs_movies OR SCI-FI_HORROR) OR subject:(cinema OR films OR movies)) AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 danas", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
-        GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
+        GenreOption("Top 10 danas", "mediatype:movies AND (collection:feature_films OR collection:vhsvault OR collection:vhs_movies) AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
+        GenreOption("Klasici i Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
         GenreOption("Triler i misterija", "$featureMoviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR collection:film_noir)"),
@@ -168,7 +171,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         ),
         GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
         
-        // AŽURIRANO: Snažan 18+ filter temeljen na oznakama (vintage porn, classic adult, Ernst Hofbauer, Eurociné...)
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
@@ -194,6 +196,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Vestern i avanturističke serije", "$seriesBase AND (subject:(western OR adventure) OR title:(bonanza OR lone ranger OR zorro OR robin hood))", "downloads desc", isSeriesCategory = true)
     )
 
+    // NOVO: Definicije za tab "Koncerti i glazba"
+    val concertGenreDefinitions = listOf(
+        GenreOption(
+            title = "Najgledaniji Koncerti",
+            query = "mediatype:movies AND (collection:(vhs_concerts_and_music OR music_video) OR subject:(concert OR live OR \"music video\" OR gig OR mtv)) AND $noJunkFilter AND $safeFilter",
+            defaultSort = "downloads desc",
+            isConcertCategory = true
+        ),
+        GenreOption(
+            title = "Najnovije (Live)",
+            query = "mediatype:movies AND (collection:vhs_concerts_and_music OR subject:(concert OR \"live performance\")) AND $noJunkFilter AND $safeFilter",
+            defaultSort = "addeddate desc",
+            isConcertCategory = true
+        ),
+        GenreOption(
+            title = "Rock i Metal",
+            query = "mediatype:movies AND (collection:vhs_concerts_and_music OR subject:concert) AND subject:(rock OR metal OR punk OR grunge OR \"hard rock\") AND $noJunkFilter AND $safeFilter",
+            defaultSort = "downloads desc",
+            isConcertCategory = true
+        ),
+        GenreOption(
+            title = "Pop, Jazz i Klasika",
+            query = "mediatype:movies AND (collection:vhs_concerts_and_music OR subject:concert) AND subject:(pop OR classical OR jazz OR blues) AND $noJunkFilter AND $safeFilter",
+            defaultSort = "downloads desc",
+            isConcertCategory = true
+        )
+    )
+
     private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
     val selectedTab: StateFlow<ContentTab> = _selectedTab
 
@@ -203,7 +233,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
-    // NOVO: Upravljanje Hero Carouselom - sadrži par (ArchiveMovie, Boolean koji označava je li serija)
+    // Stanje za novu tab opciju
+    private val _concertCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val concertCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _concertCategories
+
     private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
     val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
 
@@ -280,7 +313,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
         
-        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value)
+        // Kad dodamo/maknemo, osvježi i karusel heroj filmova
+        refreshHeroItems(
+            currentList, 
+            _movieCategories.value, 
+            _seriesCategories.value, 
+            _concertCategories.value
+        )
     }
 
     fun selectTab(tab: ContentTab) {
@@ -316,7 +355,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     excludeAdult = false,
                     isAdultCategory = false,
                     isAnimationCategory = true,
-                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES
+                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
+                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS
                 )
                 _globalSearchResults.value = results
             } catch (e: Exception) {
@@ -347,7 +387,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
-                            isSeriesCategory = false
+                            isSeriesCategory = false,
+                            isConcertCategory = false
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -364,19 +405,40 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             excludeAdult = true,
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
-                            isSeriesCategory = true
+                            isSeriesCategory = true,
+                            isConcertCategory = false
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
                 }
 
+                // NOVO: Učitavanje Koncerata i Glazbe
+                val concertDeferred = concertGenreDefinitions.map { genre ->
+                    async {
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = 100,
+                            page = 1,
+                            excludeAdult = true,
+                            isAdultCategory = false,
+                            isAnimationCategory = false,
+                            isSeriesCategory = false,
+                            isConcertCategory = true
+                        )
+                        genre to results.map { it.movie }.take(20)
+                    }
+                }
+
                 val loadedMovies = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
                 val loadedSeries = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedConcerts = concertDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
 
                 _movieCategories.value = loadedMovies
                 _seriesCategories.value = loadedSeries
+                _concertCategories.value = loadedConcerts
 
-                refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries)
+                refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries, loadedConcerts)
                 
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -389,13 +451,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshHeroItems(
         favs: List<ArchiveMovie>,
         movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
-        series: List<Pair<GenreOption, List<ArchiveMovie>>>
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
     ) {
         val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
         val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
         val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
         
-        val combined = (topFavs + topM + topS).distinctBy { it.first.identifier }
+        // Dodaj i top koncert čisto da se rotira u heroj banneru
+        val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
+
+        val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
         _heroMovies.value = combined
         
         startHeroCarousel()
@@ -444,7 +510,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     excludeAdult = !genre.isAdultCategory,
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
-                    isSeriesCategory = genre.isSeriesCategory
+                    isSeriesCategory = genre.isSeriesCategory,
+                    isConcertCategory = genre.isConcertCategory
                 )
 
                 _genreMovies.value = results.take(targetLimit)
@@ -473,7 +540,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         excludeAdult: Boolean,
         isAdultCategory: Boolean,
         isAnimationCategory: Boolean,
-        isSeriesCategory: Boolean
+        isSeriesCategory: Boolean,
+        isConcertCategory: Boolean
     ): Pair<List<RatedMovie>, Int> {
         return try {
             val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
@@ -502,7 +570,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 
-                // AŽURIRANO: Odbacuje svaki video kraći od 15 minuta (ako piše 1-14 min)
+                // Odbacuje svaki video kraći od 15 minuta 
                 if (runtimeMinutes in 1..14) {
                     return@mapNotNull null
                 }
@@ -537,10 +605,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
                 score += megaFranchiseMatches * 5000.0
 
-                if (collectionText.lowercase().contains("feature_films")) score += 200.0
-                if (runtimeMinutes >= 70) score += 300.0
+                // AŽURIRANO: Snažno povlači velike i dugometražne filmove na vrh! (Posebno one preko sata i pol)
+                if (collectionText.lowercase().contains("feature_films")) score += 3000.0
+                if (collectionText.lowercase().contains("vhsvault")) score += 3500.0
+                if (collectionText.lowercase().contains("vhs_movies")) score += 3500.0
+                if (fullMetaLower.contains("cinema")) score += 1500.0
+                
+                // Bonusi za dužinu 
+                if (runtimeMinutes >= 70) score += 500.0
+                if (runtimeMinutes >= 100) score += 1000.0 // Skoro svi pravi filmovi su 100+ min
+                
                 if (itemSizeMb >= 600) score += 100.0
-                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory) score -= 500.0
+                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory && !isConcertCategory) score -= 500.0
 
                 val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
 
