@@ -13,7 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +33,7 @@ import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.MovieFullInfo
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -42,6 +45,7 @@ import java.net.URLEncoder
 @Composable
 fun DetailsScreen(
     movie: ArchiveMovie,
+    viewModel: HomeViewModel, // NOVO: Trebamo ViewModel za Favorite
     onPlayClick: (String) -> Unit,
     onBackClick: () -> Unit
 ) {
@@ -50,8 +54,16 @@ fun DetailsScreen(
     var isLoading by remember { mutableStateOf(true) }
 
     val playButtonFocusRequester = remember { FocusRequester() }
+    
+    // Interakcije za Play i Favorite gumbe
     val playInteractionSource = remember { MutableInteractionSource() }
     val isPlayFocused by playInteractionSource.collectIsFocusedAsState()
+
+    val favInteractionSource = remember { MutableInteractionSource() }
+    val isFavFocused by favInteractionSource.collectIsFocusedAsState()
+
+    // Provjeravamo je li film već favorit
+    val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
 
     BackHandler {
         onBackClick()
@@ -159,45 +171,87 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Gumb POKRENI FILM s jasnim bijelim fokusnim okvirom za daljinski
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .focusRequester(playButtonFocusRequester)
-                        .background(
-                            color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .border(
-                            width = if (isPlayFocused) 3.5.dp else 1.dp,
-                            color = if (isPlayFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .clickable(interactionSource = playInteractionSource, indication = null) {
-                            onPlayClick(movieInfo?.year ?: "")
-                        },
-                    contentAlignment = Alignment.Center
+                // GUMBI ZA PLAY I FAVORITE
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "POKRENI FILM",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                    // Gumb POKRENI FILM
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(54.dp)
+                            .focusRequester(playButtonFocusRequester)
+                            .background(
+                                color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .border(
+                                width = if (isPlayFocused) 3.5.dp else 1.dp,
+                                color = if (isPlayFocused) Color.White else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable(interactionSource = playInteractionSource, indication = null) {
+                                onPlayClick(movieInfo?.year ?: "")
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "POKRENI",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    // Gumb FAVORITI
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(54.dp)
+                            .background(
+                                color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .border(
+                                width = if (isFavFocused) 3.5.dp else 1.dp,
+                                color = if (isFavFocused) Color.White else Color.DarkGray,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable(interactionSource = favInteractionSource, indication = null) {
+                                viewModel.toggleFavorite(movie)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = null,
+                                tint = if (isFavorite) Color.Red else Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
                     }
                 }
+                Spacer(modifier = Modifier.height(30.dp))
             }
-
-            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
