@@ -7,7 +7,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -18,11 +17,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +39,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -69,6 +72,7 @@ fun HomeScreen(
     val seriesCategories by viewModel.seriesCategories.collectAsState()
     val favoriteMovies by viewModel.favoriteMovies.collectAsState()
     val heroMovies by viewModel.heroMovies.collectAsState()
+    val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -76,21 +80,15 @@ fun HomeScreen(
     
     var showExitDialog by remember { mutableStateOf(false) }
 
-    // Stanje za pametnu HBO Max pozadinu (mijenja se ovisno o fokusu)
-    var currentHeroMovie by remember { mutableStateOf<Pair<ArchiveMovie, Boolean>?>(null) }
+    // Pametno hvatanje aktivnog filma iz ViewModela
+    val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
     var currentHeroPosterUrl by remember { mutableStateOf("") }
-
-    // Postavi prvi film iz Istaknutog kao početnu pozadinu kad se sve učita
-    LaunchedEffect(heroMovies) {
-        if (currentHeroMovie == null && heroMovies.isNotEmpty()) {
-            currentHeroMovie = heroMovies.first() to (selectedTab == ContentTab.SERIES)
-        }
-    }
 
     LaunchedEffect(currentHeroMovie) {
         currentHeroMovie?.let { (movie, isSeries) ->
-            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier.split(",").first())
-            currentHeroPosterUrl = fetchedUrl.ifBlank { "https://archive.org/services/img/${movie.identifier.split(",").first()}" }
+            val firstId = movie.identifier.split(",").first()
+            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstId)
+            currentHeroPosterUrl = fetchedUrl.ifBlank { "https://archive.org/services/img/$firstId" }
         }
     }
 
@@ -169,11 +167,10 @@ fun HomeScreen(
                     painter = rememberAsyncImagePainter(currentHeroPosterUrl),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().alpha(0.35f) // Polu-prozirno za kino efekt
+                    modifier = Modifier.fillMaxSize().alpha(0.35f)
                 )
             }
             
-            // Tamni gradijent lijevo (kako bi se vidio tekst)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -185,7 +182,6 @@ fun HomeScreen(
                         )
                     )
             )
-            // Tamni gradijent dolje (za prijelaz prema redovima)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -197,7 +193,7 @@ fun HomeScreen(
                     )
             )
 
-            // GLAVNI SADRŽAJ (Proziran Scaffold kako bi pozadina "disala")
+            // GLAVNI SADRŽAJ
             Scaffold(
                 topBar = {
                     Column(
@@ -212,9 +208,8 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            TvHighlightIconButton(
-                                onClick = { scope.launch { drawerState.open() } },
-                                contentDescription = "Izbornik žanrova"
+                            HomeTvHighlightIconButton(
+                                onClick = { scope.launch { drawerState.open() } }
                             ) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
                             }
@@ -261,7 +256,7 @@ fun HomeScreen(
                         }
                     }
                 },
-                containerColor = Color.Transparent // OBAVEZNO prozirno!
+                containerColor = Color.Transparent
             ) { paddingValues ->
                 if (isLoading && selectedTab != ContentTab.FAVORITES) {
                     Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
@@ -285,8 +280,7 @@ fun HomeScreen(
                                 MovieCard(
                                     movie = movie,
                                     isSeries = isProbablySeries,
-                                    onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) },
-                                    onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
+                                    onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) }
                                 )
                             }
                         }
@@ -297,65 +291,89 @@ fun HomeScreen(
                             .fillMaxSize()
                             .padding(paddingValues)
                     ) {
-                        // 1. HERO SECTON (Ispisuje naslov filma u pozadini velikim slovima)
+                        // 1. HERO SECTON (HBO Max banner)
                         item {
-                            Column(
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(300.dp)
-                                    .padding(start = 24.dp, bottom = 12.dp),
-                                verticalArrangement = Arrangement.Bottom
+                                    .height(380.dp)
+                                    .padding(start = 24.dp, bottom = 24.dp, end = 24.dp)
                             ) {
-                                currentHeroMovie?.let { hero ->
-                                    Text(
-                                        text = hero.first.title,
-                                        color = Color.White,
-                                        fontSize = 42.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.width(650.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                currentHeroMovie?.let { (movie, isSeries) ->
+                                    Column(
+                                        modifier = Modifier.align(Alignment.BottomStart),
+                                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                                    ) {
                                         Text(
-                                            text = if (hero.second) "SERIJA" else "FILM",
-                                            color = Color.LightGray,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier
-                                                .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            text = movie.title,
+                                            color = Color.White,
+                                            fontSize = 42.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.width(650.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = "Istaknuto na Media Studiju",
-                                            color = Color.Gray,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
+                                        
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = if (isSeries) "SERIJA" else "FILM",
+                                                color = Color.LightGray,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier
+                                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = "Istaknuto na Media Studiju",
+                                                color = Color.Gray,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            HeroButton(
+                                                text = "Gledaj odmah",
+                                                icon = Icons.Default.PlayArrow,
+                                                isPrimary = true,
+                                                onClick = { if (isSeries) onSeriesClick(movie) else onMovieClick(movie) }
+                                            )
+                                            HeroButton(
+                                                text = "Detalji",
+                                                icon = Icons.Default.Info,
+                                                isPrimary = false,
+                                                onClick = { if (isSeries) onSeriesClick(movie) else onMovieClick(movie) }
+                                            )
+                                        }
+                                    }
+
+                                    // Točkice za karusel
+                                    Row(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .offset(y = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        heroMovies.forEachIndexed { index, _ ->
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(if (index == activeHeroIndex) 8.dp else 6.dp)
+                                                    .background(
+                                                        color = if (index == activeHeroIndex) Color.White else Color.Gray.copy(alpha = 0.5f),
+                                                        shape = CircleShape
+                                                    )
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        // 2. RED "ISTAKNUTO" S HERO FILMOVIMA
-                        if (heroMovies.isNotEmpty()) {
-                            item {
-                                MovieCategoryRow(
-                                    genre = GenreOption("🌟 Istaknuto (Favorites & Top)", ""),
-                                    movies = heroMovies.map { it.first },
-                                    isNetflixTop10 = false,
-                                    isSeries = isSeriesTab,
-                                    onMovieClick = { item -> if (isSeriesTab) onSeriesClick(item) else onMovieClick(item) },
-                                    onHeaderClick = { }, // Ne radi ništa na klik jer je to mix žanrova
-                                    onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
-                                )
-                            }
-                        }
-
-                        // 3. OSTALI REDOVI (Žanrovi)
-                        items(activeCategories) { (genre, itemsList) ->
+                        // 3. OSTALI REDOVI (Žanrovi) - Uklonjen je HeroRow kao što je traženo!
+                        items(count = activeCategories.size) { index ->
+                            val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10")
                             MovieCategoryRow(
                                 genre = genre,
@@ -365,8 +383,7 @@ fun HomeScreen(
                                 onMovieClick = { item ->
                                     if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
                                 },
-                                onHeaderClick = { onGenreSelect(genre) },
-                                onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
+                                onHeaderClick = { onGenreSelect(genre) }
                             )
                         }
                         item { Spacer(modifier = Modifier.height(40.dp)) }
@@ -413,6 +430,46 @@ fun HomeScreen(
     }
 }
 
+// HBO MAX HERO GUMB (Gledaj odmah / Detalji)
+@Composable
+private fun HeroButton(
+    text: String,
+    icon: ImageVector,
+    isPrimary: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    val bgColor = if (isFocused) Color.White else if (isPrimary) Color.White else Color(0xFF2A2A2A).copy(alpha = 0.8f)
+    val contentColor = if (isFocused) Color.Black else if (isPrimary) Color.Black else Color.White
+    val borderColor = if (isFocused) Color.Red else Color.Transparent
+
+    Row(
+        modifier = Modifier
+            .height(44.dp)
+            .background(color = bgColor, shape = RoundedCornerShape(22.dp))
+            .border(width = if (isFocused) 3.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(22.dp))
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            color = contentColor,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
+        )
+    }
+}
+
 @Composable
 private fun DialogFocusableButton(
     text: String,
@@ -447,6 +504,34 @@ private fun DialogFocusableButton(
             fontWeight = FontWeight.Bold,
             fontSize = 15.sp
         )
+    }
+}
+
+@Composable
+private fun HomeTvHighlightIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .background(
+                color = if (isFocused) Color.Red else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 0.dp,
+                color = if (isFocused) Color.White else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        content()
     }
 }
 
@@ -567,8 +652,7 @@ fun MovieCategoryRow(
     isNetflixTop10: Boolean = false,
     isSeries: Boolean,
     onMovieClick: (ArchiveMovie) -> Unit,
-    onHeaderClick: () -> Unit,
-    onFocus: (ArchiveMovie, Boolean) -> Unit
+    onHeaderClick: () -> Unit
 ) {
     if (movies.isEmpty()) return
     val displayTitle = if (isNetflixTop10) "🔥 ${genre.title}" else genre.title
@@ -600,21 +684,19 @@ fun MovieCategoryRow(
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold
             )
-            if (genre.title != "🌟 Istaknuto (Favorites & Top)") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Svi",
-                        color = if (isHeaderFocused) Color.White else Color.Gray,
-                        fontSize = 13.sp,
-                        fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
-                    )
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = "Otvori žanr",
-                        tint = if (isHeaderFocused) Color.White else Color.Gray,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Svi",
+                    color = if (isHeaderFocused) Color.White else Color.Gray,
+                    fontSize = 13.sp,
+                    fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
+                )
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Otvori žanr",
+                    tint = if (isHeaderFocused) Color.White else Color.Gray,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 
@@ -624,9 +706,9 @@ fun MovieCategoryRow(
         ) {
             itemsIndexed(movies) { index, movie ->
                 if (isNetflixTop10) {
-                    NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick, onFocus = onFocus)
+                    NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick)
                 } else {
-                    MovieCard(movie = movie, isSeries = isSeries, onMovieClick = onMovieClick, onFocus = onFocus)
+                    MovieCard(movie = movie, isSeries = isSeries, onMovieClick = onMovieClick)
                 }
             }
         }
@@ -635,7 +717,7 @@ fun MovieCategoryRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit, onFocus: (ArchiveMovie, Boolean) -> Unit) {
+fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
@@ -645,10 +727,6 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
     val firstArchiveId = movie.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("") }
     val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
-
-    LaunchedEffect(isFocused) {
-        if (isFocused) onFocus(movie, isSeries)
-    }
 
     LaunchedEffect(movie.title) {
         val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
@@ -746,7 +824,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit, onFocus: (ArchiveMovie, Boolean) -> Unit) {
+fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
@@ -756,10 +834,6 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
     val firstArchiveId = movie.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("") }
     val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
-
-    LaunchedEffect(isFocused) {
-        if (isFocused) onFocus(movie, isSeries)
-    }
 
     LaunchedEffect(movie.title) {
         val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
