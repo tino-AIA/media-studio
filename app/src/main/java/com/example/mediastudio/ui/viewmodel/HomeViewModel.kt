@@ -70,7 +70,7 @@ private interface ArchiveSearchApi {
             "runtime", "item_size", "avg_rating", "num_reviews", "language"
         ),
         @Query("sort[]") sort: String = "downloads desc",
-        @Query("rows") rows: Int = 120,
+        @Query("rows") rows: Int = 150,
         @Query("page") page: Int = 1,
         @Query("output") output: String = "json"
     ): ArchiveSearchResponse
@@ -94,93 +94,85 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // 18+ Filter Keywords (from previous steps)
+    // STROGI 18+ FILTER
     private val blockedAdultKeywords = listOf(
-        "erotic", "erotica", "xxx", "porn", "porno", "pornography",
-        "realm of the senses", "empire des sens", "good girl bad girl",
-        "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
-        "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance",
-        "servante perverse", "nsfw", "nude", "naked", "sex", "masturbating", 
-        "hot", "amateur home video", "vintage porn", "erotik film", "baise moi", 
-        "fick mich", "schulmädchen"
+        "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
+        "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
+        "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france",
+        "nsfw", "nude", "naked", "masturbating", "vintage porn", "erotik film",
+        "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
     )
 
-    // Junk Filter Keywords
+    // STROGI FILTER ZA DIGITALNO SMEĆE, VIJESTI I NEŽELJENE KULTURE
     private val junkNonMovieKeywords = listOf(
-        "speedrun", "longplay", "walkthrough", "playthrough", "gameplay",
-        "snes", "nes", "ps1", "ps2", "n64", "gameboy", "arcade",
-        "lecture", "seminar", "webinar", "conference", "symposium", "tutorial", "course",
-        "electricsheep", "capcut", "beat-edits", "dvd cover", "dvd covers", "site tour",
-        "youtube videos", "kaczynski", "writings collection", "manifesto", "home movie", "home movies",
-        "news broadcast", "entertainment tonight", "news &", "amateur clip", "raw footage", "vlog",
-        "late night with", "jimmy fallon", "talk show", "interview", "podcast", "news report", "breaking news",
-        "news cast", "newscast", "weather report", "commercials", "ads", "advertisements"
+        "speedrun", "gameplay", "walkthrough", "playthrough", "podcast", "tutorial",
+        "news broadcast", "entertainment tonight", "news report", "breaking news", "newscast",
+        "islam", "quran", "khutba", "dourous", "muslim", "allah", "sheikh",
+        "bollywood", "tollywood", "hindi", "telugu", "tamil", "urdu", "punjabi", "desi",
+        "bengali", "malayalam", "marathi", "gujarati", "arab", "arabic",
+        "amateur", "vlog", "raw footage", "home movie", "home video", "commercials"
     )
 
-    // Premium Studios & Franchises for Ranking Boost
+    // PREMIUM HOLLYWOOD/EURO/JAPAN KLJUČNE RIJEČI ZA IMDB BODOVANJE I RANKING
     private val notableCinemaKeywords = listOf(
-        "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
-        "20th century", "united artists", "disney", "fleischer", "republic pictures",
-        "toho", "kurosawa", "mizoguchi", "ozu", "ghibli", "miyazaki", "anime", 
-        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion", "blockbuster",
-        "star trek", "star wars", "batman", "superman", "spider-man", "james bond",
-        "indiana jones", "lord of the rings", "harry potter", "marvel", "dc comics"
+        "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
+        "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
+        "kurosawa", "ghibli", "miyazaki", "tarantino", "scorsese", "spielberg", "hitchcock",
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood",
+        "bbc", "channel 4", "film noir", "cult classic"
     )
 
-    // Desired Languages for Premium Content
-    private val premiumLanguages = listOf("eng", "english", "fre", "french", "ger", "german", "spa", "spanish", "ita", "italian", "jpn", "japanese")
-
-    // --- SIMPLIFIED QUERIES ---
-    // We rely on Kotlin logic to filter and rank, so the API query just needs to grab a large pool of potential movies.
-    private val baseMovieQuery = "mediatype:movies AND item_size:[400000000 TO *] AND -collection:(movie_trailers OR previews OR short_format_films)"
+    // --- JEDNOSTAVNI API UPITI (Da izbjegnemo rušenje Archive.org servera) ---
+    
+    // Baza Filmova (Kolekcije iz tvojih slika)
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 danas", "mediatype:movies AND item_size:[600000000 TO *] AND -collection:(movie_trailers OR previews)", "downloads desc"),
-        GenreOption("Klasici i Najgledanije", baseMovieQuery, "downloads desc"),
-        GenreOption("Sci-Fi klasici", "$baseMovieQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
-        GenreOption("Akcija i avantura", "$baseMovieQuery AND (subject:action OR subject:adventure)"),
-        GenreOption("Triler i misterija", "$baseMovieQuery AND (subject:thriller OR subject:mystery OR subject:noir OR collection:film_noir)"),
-        GenreOption("Komedija", "$baseMovieQuery AND (subject:comedy OR collection:comedy_films)"),
-        GenreOption("Horor", "$baseMovieQuery AND (subject:horror OR subject:vampire OR subject:zombie)"),
-        GenreOption("Drama", "$baseMovieQuery AND subject:drama"),
-        GenreOption("Krimi", "$baseMovieQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
-        GenreOption("Romantični", "$baseMovieQuery AND (subject:romance OR subject:romantic)"),
-        GenreOption("Vestern", "$baseMovieQuery AND subject:western"),
-        GenreOption("Ratni", "$baseMovieQuery AND (subject:war OR subject:military)"),
-        GenreOption("Animirani klasici", "$baseMovieQuery AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
-        GenreOption("Dokumentarni", "$baseMovieQuery AND subject:documentary"),
+        GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
+        GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
+        GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
+        GenreOption("Akcija i avantura", "$movieBaseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
+        GenreOption("Triler i misterija", "$movieBaseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
+        GenreOption("Komedija", "$movieBaseQuery AND (subject:comedy OR collection:comedy_films)"),
+        GenreOption("Horor", "$movieBaseQuery AND (subject:horror OR subject:vampire OR subject:zombie)"),
+        GenreOption("Drama", "$movieBaseQuery AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$movieBaseQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
+        GenreOption("Romantični", "$movieBaseQuery AND (subject:romance OR subject:romantic)"),
+        GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
+        GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
+        GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
+        GenreOption("Dokumentarni", "$movieBaseQuery AND subject:documentary"),
         
+        // 18+ Zasebna kategorija
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[300000000 TO *] AND (" +
-                    "collection:(adultvhs OR mensmagazines_post70s) OR " +
-                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\" OR porn OR \"vintage porn\" OR nsfw OR \"erotic cinema\" OR \"classic adult\" OR \"retro porn\" OR \"cult adult\" OR \"adult vhs\") OR " +
-                    "creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"max pecas\" OR \"nagisa oshima\" OR \"joe d'amato\" OR \"radley metzger\" OR \"eurociné\" OR \"ernst hofbauer\" OR \"virginie despentes\")" +
-                    ") AND -title:\"adult swim\" AND -subject:(cartoon OR lecture)",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\") OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
     )
 
-    private val seriesBase = "mediatype:movies AND item_size:[200000000 TO *] AND (subject:(\"tv series\" OR \"television series\") OR title:(season OR \"complete series\" OR episodes))"
+    // Baza Serija (Tvoje kolekcije: classic_tv, television_inbox, televisionmovies)
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija danas", seriesBase, "downloads desc", isSeriesCategory = true),
-        GenreOption("Disney, WB i klasični crtići", "$seriesBase AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey))", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
-        GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir))", "downloads desc", isSeriesCategory = true),
-        GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy))", "downloads desc", isSeriesCategory = true),
-        GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom))", "downloads desc", isSeriesCategory = true),
-        GenreOption("Vestern i avanturističke serije", "$seriesBase AND (subject:(western OR adventure))", "downloads desc", isSeriesCategory = true)
+        GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
+        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Vestern i avanturističke serije", "$seriesBaseQuery AND (subject:western OR subject:adventure)", "downloads desc", isSeriesCategory = true)
     )
 
-    private val concertBase = "mediatype:movies AND item_size:[200000000 TO *] AND (collection:(vhs_concerts_and_music OR music_video) OR subject:(concert OR \"live concert\" OR band OR tour OR mtv))"
+    // Baza Koncerata
+    private val concertBaseQuery = "mediatype:movies AND (collection:vhs_concerts_and_music OR collection:music_video OR subject:\"live concert\" OR subject:\"music performance\" OR subject:band OR subject:mtv)"
 
     val concertGenreDefinitions = listOf(
-        GenreOption("Najgledaniji Koncerti", concertBase, "downloads desc", isConcertCategory = true),
-        GenreOption("Najnovije (Live)", concertBase, "addeddate desc", isConcertCategory = true),
-        GenreOption("Rock i Metal", "$concertBase AND subject:(rock OR metal OR punk OR grunge)", "downloads desc", isConcertCategory = true),
-        GenreOption("Pop glazba", "$concertBase AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
-        GenreOption("Klasika i Jazz", "$concertBase AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
+        GenreOption("Najgledaniji Koncerti", concertBaseQuery, "downloads desc", isConcertCategory = true),
+        GenreOption("Najnovije (Live)", concertBaseQuery, "addeddate desc", isConcertCategory = true),
+        GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge)", "downloads desc", isConcertCategory = true),
+        GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
+        GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
     )
 
     private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
@@ -270,13 +262,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
-        
-        refreshHeroItems(
-            currentList, 
-            _movieCategories.value, 
-            _seriesCategories.value, 
-            _concertCategories.value
-        )
+        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
     }
 
     fun selectTab(tab: ContentTab) {
@@ -303,11 +289,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     "(title:\"$trimmed\" OR creator:\"$trimmed\")"
                 }
 
-                val archiveQuery = "mediatype:movies AND item_size:[150000000 TO *] AND ($tokenClause)"
+                val archiveQuery = "mediatype:movies AND ($tokenClause)"
                 val (results, _) = fetchAndRankByRelevance(
                     query = archiveQuery,
                     apiSort = "downloads desc",
-                    rows = 120,
+                    rows = 150,
                     page = 1,
                     excludeAdult = false,
                     isAdultCategory = false,
@@ -339,7 +325,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = if (isWeeklyTop) 200 else 150, // Fetch more to allow Kotlin to filter heavily
+                            rows = if (isWeeklyTop) 300 else 150, 
                             page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
@@ -357,7 +343,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = if (isWeeklyTop) 200 else 150,
+                            rows = if (isWeeklyTop) 300 else 150,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -453,7 +439,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _currentGenrePage.value = page
             try {
                 val isWeeklyTop = genre.title.startsWith("Top 10")
-                val fetchRows = if (isWeeklyTop) 200 else 150
+                val fetchRows = if (isWeeklyTop) 300 else 150
                 val targetLimit = if (isWeeklyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
@@ -486,6 +472,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // GLAVNA KOTLIN LOGIKA ZA FILTRIRANJE I RANGIRANJE
     private suspend fun fetchAndRankByRelevance(
         query: String,
         apiSort: String,
@@ -512,41 +499,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val creatorText = extractText(doc.creator)
                 val descText = extractText(doc.description)
                 val collectionText = extractText(doc.collection)
-                val langText = extractText(doc.language).lowercase()
                 val titleLower = finalTitle.lowercase()
                 val fullMetaLower = "$id $finalTitle$creatorText $descText$collectionText".lowercase()
 
-                // HARD FILTERS (If it fails these, drop it immediately)
-                
-                // 1. Junk / News / Shorts
+                // 1. BLOKADA SMEĆA (Arapsko, Indijsko, Vijesti, Amatersko)
                 if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
                 
-                // 2. Adult Content filtering
+                // 2. 18+ Logika
                 if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
                 if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
 
-                // 3. Language Check (Prefer English, European, Japanese for Movies/Series. Ignore for Concerts/Adult)
-                if (!isConcertCategory && !isAdultCategory && langText.isNotBlank()) {
-                    val isPremiumLang = premiumLanguages.any { langText.contains(it) }
-                    // If language is specified and it's not a premium language, we might want to drop it, 
-                    // but for now let's just heavily penalize it in the scoring instead of dropping, 
-                    // unless it explicitly matches Bollywood/regional tags.
-                    if (fullMetaLower.contains("bollywood") || fullMetaLower.contains("tollywood") || fullMetaLower.contains("hindi")) {
-                        return@mapNotNull null
-                    }
-                }
+                // 3. Blokada Trailera
+                val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
+                if (isTrailerOrClip) return@mapNotNull null
 
-                // 4. Runtime (Must be > 30 mins)
+                // 4. TRAJANJE (Strogo izbacivanje svega ispod 30 min, osim kratkih crtića/serija)
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..29 && !isAnimationCategory) { // Allow short animations (Looney Tunes etc)
+                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
                 
-                // Cross-category contamination blocks
+                // 5. Križanje kategorija (Film u Serijama i obrnuto)
                 if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
                 if (isConcertCategory && (titleLower.contains("season ") || titleLower.contains("episode ") || fullMetaLower.contains("tv series"))) return@mapNotNull null
 
-                // --- SCORING SYSTEM ---
+                // --- BODOVANJE (Premium Ranking) ---
+                var score = 0.0
+
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
                     is String -> r.toDoubleOrNull() ?: 0.0
@@ -558,47 +537,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     else -> 0
                 }
                 val itemSizeMb = parseSizeMb(doc.itemSize)
-                
-                var score = 0.0
 
-                // IMDB / Rating Boost
                 if (ratingVal > 0.0) {
                     score += ratingVal * 1000.0 
-                    if (reviewsVal > 0) {
-                        score += ln(reviewsVal.toDouble() + 1.0) * 300.0 
-                    }
+                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 300.0 
                 } else {
                     score += 500.0
                 }
-                if (fullMetaLower.contains("imdb")) score += 1500.0
 
-                // Premium Source Collections Boost (From the images you provided)
-                if (collectionText.lowercase().contains("feature_films")) score += 4000.0
-                if (collectionText.lowercase().contains("miscellaneous_feature_films")) score += 4000.0
-                if (collectionText.lowercase().contains("moviesandfilms")) score += 4000.0
-                if (collectionText.lowercase().contains("popcornproject")) score += 4000.0
-                if (collectionText.lowercase().contains("vimeo-video")) score += 3500.0
-                if (collectionText.lowercase().contains("televisionmovies")) score += 3500.0
-                if (collectionText.lowercase().contains("classic_tv_1990s")) score += 3500.0
-                if (collectionText.lowercase().contains("classic_tv_1980s")) score += 3500.0
-                if (collectionText.lowercase().contains("television_inbox")) score += 2000.0
-                if (collectionText.lowercase().contains("dvdtray")) score += 3500.0
-                if (collectionText.lowercase().contains("laserdiscarchive")) score += 4500.0
-                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 4500.0
-                if (collectionText.lowercase().contains("sci_fi_horror")) score += 3000.0
-                if (collectionText.lowercase().contains("comedy_films")) score += 3000.0
+                // IMDB, Oscar i poznati Hollywoodski/Europski redatelji i studiji dobivaju MASIVAN BOOST
+                val premiumHits = notableCinemaKeywords.count { fullMetaLower.contains(it) }
+                score += premiumHits * 2500.0 
 
-                // Franchise & Studio Boost
-                val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
-                score += studioMatches * 1000.0 
-
-                // Runtime Boost (Reward full-length features)
-                if (runtimeMinutes >= 70) score += 1000.0
+                // Dodatni bodovi za vrhunske filmske kolekcije
+                if (collectionText.lowercase().contains("laserdiscarchive")) score += 3000.0
+                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 3000.0
+                if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
+                if (collectionText.lowercase().contains("feature_films")) score += 1500.0
+                if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
+                
+                // Trajanje (Pravi dugometražni filmovi iskaču na vrh)
+                if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
                 
-                // File Size Boost (Reward high quality rips)
+                // Veličina datoteke (Veće datoteke su bolja kvaliteta)
                 if (itemSizeMb >= 800) score += 1000.0
-                if (itemSizeMb >= 2000) score += 1500.0 // 2GB+ usually means great quality
+                if (itemSizeMb >= 2000) score += 1500.0 
 
                 val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
 
