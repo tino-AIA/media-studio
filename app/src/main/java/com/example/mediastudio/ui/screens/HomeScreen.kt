@@ -80,7 +80,6 @@ fun HomeScreen(
     
     var showExitDialog by remember { mutableStateOf(false) }
 
-    // Pametno hvatanje aktivnog filma iz ViewModela
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
     var currentHeroPosterUrl by remember { mutableStateOf("") }
 
@@ -160,7 +159,6 @@ fun HomeScreen(
             }
         }
     ) {
-        // GLOBALNA HBO MAX POZADINA S GRADIENTIMA
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             if (currentHeroPosterUrl.isNotEmpty()) {
                 Image(
@@ -193,7 +191,6 @@ fun HomeScreen(
                     )
             )
 
-            // GLAVNI SADRŽAJ
             Scaffold(
                 topBar = {
                     Column(
@@ -291,7 +288,6 @@ fun HomeScreen(
                             .fillMaxSize()
                             .padding(paddingValues)
                     ) {
-                        // 1. HERO SECTON (HBO Max banner)
                         item {
                             Box(
                                 modifier = Modifier
@@ -307,9 +303,10 @@ fun HomeScreen(
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 42.sp,
+                                            fontSize = 38.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             maxLines = 2,
+                                            lineHeight = 42.sp,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.width(650.dp)
                                         )
@@ -349,7 +346,6 @@ fun HomeScreen(
                                         }
                                     }
 
-                                    // Točkice za karusel
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
@@ -371,7 +367,6 @@ fun HomeScreen(
                             }
                         }
 
-                        // 3. OSTALI REDOVI (Žanrovi) - Uklonjen je HeroRow kao što je traženo!
                         items(count = activeCategories.size) { index ->
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10")
@@ -430,7 +425,6 @@ fun HomeScreen(
     }
 }
 
-// HBO MAX HERO GUMB (Gledaj odmah / Detalji)
 @Composable
 private fun HeroButton(
     text: String,
