@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -197,9 +198,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
-    // NOVO: Istaknuti filmovi (Hero Row) za HBO Max izgled! (Sastoji se od Favorita + Top Filmova + Top Serija)
-    private val _heroMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
-    val heroMovies: StateFlow<List<ArchiveMovie>> = _heroMovies
+    // NOVO: Upravljanje automatskim Hero Carouselom!
+    private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
+    val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
+
+    private val _activeHeroIndex = MutableStateFlow(0)
+    val activeHeroIndex: StateFlow<Int> = _activeHeroIndex
+
+    private var carouselJob: Job? = null
 
     private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
     val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
@@ -269,7 +275,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
         
-        // Odmah ažuriramo i Hero Row sekciju da se novi favorit pojavi tamo!
         refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value)
     }
 
@@ -366,7 +371,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _movieCategories.value = loadedMovies
                 _seriesCategories.value = loadedSeries
 
-                // Sastavljanje HERO sekcije
+                // Sastavljanje HERO sekcije pri pokretanju
                 refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries)
                 
             } catch (e: Exception) {
@@ -377,16 +382,39 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // NOVA FUNKCIJA: Sastavlja Hero Row (Favoriti + Top 3 Filma + Top 3 Serije)
     private fun refreshHeroItems(
         favs: List<ArchiveMovie>,
         movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
         series: List<Pair<GenreOption, List<ArchiveMovie>>>
     ) {
-        val topFavs = favs.take(4)
-        val topM = movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()
-        val topS = series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()
-        _heroMovies.value = (topFavs + topM + topS).distinctBy { it.identifier }
+        // Hero lista sada sadrži parove: (Film, isSeries)
+        val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
+        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
+        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
+        
+        val combined = (topFavs + topM + topS).distinctBy { it.first.identifier }
+        _heroMovies.value = combined
+        
+        startHeroCarousel()
+    }
+
+    private fun startHeroCarousel() {
+        carouselJob?.cancel()
+        _activeHeroIndex.value = 0
+        carouselJob = viewModelScope.launch {
+            while (isActive && _heroMovies.value.isNotEmpty()) {
+                delay(8000) // Vrti sliku svakih 8 sekundi
+                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
+            }
+        }
+    }
+
+    // Poziva se kada korisnik ručno promijeni sliku klikom na točkicu
+    fun setActiveHeroIndex(index: Int) {
+        if (index in _heroMovies.value.indices) {
+            _activeHeroIndex.value = index
+            startHeroCarousel() // Resetiraj timer
+        }
     }
 
     fun openGenre(genre: GenreOption) {
