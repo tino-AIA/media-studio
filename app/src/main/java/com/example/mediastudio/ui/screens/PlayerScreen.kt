@@ -130,17 +130,27 @@ fun PlayerScreen(
             .build()
     }
 
+    // AŽURIRANO PONAŠANJE TIPKE BACK (Netflix OSD logika)
     BackHandler {
         when {
             showQualityDialog -> showQualityDialog = false
             showSubtitleDialog -> showSubtitleDialog = false
+            showControls -> {
+                // Ako je OSD vidljiv, samo ga sakrij i vrati fokus na korijen
+                showControls = false
+                try {
+                    rootFocusRequester.requestFocus()
+                } catch (_: Exception) {}
+            }
             exoPlayer.isPlaying -> {
+                // Ako OSD nije vidljiv i film ide, pauziraj
                 exoPlayer.pause()
                 isPlaying = false
                 quickHudMessage = "⏸ Pauzirano (pritisni Back ponovno za izlaz)"
                 quickHudTick++
             }
             else -> {
+                // Ako OSD nije vidljiv i film je pauziran, izađi
                 exoPlayer.stop()
                 onNavigateBack()
             }
@@ -842,7 +852,6 @@ private suspend fun searchAllSubtitles(
     results.distinctBy { it.downloadUrl }
 }
 
-// FIX: Force subtitle text download to correctly decode Windows-1250 / ISO-8859-2 if UTF-8 fails for Croatian characters (č,ć,ž,š,đ)
 private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = withContext(Dispatchers.IO) {
     try {
         val conn = URL(sub.downloadUrl).openConnection() as HttpURLConnection
@@ -857,14 +866,10 @@ private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = wi
             bytes
         }
 
-        // 1. Try strict UTF-8 first
         var text = String(rawText, Charsets.UTF_8)
-
-        // 2. If UTF-8 fails (shows replacement character ), fallback to Windows-1250 (common for HR/SR)
         if (text.contains("")) {
             text = String(rawText, Charset.forName("windows-1250"))
         }
-
         text
     } catch (e: Exception) {
         e.printStackTrace()
