@@ -1,10 +1,13 @@
 package com.example.mediastudio.ui.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -20,7 +23,7 @@ import kotlin.math.ceil
 import kotlin.math.ln
 
 enum class ContentTab {
-    MOVIES, SERIES
+    MOVIES, SERIES, FAVORITES
 }
 
 data class GenreOption(
@@ -70,10 +73,18 @@ private interface ArchiveSearchApi {
     ): ArchiveSearchResponse
 }
 
-class HomeViewModel : ViewModel() {
+// Promijenjeno u AndroidViewModel kako bi imali pristup SharedPreferences za snimanje favorita
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+    
+    private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
+    
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
+
+    private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
+        Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
+    )
 
     private val api: ArchiveSearchApi = Retrofit.Builder()
         .baseUrl("https://archive.org/")
@@ -97,7 +108,6 @@ class HomeViewModel : ViewModel() {
         "youtube videos", "kaczynski", "writings collection", "manifesto"
     )
 
-    // PROŠIRENO: Dodani japanski i europski velikani, studiji te nagrade za ogroman ranking boost!
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
         "20th century", "united artists", "disney", "fleischer", "republic pictures",
@@ -113,7 +123,6 @@ class HomeViewModel : ViewModel() {
         "imdb", "academy award", "oscar", "bafta", "cannes", "criterion" 
     )
 
-    // MEGA FRANŠIZE: Ovi naslovi idu na vrh!
     private val megaFranchises = listOf(
         "star trek", "star wars", "batman", "superman", "spider-man", "james bond",
         "indiana jones", "lord of the rings", "harry potter", "marvel", "dc comics",
@@ -128,17 +137,14 @@ class HomeViewModel : ViewModel() {
     private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
             "AND -subject:(speedrun OR gameplay OR lecture OR education)"
 
-    // MAINSTREAM FILTER: Trajno izbacivanje Bollywooda i istočnjačkih kategorija iz SVIH upita
     private val mainstreamFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil OR kannada OR marathi OR bengali OR urdu OR hindi OR desi) " +
             "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR mar OR kan OR guj OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
             
     private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
 
-    // Ubačen mainstreamFilter u bazu svakog upita za filmove
     private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
-        // Izmijenjeno: Top 10 danas traži po najnovijem i sortira po bodovima
         GenreOption("Top 10 danas", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
         GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
@@ -172,13 +178,10 @@ class HomeViewModel : ViewModel() {
         )
     )
 
-    // Ubačen mainstreamFilter u bazu svakog upita za serije
     private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter"
 
     val seriesGenreDefinitions = listOf(
-        // Izmijenjeno: Top 10 danas traži po najnovijem
         GenreOption("Top 10 serija danas", seriesBase, "addeddate desc", isSeriesCategory = true),
-        // Ovdje je dodan novi upit koji traži Disney, WB i specifične likove
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR donald OR goofy OR pluto OR \"bugs bunny\" OR \"daffy duck\" OR \"tom and jerry\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
@@ -194,6 +197,10 @@ class HomeViewModel : ViewModel() {
 
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
+
+    // NOVO: Stanje za spremljene favorite
+    private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -227,7 +234,39 @@ class HomeViewModel : ViewModel() {
     val pageSize = 60
 
     init {
+        loadFavorites()
         loadAllContent()
+    }
+
+    // NOVE FUNKCIJE ZA FAVORITE
+    private fun loadFavorites() {
+        val json = prefs.getString("favorites", "[]")
+        if (json != null) {
+            try {
+                val list = favoritesAdapter.fromJson(json) ?: emptyList()
+                _favoriteMovies.value = list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun isFavorite(identifier: String): Boolean {
+        return _favoriteMovies.value.any { it.identifier == identifier }
+    }
+
+    fun toggleFavorite(movie: ArchiveMovie) {
+        val currentList = _favoriteMovies.value.toMutableList()
+        val exists = currentList.any { it.identifier == movie.identifier }
+        
+        if (exists) {
+            currentList.removeAll { it.identifier == movie.identifier }
+        } else {
+            currentList.add(movie)
+        }
+        
+        _favoriteMovies.value = currentList
+        prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
     }
 
     fun selectTab(tab: ContentTab) {
@@ -263,8 +302,7 @@ class HomeViewModel : ViewModel() {
                     excludeAdult = false,
                     isAdultCategory = false,
                     isAnimationCategory = true,
-                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
-                    preserveApiOrder = false
+                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES
                 )
                 _globalSearchResults.value = results
             } catch (e: Exception) {
@@ -295,8 +333,7 @@ class HomeViewModel : ViewModel() {
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
-                            isSeriesCategory = false,
-                            preserveApiOrder = false // Promijenjeno u false da bi SE SVE sortiralo po našem ocjenjivanju!
+                            isSeriesCategory = false
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -313,8 +350,7 @@ class HomeViewModel : ViewModel() {
                             excludeAdult = true,
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
-                            isSeriesCategory = true,
-                            preserveApiOrder = false // Promijenjeno u false da bi SE SVE sortiralo po našem ocjenjivanju!
+                            isSeriesCategory = true
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -355,8 +391,7 @@ class HomeViewModel : ViewModel() {
                     excludeAdult = !genre.isAdultCategory,
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
-                    isSeriesCategory = genre.isSeriesCategory,
-                    preserveApiOrder = false // Uvijek forsiramo naše moćno ocjenjivanje!
+                    isSeriesCategory = genre.isSeriesCategory
                 )
 
                 _genreMovies.value = results.take(targetLimit)
@@ -377,6 +412,7 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    // FIX ZA TOP 10 MATCHING: Uklonjen preserveApiOrder parametar, sada je SVE strogo sortirano po našem algoritmu!
     private suspend fun fetchAndRankByRelevance(
         query: String,
         apiSort: String,
@@ -385,8 +421,7 @@ class HomeViewModel : ViewModel() {
         excludeAdult: Boolean,
         isAdultCategory: Boolean,
         isAnimationCategory: Boolean,
-        isSeriesCategory: Boolean,
-        preserveApiOrder: Boolean
+        isSeriesCategory: Boolean
     ): Pair<List<RatedMovie>, Int> {
         return try {
             val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
@@ -431,25 +466,20 @@ class HomeViewModel : ViewModel() {
 
                 val itemSizeMb = parseSizeMb(doc.itemSize)
                 
-                // NOVI ALGORITAM ZA BODOVANJE (SORTIRANJE)
                 var score = 0.0
 
-                // 1. Ogroman prioritet: Službeni IMDb Rating
                 if (ratingVal > 0.0) {
-                    score += ratingVal * 1000.0 // Npr. ocjena 4.5 donosi 4500 bodova!
+                    score += ratingVal * 1000.0 
                     if (reviewsVal > 0) {
-                        score += ln(reviewsVal.toDouble() + 1.0) * 300.0 // Bonus za količinu glasova
+                        score += ln(reviewsVal.toDouble() + 1.0) * 300.0 
                     }
                 } else {
-                    // Dajemo bazu da ne ispadne s popisa, ali ostaje na dnu
                     score += 500.0
                 }
 
-                // 2. Prioritet: Mainstream / Europski / Američki / Japanski klasični studiji
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
-                score += studioMatches * 800.0 // Ogroman boost ako u opisu stoji Warner, Toho, Oscar, Hitchcock...
+                score += studioMatches * 800.0 
 
-                // 3. Ekstremni prioritet: Mega Franšize
                 val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
                 score += megaFranchiseMatches * 5000.0
 
@@ -477,11 +507,11 @@ class HomeViewModel : ViewModel() {
                         rating = bestItem.rating,
                         relevanceScore = bestItem.relevanceScore
                     )
-                }.sortedByDescending { it.relevanceScore }
-                
-                // Sada SVE, pa i Top 10, prolazi kroz naše strogo ocjenjivanje!
-                mergedList 
+                }
+                // STROGO SORTIRANJE: Uvijek koristimo naš algoritam za prikaz
+                mergedList.sortedByDescending { it.relevanceScore }
             } else {
+                // STROGO SORTIRANJE
                 scoredList.sortedByDescending { it.relevanceScore }
             }
             
@@ -492,18 +522,17 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    // Ažurirano: Agresivnije rezanje sezona
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         return rawTitle
             .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
             .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
-            .replace(Regex("(?i)\\bthe\\s+\\d+(st|nd|rd|th)\\s+season\\b.*"), "") // Hvata "The 3rd Season"
+            .replace(Regex("(?i)\\bthe\\s+\\d+(st|nd|rd|th)\\s+season\\b.*"), "") 
             .replace(Regex("(?i)complete\\b"), "")
             .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
             .replace(Regex("(?i)\\bS\\d{1,2}E\\d{1,3}\\b.*"), "") 
-            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "") // Hvata "Episode 4" ili "Episodes 04 05"
+            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "") 
             .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
-            .replace(Regex("(?i)all\\s*\\d+\\s*eps.*"), "") // Hvata "all 22 eps"
+            .replace(Regex("(?i)all\\s*\\d+\\s*eps.*"), "") 
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
