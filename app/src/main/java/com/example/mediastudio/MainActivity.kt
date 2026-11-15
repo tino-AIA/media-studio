@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                     1 -> selectedMovie?.let { movie ->
                         DetailsScreen(
                             movie = movie,
+                            viewModel = homeViewModel, // POPRAVLJENO: Proslijeđen viewModel
                             onPlayClick = { year ->
                                 selectedMovieYear = year
                                 selectedEpisodeUrl = ""
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     4 -> selectedMovie?.let { series ->
                         SeriesScreen(
                             series = series,
+                            viewModel = homeViewModel, // POPRAVLJENO: Proslijeđen viewModel
                             onEpisodeClick = { episode ->
                                 selectedEpisodeTitle = episode.subtitleSearchQuery.ifBlank { "${series.title} - ${episode.title}" }
                                 selectedEpisodeUrl = episode.fileUrl
