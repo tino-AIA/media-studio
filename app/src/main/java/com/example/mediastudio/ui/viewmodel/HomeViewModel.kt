@@ -23,7 +23,6 @@ import retrofit2.http.Query
 import kotlin.math.ceil
 import kotlin.math.ln
 
-// Dodana kategorija za koncerte
 enum class ContentTab {
     MOVIES, SERIES, CONCERTS, FAVORITES
 }
@@ -94,7 +93,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // AŽURIRANO: Još stroži filtar
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "xxx", "porn", "porno", "pornography",
         "realm of the senses", "empire des sens", "good girl bad girl",
@@ -125,7 +123,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "bela lugosi", "boris karloff", "peter lorre", "gary cooper", "ingrid bergman",
         "audrey hepburn", "christopher lee", "peter cushing", "stan laurel", "oliver hardy",
         "toho", "kurosawa", "mizoguchi", "ozu", "ghibli", "miyazaki", "anime", 
-        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion", "vhs movies", "vhsvault"
+        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion", "vhs movies", "vhsvault",
+        "bbc video", "paramount cartoons"
     )
 
     private val megaFranchises = listOf(
@@ -147,15 +146,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             
     private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
 
-    // AŽURIRANO: Strože povlačenje dugometražnih filmova na vrh
-    private val featureMoviesBase = "mediatype:movies AND (collection:(feature_films OR vhsvault OR vhs_movies OR SCI-FI_HORROR) OR subject:(cinema OR films OR movies)) AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
+    // AŽURIRANO: Uključene nove vrhunske kolekcije (SciFi_Films, Laserdisc, Colorized, Miscellaneous Feature Films)
+    private val featureMoviesBase = "mediatype:movies AND (collection:(feature_films OR vhsvault OR vhs_movies OR SCI-FI_HORROR OR SciFi_Films OR laserdiscarchive OR colorized-and-upscaled-movies OR miscellaneous_feature_films) OR subject:(cinema OR films OR movies OR \"feature film\" OR \"best movies\")) AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", "mediatype:movies AND (collection:feature_films OR collection:vhsvault OR collection:vhs_movies) AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
         GenreOption("Klasici i Najgledanije", featureMoviesBase, "downloads desc"),
-        GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
+        GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:(sci_fi_horror OR SciFi_Films))"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
-        GenreOption("Triler i misterija", "$featureMoviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR collection:film_noir)"),
+        GenreOption("Triler i misterija", "$featureMoviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR subject:chiller OR subject:\"murder mystery\" OR collection:film_noir)"),
         GenreOption("Komedija", "$featureMoviesBase AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
         GenreOption("Horor", "$featureMoviesBase AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire OR subject:slasher)"),
         GenreOption("Drama", "$featureMoviesBase AND (subject:drama OR subject:melodrama)"),
@@ -165,7 +164,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Ratni", "$featureMoviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR subject:\"animated film\" OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
@@ -196,7 +195,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Vestern i avanturističke serije", "$seriesBase AND (subject:(western OR adventure) OR title:(bonanza OR lone ranger OR zorro OR robin hood))", "downloads desc", isSeriesCategory = true)
     )
 
-    // NOVO: Definicije za tab "Koncerti i glazba"
     val concertGenreDefinitions = listOf(
         GenreOption(
             title = "Najgledaniji Koncerti",
@@ -233,7 +231,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
-    // Stanje za novu tab opciju
     private val _concertCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val concertCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _concertCategories
 
@@ -313,7 +310,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
         
-        // Kad dodamo/maknemo, osvježi i karusel heroj filmova
         refreshHeroItems(
             currentList, 
             _movieCategories.value, 
@@ -412,7 +408,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // NOVO: Učitavanje Koncerata i Glazbe
                 val concertDeferred = concertGenreDefinitions.map { genre ->
                     async {
                         val (results, _) = fetchAndRankByRelevance(
@@ -457,8 +452,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
         val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
         val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
-        
-        // Dodaj i top koncert čisto da se rotira u heroj banneru
         val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
 
         val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
@@ -569,8 +562,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                
-                // Odbacuje svaki video kraći od 15 minuta 
                 if (runtimeMinutes in 1..14) {
                     return@mapNotNull null
                 }
@@ -605,15 +596,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
                 score += megaFranchiseMatches * 5000.0
 
-                // AŽURIRANO: Snažno povlači velike i dugometražne filmove na vrh! (Posebno one preko sata i pol)
+                // AŽURIRANO: Snažno favoriziranje provjerenih kolekcija sa slika
                 if (collectionText.lowercase().contains("feature_films")) score += 3000.0
                 if (collectionText.lowercase().contains("vhsvault")) score += 3500.0
                 if (collectionText.lowercase().contains("vhs_movies")) score += 3500.0
+                if (collectionText.lowercase().contains("laserdiscarchive")) score += 4000.0
+                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 4000.0
+                if (collectionText.lowercase().contains("miscellaneous_feature_films")) score += 2000.0
+                if (collectionText.lowercase().contains("scifi_films")) score += 2000.0
+                
                 if (fullMetaLower.contains("cinema")) score += 1500.0
                 
-                // Bonusi za dužinu 
                 if (runtimeMinutes >= 70) score += 500.0
-                if (runtimeMinutes >= 100) score += 1000.0 // Skoro svi pravi filmovi su 100+ min
+                if (runtimeMinutes >= 100) score += 1000.0 
                 
                 if (itemSizeMb >= 600) score += 100.0
                 if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory && !isConcertCategory) score -= 500.0
