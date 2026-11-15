@@ -146,11 +146,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             
     private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
 
-    // AŽURIRANO: Uključene nove vrhunske kolekcije (SciFi_Films, Laserdisc, Colorized, Miscellaneous Feature Films)
-    private val featureMoviesBase = "mediatype:movies AND (collection:(feature_films OR vhsvault OR vhs_movies OR SCI-FI_HORROR OR SciFi_Films OR laserdiscarchive OR colorized-and-upscaled-movies OR miscellaneous_feature_films) OR subject:(cinema OR films OR movies OR \"feature film\" OR \"best movies\")) AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
+    // KORIŠTENJE SAMO NAJBOLJIH KOLEKCIJA I ISKLJUČIVANJE KRATKIH FILMOVA/TRAILERA
+    private val featureMoviesBase = "mediatype:movies AND collection:(feature_films OR miscellaneous_feature_films OR comedy_films OR sci_fi_horror OR silent_films OR film_noir OR SciFi_Films OR colorized-and-upscaled-movies OR laserdiscarchive OR vhsvault OR vhs_movies) AND item_size:[400000000 TO *] AND -collection:(movie_trailers OR previews OR short_format_films OR home_movies) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 danas", "mediatype:movies AND (collection:feature_films OR collection:vhsvault OR collection:vhs_movies) AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
+        GenreOption("Top 10 danas", "mediatype:movies AND collection:(feature_films OR colorized-and-upscaled-movies OR laserdiscarchive OR vhsvault OR vhs_movies) AND -collection:(movie_trailers OR previews OR short_format_films OR home_movies) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
         GenreOption("Klasici i Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:(sci_fi_horror OR SciFi_Films))"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
@@ -164,7 +164,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Ratni", "$featureMoviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
         GenreOption(
             title = "Animirani klasici",
-            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR subject:\"animated film\" OR collection:animationandcartoons)",
+            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews OR short_format_films OR home_movies) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR subject:\"animated film\" OR collection:animationandcartoons)",
             defaultSort = "downloads desc",
             isAnimationCategory = true
         ),
@@ -172,7 +172,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
+            query = "mediatype:movies AND item_size:[300000000 TO *] AND -collection:(movie_trailers OR previews OR short_format_films OR home_movies) AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
                     "collection:(adultvhs OR mensmagazines_post70s) OR " +
                     "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\" OR porn OR \"vintage porn\" OR nsfw OR \"erotic cinema\" OR \"classic adult\" OR \"retro porn\" OR \"cult adult\" OR \"adult vhs\") OR " +
                     "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\" OR \"schulmädchen-report\" OR \"deep throat\" OR \"female vampire\") OR " +
@@ -562,7 +562,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..14) {
+                
+                // AŽURIRANO: Odbacuje svaki video kraći od 30 minuta
+                if (runtimeMinutes in 1..29) {
                     return@mapNotNull null
                 }
 
@@ -596,14 +598,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
                 score += megaFranchiseMatches * 5000.0
 
-                // AŽURIRANO: Snažno favoriziranje provjerenih kolekcija sa slika
                 if (collectionText.lowercase().contains("feature_films")) score += 3000.0
+                if (collectionText.lowercase().contains("miscellaneous_feature_films")) score += 3000.0
+                if (collectionText.lowercase().contains("comedy_films")) score += 3000.0
+                if (collectionText.lowercase().contains("sci_fi_horror")) score += 3000.0
+                if (collectionText.lowercase().contains("silent_films")) score += 3000.0
+                if (collectionText.lowercase().contains("film_noir")) score += 3000.0
+                if (collectionText.lowercase().contains("scifi_films")) score += 3000.0
                 if (collectionText.lowercase().contains("vhsvault")) score += 3500.0
                 if (collectionText.lowercase().contains("vhs_movies")) score += 3500.0
                 if (collectionText.lowercase().contains("laserdiscarchive")) score += 4000.0
                 if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 4000.0
-                if (collectionText.lowercase().contains("miscellaneous_feature_films")) score += 2000.0
-                if (collectionText.lowercase().contains("scifi_films")) score += 2000.0
                 
                 if (fullMetaLower.contains("cinema")) score += 1500.0
                 
