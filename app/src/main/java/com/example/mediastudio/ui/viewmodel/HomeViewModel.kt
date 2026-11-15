@@ -113,6 +113,13 @@ class HomeViewModel : ViewModel() {
         "imdb", "academy award", "oscar", "bafta", "cannes", "criterion" 
     )
 
+    // MEGA FRANŠIZE: Ovi naslovi idu na vrh!
+    private val megaFranchises = listOf(
+        "star trek", "star wars", "batman", "superman", "spider-man", "james bond",
+        "indiana jones", "lord of the rings", "harry potter", "marvel", "dc comics",
+        "doctor who", "twilight zone", "alfred hitchcock presents", "sherlock holmes"
+    )
+
     private val safeFilter = "-subject:(erotic OR erotica OR xxx OR porn) " +
             "AND -title:(erotic OR erotica OR xxx OR porn OR \"realm of the senses\" OR \"bad girl\") " +
             "AND -description:(pornography OR hardcore OR \"explicit sex\") " +
@@ -131,7 +138,8 @@ class HomeViewModel : ViewModel() {
     private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
 
     val movieGenreDefinitions = listOf(
-        GenreOption("Top 10 prošlog tjedna", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "week desc"),
+        // Izmijenjeno: Top 10 danas traži po najnovijem i sortira po bodovima
+        GenreOption("Top 10 danas", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
         GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
         GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
@@ -168,7 +176,9 @@ class HomeViewModel : ViewModel() {
     private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija prošlog tjedna", seriesBase, "week desc", isSeriesCategory = true),
+        // Izmijenjeno: Top 10 danas traži po najnovijem
+        GenreOption("Top 10 serija danas", seriesBase, "addeddate desc", isSeriesCategory = true),
+        // Ovdje je dodan novi upit koji traži Disney, WB i specifične likove
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR donald OR goofy OR pluto OR \"bugs bunny\" OR \"daffy duck\" OR \"tom and jerry\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
@@ -439,6 +449,10 @@ class HomeViewModel : ViewModel() {
                 val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
                 score += studioMatches * 800.0 // Ogroman boost ako u opisu stoji Warner, Toho, Oscar, Hitchcock...
 
+                // 3. Ekstremni prioritet: Mega Franšize
+                val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
+                score += megaFranchiseMatches * 5000.0
+
                 if (collectionText.lowercase().contains("feature_films")) score += 200.0
                 if (runtimeMinutes >= 70) score += 300.0
                 if (itemSizeMb >= 600) score += 100.0
@@ -478,15 +492,18 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    // Ažurirano: Agresivnije rezanje sezona
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         return rawTitle
             .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
             .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
+            .replace(Regex("(?i)\\bthe\\s+\\d+(st|nd|rd|th)\\s+season\\b.*"), "") // Hvata "The 3rd Season"
             .replace(Regex("(?i)complete\\b"), "")
             .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
             .replace(Regex("(?i)\\bS\\d{1,2}E\\d{1,3}\\b.*"), "") 
-            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "")
+            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "") // Hvata "Episode 4" ili "Episodes 04 05"
             .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
+            .replace(Regex("(?i)all\\s*\\d+\\s*eps.*"), "") // Hvata "all 22 eps"
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
