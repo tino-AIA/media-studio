@@ -13,6 +13,9 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -63,6 +66,7 @@ fun HomeScreen(
     val selectedTab by viewModel.selectedTab.collectAsState()
     val movieCategories by viewModel.movieCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
+    val favoriteMovies by viewModel.favoriteMovies.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -94,7 +98,7 @@ fun HomeScreen(
                 Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
-                        text = if (isSeriesTab) "Kategorije serija" else "Žanrovi filmova",
+                        text = "Izbornik",
                         color = Color.White,
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
@@ -102,6 +106,27 @@ fun HomeScreen(
                     )
                     Divider(color = Color.DarkGray)
                     Spacer(modifier = Modifier.height(8.dp))
+
+                    // Dodana opcija Favoriti u bočni izbornik
+                    DrawerFocusableItem(
+                        title = "⭐ Moji Favoriti",
+                        isAdult = false,
+                        onClick = {
+                            scope.launch {
+                                drawerState.close()
+                                viewModel.selectTab(ContentTab.FAVORITES)
+                            }
+                        }
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (isSeriesTab) "Kategorije serija" else "Žanrovi filmova",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
+                    )
 
                     activeDrawerList.forEach { genre ->
                         DrawerFocusableItem(
@@ -157,6 +182,7 @@ fun HomeScreen(
                         )
                     }
 
+                    // AŽURIRANO: Dodan tab za Favorite
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -171,8 +197,14 @@ fun HomeScreen(
                         )
                         TabButton(
                             title = "📺 Serije i kolekcije",
-                            isSelected = isSeriesTab,
+                            isSelected = selectedTab == ContentTab.SERIES,
                             onClick = { viewModel.selectTab(ContentTab.SERIES) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TabButton(
+                            title = "⭐ Favoriti",
+                            isSelected = selectedTab == ContentTab.FAVORITES,
+                            onClick = { viewModel.selectTab(ContentTab.FAVORITES) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -180,9 +212,34 @@ fun HomeScreen(
             },
             containerColor = Color.Black
         ) { paddingValues ->
-            if (isLoading) {
+            if (isLoading && selectedTab != ContentTab.FAVORITES) {
                 Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.Red)
+                }
+            } else if (selectedTab == ContentTab.FAVORITES) {
+                // EKRAN ZA FAVORITE
+                if (favoriteMovies.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
+                        Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 16.sp)
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 120.dp),
+                        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 40.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxSize().padding(paddingValues)
+                    ) {
+                        items(favoriteMovies) { movie ->
+                            // Pokušavamo odrediti je li serija po naslovu ili ga defaultno šaljemo u details
+                            val isProbablySeries = movie.title.lowercase().contains("season") || movie.title.lowercase().contains("episode")
+                            MovieCard(
+                                movie = movie,
+                                isSeries = isProbablySeries,
+                                onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) }
+                            )
+                        }
+                    }
                 }
             } else {
                 LazyColumn(
@@ -209,7 +266,6 @@ fun HomeScreen(
         }
     }
 
-    // DIJALOG ZA POTVRDU IZLASKA
     if (showExitDialog) {
         AlertDialog(
             onDismissRequest = { showExitDialog = false },
@@ -247,7 +303,6 @@ fun HomeScreen(
     }
 }
 
-// PRILAGOĐENI GUMB ZA DIJALOG (TV FOCUS PODRŠKA)
 @Composable
 private fun DialogFocusableButton(
     text: String,
