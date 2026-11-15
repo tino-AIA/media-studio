@@ -14,7 +14,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,11 +34,13 @@ import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SeriesEpisode
 import com.example.mediastudio.data.api.SeriesSeason
 import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.ui.viewmodel.HomeViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeriesScreen(
     series: ArchiveMovie,
+    viewModel: HomeViewModel, // Dodano za upravljanje favoritima
     onEpisodeClick: (SeriesEpisode) -> Unit,
     onBackClick: () -> Unit
 ) {
@@ -47,6 +51,13 @@ fun SeriesScreen(
 
     val firstArchiveId = series.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+
+    // Interakcija za gumb Favorita
+    val favInteractionSource = remember { MutableInteractionSource() }
+    val isFavFocused by favInteractionSource.collectIsFocusedAsState()
+
+    // Stanje favorita
+    val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == series.identifier }
 
     BackHandler {
         onBackClick()
@@ -148,11 +159,49 @@ fun SeriesScreen(
                                     color = Color.LightGray,
                                     fontSize = 13.sp
                                 )
+                                
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // GUMB "DODAJ U FAVORITE" ZA SERIJE
+                                Box(
+                                    modifier = Modifier
+                                        .height(44.dp)
+                                        .background(
+                                            color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .border(
+                                            width = if (isFavFocused) 3.5.dp else 1.dp,
+                                            color = if (isFavFocused) Color.White else Color.DarkGray,
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable(interactionSource = favInteractionSource, indication = null) {
+                                            viewModel.toggleFavorite(series)
+                                        }
+                                        .padding(horizontal = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                            contentDescription = null,
+                                            tint = if (isFavorite) Color.Red else Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
                             }
                         }
 
                         if (seriesDescription.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
                             Text(
                                 text = seriesDescription,
                                 color = Color(0xFFCCCCCC),
@@ -162,7 +211,7 @@ fun SeriesScreen(
                         }
 
                         if (seasons.size > 1) {
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier.fillMaxWidth()
