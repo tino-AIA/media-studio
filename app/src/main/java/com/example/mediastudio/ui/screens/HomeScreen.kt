@@ -1,846 +1,617 @@
-package com.example.mediastudio.ui.screens
+package com.example.mediastudio.ui.viewmodel
 
-import android.app.Activity
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImagePainter
-import coil.compose.rememberAsyncImagePainter
-import com.example.mediastudio.data.api.PosterFetcher
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.mediastudio.data.model.ArchiveMovie
-import com.example.mediastudio.ui.viewmodel.ContentTab
-import com.example.mediastudio.ui.viewmodel.GenreOption
-import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import com.squareup.moshi.Json
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
+import kotlin.math.ceil
+import kotlin.math.ln
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
-@Composable
-fun HomeScreen(
-    viewModel: HomeViewModel,
-    onMovieClick: (ArchiveMovie) -> Unit,
-    onSeriesClick: (ArchiveMovie) -> Unit,
-    onGenreSelect: (GenreOption) -> Unit,
-    onOpenSearch: () -> Unit
-) {
-    val context = LocalContext.current
-    val selectedTab by viewModel.selectedTab.collectAsState()
-    val movieCategories by viewModel.movieCategories.collectAsState()
-    val seriesCategories by viewModel.seriesCategories.collectAsState()
-    val favoriteMovies by viewModel.favoriteMovies.collectAsState()
-    val heroMovies by viewModel.heroMovies.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
+enum class ContentTab {
+    MOVIES, SERIES, FAVORITES
+}
 
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
+data class GenreOption(
+    val title: String,
+    val query: String,
+    val defaultSort: String = "downloads desc",
+    val isAdultCategory: Boolean = false,
+    val isAnimationCategory: Boolean = false,
+    val isSeriesCategory: Boolean = false
+)
+
+data class RatedMovie(
+    val movie: ArchiveMovie,
+    val rating: String,
+    val relevanceScore: Double = 0.0
+)
+
+private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
+private data class ArchiveResponseBody(
+    val numFound: Int?,
+    val docs: List<RawArchiveDoc>?
+)
+private data class RawArchiveDoc(
+    val identifier: String?,
+    val title: Any?,
+    val creator: Any?,
+    val description: Any?,
+    val collection: Any?,
+    val runtime: Any?,
+    @Json(name = "item_size") val itemSize: Any?,
+    @Json(name = "avg_rating") val avgRating: Any?,
+    @Json(name = "num_reviews") val numReviews: Any?
+)
+
+private interface ArchiveSearchApi {
+    @GET("advancedsearch.php")
+    suspend fun searchMovies(
+        @Query("q") query: String,
+        @Query("fl[]") fields: List<String> = listOf(
+            "identifier", "title", "creator", "description", "collection",
+            "runtime", "item_size", "avg_rating", "num_reviews"
+        ),
+        @Query("sort[]") sort: String = "downloads desc",
+        @Query("rows") rows: Int = 120,
+        @Query("page") page: Int = 1,
+        @Query("output") output: String = "json"
+    ): ArchiveSearchResponse
+}
+
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
     
-    var showExitDialog by remember { mutableStateOf(false) }
+    private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
+    
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
 
-    // Stanje za pametnu HBO Max pozadinu (mijenja se ovisno o fokusu)
-    var currentHeroMovie by remember { mutableStateOf<Pair<ArchiveMovie, Boolean>?>(null) }
-    var currentHeroPosterUrl by remember { mutableStateOf("") }
+    private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
+        Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
+    )
 
-    // Postavi prvi film iz Istaknutog kao početnu pozadinu kad se sve učita
-    LaunchedEffect(heroMovies) {
-        if (currentHeroMovie == null && heroMovies.isNotEmpty()) {
-            currentHeroMovie = heroMovies.first() to (selectedTab == ContentTab.SERIES)
+    private val api: ArchiveSearchApi = Retrofit.Builder()
+        .baseUrl("https://archive.org/")
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(ArchiveSearchApi::class.java)
+
+    private val blockedAdultKeywords = listOf(
+        "erotic", "erotica", "xxx", "porn", "porno", "pornography",
+        "realm of the senses", "empire des sens", "good girl bad girl",
+        "tammy stones", "softcore", "hardcore", "playboy", "penthouse",
+        "orgy", "fetish", "nc-17", "alpha france", "alpha-france", "alphafrance",
+        "servante perverse"
+    )
+
+    private val junkNonMovieKeywords = listOf(
+        "speedrun", "longplay", "walkthrough", "playthrough", "gameplay",
+        "snes", "nes", "ps1", "ps2", "n64", "gameboy", "arcade",
+        "lecture", "seminar", "webinar", "conference", "symposium", "tutorial", "course",
+        "electricsheep", "capcut", "beat-edits", "dvd cover", "dvd covers", "site tour",
+        "youtube videos", "kaczynski", "writings collection", "manifesto"
+    )
+
+    private val notableCinemaKeywords = listOf(
+        "universal", "warner", "paramount", "mgm", "metro-goldwyn", "rko", "columbia",
+        "20th century", "united artists", "disney", "fleischer", "republic pictures",
+        "looney", "merrie melodies", "popeye", "superman", "felix the cat", "casper",
+        "alpha france", "alpha-france", "alphafrance", "nagisa oshima", "jess franco",
+        "lucio fulci", "max pecas", "joe d'amato", "tinto brass", "radley metzger",
+        "hitchcock", "chaplin", "buster keaton", "fritz lang", "orson welles", "john ford",
+        "howard hawks", "frank capra", "billy wilder", "george romero", "roger corman",
+        "cary grant", "john wayne", "humphrey bogart", "james stewart", "vincent price",
+        "bela lugosi", "boris karloff", "peter lorre", "gary cooper", "ingrid bergman",
+        "audrey hepburn", "christopher lee", "peter cushing", "stan laurel", "oliver hardy",
+        "toho", "kurosawa", "mizoguchi", "ozu", "ghibli", "miyazaki", "anime", 
+        "imdb", "academy award", "oscar", "bafta", "cannes", "criterion" 
+    )
+
+    private val megaFranchises = listOf(
+        "star trek", "star wars", "batman", "superman", "spider-man", "james bond",
+        "indiana jones", "lord of the rings", "harry potter", "marvel", "dc comics",
+        "doctor who", "twilight zone", "alfred hitchcock presents", "sherlock holmes"
+    )
+
+    private val safeFilter = "-subject:(erotic OR erotica OR xxx OR porn) " +
+            "AND -title:(erotic OR erotica OR xxx OR porn OR \"realm of the senses\" OR \"bad girl\") " +
+            "AND -description:(pornography OR hardcore OR \"explicit sex\") " +
+            "AND -collection:(adultvhs OR mensmagazines_post70s)"
+
+    private val noJunkFilter = "-title:(speedrun OR longplay OR walkthrough OR gameplay OR snes OR lecture OR seminar OR electricsheep OR capcut OR \"dvd cover\" OR youtube OR kaczynski) " +
+            "AND -subject:(speedrun OR gameplay OR lecture OR education)"
+
+    private val mainstreamFilter = "-subject:(bollywood OR tollywood OR punjabi OR malayalam OR telugu OR tamil OR kannada OR marathi OR bengali OR urdu OR hindi OR desi) " +
+            "AND -language:(hin OR tam OR tel OR mal OR urd OR ben OR pan OR mar OR kan OR guj OR hindi OR tamil OR telugu OR malayalam OR urdu OR bengali OR punjabi)"
+            
+    private val onlyMoviesFilter = "-subject:(\"tv series\" OR \"television series\") AND -title:(season OR episode OR episodes)"
+
+    private val featureMoviesBase = "mediatype:movies AND collection:feature_films AND item_size:[380000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter"
+
+    val movieGenreDefinitions = listOf(
+        GenreOption("Top 10 danas", "mediatype:movies AND collection:feature_films AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter AND $onlyMoviesFilter", "addeddate desc"),
+        GenreOption("Najgledanije", featureMoviesBase, "downloads desc"),
+        GenreOption("Sci-Fi klasici", "$featureMoviesBase AND (subject:sci-fi OR subject:\"science fiction\" OR title:planet OR title:space OR collection:sci_fi_horror)"),
+        GenreOption("Akcija i avantura", "$featureMoviesBase AND (subject:action OR subject:adventure OR subject:martial OR subject:swashbuckler)"),
+        GenreOption("Triler i misterija", "$featureMoviesBase AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense OR collection:film_noir)"),
+        GenreOption("Komedija", "$featureMoviesBase AND (subject:comedy OR subject:comedies OR subject:humor OR collection:comedy_films)"),
+        GenreOption("Horor", "$featureMoviesBase AND (subject:horror OR subject:monster OR subject:zombie OR subject:vampire OR subject:slasher)"),
+        GenreOption("Drama", "$featureMoviesBase AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$featureMoviesBase AND (subject:crime OR subject:gangster OR subject:detective OR subject:heist)"),
+        GenreOption("Romantični", "$featureMoviesBase AND (subject:romance OR subject:romantic OR subject:love)"),
+        GenreOption("Vestern", "$featureMoviesBase AND (subject:western OR subject:westerns OR subject:cowboy)"),
+        GenreOption("Ratni", "$featureMoviesBase AND (subject:war OR subject:military OR subject:\"world war\")"),
+        GenreOption(
+            title = "Animirani klasici",
+            query = "mediatype:movies AND item_size:[150000000 TO *] AND -collection:(movie_trailers OR previews) AND $noJunkFilter AND $safeFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (subject:animation OR subject:cartoon OR subject:animated OR collection:animationandcartoons)",
+            defaultSort = "downloads desc",
+            isAnimationCategory = true
+        ),
+        GenreOption("Dokumentarni", "$featureMoviesBase AND (subject:documentary OR subject:documentaries)"),
+        GenreOption(
+            title = "18+ / Erotski",
+            query = "mediatype:movies AND item_size:[300000000 TO *] AND $noJunkFilter AND $onlyMoviesFilter AND $mainstreamFilter AND (" +
+                    "collection:(adultvhs OR mensmagazines_post70s) OR " +
+                    "subject:(erotic OR erotica OR softcore OR sexploitation OR \"adult film\") OR " +
+                    "title:(\"alpha france\" OR \"alpha-france\" OR \"realm of the senses\" OR \"empire des sens\" OR \"servante perverse\" OR \"bad girl\" OR \"emmanuelle\" OR \"caligula\" OR \"salon kitty\") OR " +
+                    "creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"max pecas\" OR \"nagisa oshima\" OR \"joe d'amato\" OR \"radley metzger\") OR " +
+                    "description:(\"alpha france\" OR \"empire des sens\" OR \"realm of the senses\")" +
+                    ") AND -title:\"adult swim\" AND -subject:(cartoon OR lecture)",
+            defaultSort = "downloads desc",
+            isAdultCategory = true
+        )
+    )
+
+    private val seriesBase = "mediatype:movies AND (subject:(\"tv series\" OR \"television series\" OR \"cartoon collection\") OR title:(\"season\" OR \"complete series\" OR \"cartoon collection\" OR \"episodes\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter"
+
+    val seriesGenreDefinitions = listOf(
+        GenreOption("Top 10 serija danas", seriesBase, "addeddate desc", isSeriesCategory = true),
+        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR donald OR goofy OR pluto OR \"bugs bunny\" OR \"daffy duck\" OR \"tom and jerry\")) AND $noJunkFilter AND $safeFilter AND $mainstreamFilter", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Krimi, detektivske i triler serije", "$seriesBase AND (subject:(crime OR detective OR mystery OR thriller OR noir) OR title:(sherlock OR hitchcock OR dragnet OR perry mason))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBase AND (subject:(sci-fi OR \"science fiction\" OR fantasy) OR title:(twilight zone OR flash gordon OR star trek OR outer limits))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Komedije i sitcomi", "$seriesBase AND (subject:(comedy OR sitcom) OR title:(three stooges OR lucy OR beverly hillbillies OR laurel and hardy))", "downloads desc", isSeriesCategory = true),
+        GenreOption("Vestern i avanturističke serije", "$seriesBase AND (subject:(western OR adventure) OR title:(bonanza OR lone ranger OR zorro OR robin hood))", "downloads desc", isSeriesCategory = true)
+    )
+
+    private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
+    val selectedTab: StateFlow<ContentTab> = _selectedTab
+
+    private val _movieCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val movieCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _movieCategories
+
+    private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
+
+    private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
+    val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
+
+    private val _activeHeroIndex = MutableStateFlow(0)
+    val activeHeroIndex: StateFlow<Int> = _activeHeroIndex
+
+    private var carouselJob: Job? = null
+
+    private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _globalSearchResults = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val globalSearchResults: StateFlow<List<RatedMovie>> = _globalSearchResults
+
+    private val _isSearchingGlobal = MutableStateFlow(false)
+    val isSearchingGlobal: StateFlow<Boolean> = _isSearchingGlobal
+
+    private var searchJob: Job? = null
+
+    private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
+    val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
+
+    private val _genreMovies = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val genreMovies: StateFlow<List<RatedMovie>> = _genreMovies
+
+    private val _isGenreLoading = MutableStateFlow(false)
+    val isGenreLoading: StateFlow<Boolean> = _isGenreLoading
+
+    private val _currentGenrePage = MutableStateFlow(1)
+    val currentGenrePage: StateFlow<Int> = _currentGenrePage
+
+    private val _totalGenrePages = MutableStateFlow(1)
+    val totalGenrePages: StateFlow<Int> = _totalGenrePages
+
+    private val _totalGenreMoviesCount = MutableStateFlow(0)
+    val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
+
+    val pageSize = 60
+
+    init {
+        loadFavorites()
+        loadAllContent()
+    }
+
+    private fun loadFavorites() {
+        val json = prefs.getString("favorites", "[]")
+        if (json != null) {
+            try {
+                val list = favoritesAdapter.fromJson(json) ?: emptyList()
+                _favoriteMovies.value = list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
-    LaunchedEffect(currentHeroMovie) {
-        currentHeroMovie?.let { (movie, isSeries) ->
-            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier.split(",").first())
-            currentHeroPosterUrl = fetchedUrl.ifBlank { "https://archive.org/services/img/${movie.identifier.split(",").first()}" }
-        }
+    fun isFavorite(identifier: String): Boolean {
+        return _favoriteMovies.value.any { it.identifier == identifier }
     }
 
-    BackHandler {
-        if (drawerState.isOpen) {
-            scope.launch { drawerState.close() }
+    fun toggleFavorite(movie: ArchiveMovie) {
+        val currentList = _favoriteMovies.value.toMutableList()
+        val exists = currentList.any { it.identifier == movie.identifier }
+        
+        if (exists) {
+            currentList.removeAll { it.identifier == movie.identifier }
         } else {
-            showExitDialog = true
+            currentList.add(movie)
         }
+        
+        _favoriteMovies.value = currentList
+        prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
+        
+        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value)
     }
 
-    val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
-    val activeDrawerList = if (selectedTab == ContentTab.MOVIES) viewModel.movieGenreDefinitions else viewModel.seriesGenreDefinitions
-    val isSeriesTab = selectedTab == ContentTab.SERIES
+    fun selectTab(tab: ContentTab) {
+        _selectedTab.value = tab
+    }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier.width(280.dp),
-                drawerContainerColor = Color(0xFF121212)
-            ) {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        text = "Izbornik",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                    Divider(color = Color.DarkGray)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    DrawerFocusableItem(
-                        title = "⭐ Moji Favoriti",
-                        isAdult = false,
-                        onClick = {
-                            scope.launch {
-                                drawerState.close()
-                                viewModel.selectTab(ContentTab.FAVORITES)
-                            }
-                        }
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = if (isSeriesTab) "Kategorije serija" else "Žanrovi filmova",
-                        color = Color.Gray,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
-                    )
-
-                    activeDrawerList.forEach { genre ->
-                        DrawerFocusableItem(
-                            title = genre.title,
-                            isAdult = genre.title.startsWith("18+"),
-                            onClick = {
-                                scope.launch {
-                                    drawerState.close()
-                                    onGenreSelect(genre)
-                                }
-                            }
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-            }
+    fun performGlobalSearch(query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 3) {
+            _globalSearchResults.value = emptyList()
+            _isSearchingGlobal.value = false
+            return
         }
-    ) {
-        // GLOBALNA HBO MAX POZADINA S GRADIENTIMA
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-            if (currentHeroPosterUrl.isNotEmpty()) {
-                Image(
-                    painter = rememberAsyncImagePainter(currentHeroPosterUrl),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().alpha(0.35f) // Polu-prozirno za kino efekt
-                )
-            }
-            
-            // Tamni gradijent lijevo (kako bi se vidio tekst)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(Color(0xFF0F0F0F), Color(0xFF0F0F0F).copy(alpha = 0.7f), Color.Transparent),
-                            startX = 0f,
-                            endX = 1200f
-                        )
-                    )
-            )
-            // Tamni gradijent dolje (za prijelaz prema redovima)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color(0xFF0A0A0A)),
-                            startY = 200f
-                        )
-                    )
-            )
 
-            // GLAVNI SADRŽAJ (Proziran Scaffold kako bi pozadina "disala")
-            Scaffold(
-                topBar = {
-                    Column(
-                        modifier = Modifier
-                            .padding(top = 6.dp)
-                            .focusProperties { up = FocusRequester.Cancel }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            TvHighlightIconButton(
-                                onClick = { scope.launch { drawerState.open() } },
-                                contentDescription = "Izbornik žanrova"
-                            ) {
-                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
-                            }
-
-                            Text(
-                                text = "Media Studio",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 21.sp
-                            )
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            SearchTriggerBar(
-                                onClick = onOpenSearch,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            TabButton(
-                                title = "🎬 Filmovi",
-                                isSelected = selectedTab == ContentTab.MOVIES,
-                                onClick = { viewModel.selectTab(ContentTab.MOVIES) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            TabButton(
-                                title = "📺 Serije i kolekcije",
-                                isSelected = selectedTab == ContentTab.SERIES,
-                                onClick = { viewModel.selectTab(ContentTab.SERIES) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            TabButton(
-                                title = "⭐ Favoriti",
-                                isSelected = selectedTab == ContentTab.FAVORITES,
-                                onClick = { viewModel.selectTab(ContentTab.FAVORITES) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                },
-                containerColor = Color.Transparent // OBAVEZNO prozirno!
-            ) { paddingValues ->
-                if (isLoading && selectedTab != ContentTab.FAVORITES) {
-                    Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.Red)
-                    }
-                } else if (selectedTab == ContentTab.FAVORITES) {
-                    if (favoriteMovies.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                            Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 16.sp)
-                        }
-                    } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 120.dp),
-                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 40.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.fillMaxSize().padding(paddingValues)
-                        ) {
-                            items(favoriteMovies) { movie ->
-                                val isProbablySeries = movie.title.lowercase().contains("season") || movie.title.lowercase().contains("episode")
-                                MovieCard(
-                                    movie = movie,
-                                    isSeries = isProbablySeries,
-                                    onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) },
-                                    onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
-                                )
-                            }
-                        }
-                    }
+        searchJob = viewModelScope.launch {
+            delay(450L)
+            _isSearchingGlobal.value = true
+            try {
+                val words = trimmed.split(Regex("\\s+")).filter { it.length >= 2 }
+                val tokenClause = if (words.isNotEmpty()) {
+                    words.joinToString(" AND ") { w -> "(title:$w* OR creator:$w* OR description:$w*)" }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(paddingValues)
-                    ) {
-                        // 1. HERO SECTON (Ispisuje naslov filma u pozadini velikim slovima)
-                        item {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(300.dp)
-                                    .padding(start = 24.dp, bottom = 12.dp),
-                                verticalArrangement = Arrangement.Bottom
-                            ) {
-                                currentHeroMovie?.let { hero ->
-                                    Text(
-                                        text = hero.first.title,
-                                        color = Color.White,
-                                        fontSize = 42.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.width(650.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = if (hero.second) "SERIJA" else "FILM",
-                                            color = Color.LightGray,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier
-                                                .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = "Istaknuto na Media Studiju",
-                                            color = Color.Gray,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    "(title:\"$trimmed\" OR creator:\"$trimmed\")"
+                }
 
-                        // 2. RED "ISTAKNUTO" S HERO FILMOVIMA
-                        if (heroMovies.isNotEmpty()) {
-                            item {
-                                MovieCategoryRow(
-                                    genre = GenreOption("🌟 Istaknuto (Favorites & Top)", ""),
-                                    movies = heroMovies,
-                                    isNetflixTop10 = false,
-                                    isSeries = isSeriesTab,
-                                    onMovieClick = { item -> if (isSeriesTab) onSeriesClick(item) else onMovieClick(item) },
-                                    onHeaderClick = { }, // Ne radi ništa na klik jer je to mix žanrova
-                                    onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
-                                )
-                            }
-                        }
+                val archiveQuery = "mediatype:movies AND item_size:[150000000 TO *] AND $noJunkFilter AND ($tokenClause)"
+                val (results, _) = fetchAndRankByRelevance(
+                    query = archiveQuery,
+                    apiSort = "downloads desc",
+                    rows = 120,
+                    page = 1,
+                    excludeAdult = false,
+                    isAdultCategory = false,
+                    isAnimationCategory = true,
+                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES
+                )
+                _globalSearchResults.value = results
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isSearchingGlobal.value = false
+            }
+        }
+    }
 
-                        // 3. OSTALI REDOVI (Žanrovi)
-                        items(activeCategories) { (genre, itemsList) ->
-                            val isTop10 = genre.title.startsWith("Top 10")
-                            MovieCategoryRow(
-                                genre = genre,
-                                movies = itemsList,
-                                isNetflixTop10 = isTop10,
-                                isSeries = isSeriesTab,
-                                onMovieClick = { item ->
-                                    if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
-                                },
-                                onHeaderClick = { onGenreSelect(genre) },
-                                onFocus = { focusedMov, isSer -> currentHeroMovie = focusedMov to isSer }
-                            )
-                        }
-                        item { Spacer(modifier = Modifier.height(40.dp)) }
+    private fun isAdultContent(id: String, title: String): Boolean {
+        val combined = "${id.lowercase()}${title.lowercase()}"
+        return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
+    }
+
+    private fun loadAllContent() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val movieDeferred = movieGenreDefinitions.map { genre ->
+                    async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = if (isWeeklyTop) 150 else 100,
+                            page = 1,
+                            excludeAdult = !genre.isAdultCategory,
+                            isAdultCategory = genre.isAdultCategory,
+                            isAnimationCategory = genre.isAnimationCategory,
+                            isSeriesCategory = false
+                        )
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
                 }
-            }
-        }
-    }
 
-    if (showExitDialog) {
-        AlertDialog(
-            onDismissRequest = { showExitDialog = false },
-            containerColor = Color(0xFF1A1A1A),
-            title = {
-                Text(
-                    text = "Izlaz iz aplikacije",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
-                )
-            },
-            text = {
-                Text(
-                    text = "Da li ste sigurni da želite izaći iz aplikacije Media Studio?",
-                    color = Color.LightGray,
-                    fontSize = 16.sp
-                )
-            },
-            confirmButton = {
-                DialogFocusableButton(
-                    text = "Da, izađi",
-                    isPrimary = true,
-                    onClick = { (context as? Activity)?.finish() }
-                )
-            },
-            dismissButton = {
-                DialogFocusableButton(
-                    text = "Odustani",
-                    isPrimary = false,
-                    onClick = { showExitDialog = false }
-                )
-            }
-        )
-    }
-}
-
-@Composable
-private fun DialogFocusableButton(
-    text: String,
-    isPrimary: Boolean,
-    onClick: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = Modifier
-            .background(
-                color = when {
-                    isFocused -> Color.Red
-                    isPrimary -> Color(0xFF990000)
-                    else -> Color(0xFF2B2B2B)
-                },
-                shape = RoundedCornerShape(8.dp)
-            )
-            .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.DarkGray,
-                shape = RoundedCornerShape(8.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 24.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 15.sp
-        )
-    }
-}
-
-@Composable
-fun TvHighlightIconButton(
-    onClick: () -> Unit,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .background(
-                color = if (isFocused) Color.Red else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        content()
-    }
-}
-
-@Composable
-private fun DrawerFocusableItem(
-    title: String,
-    isAdult: Boolean,
-    onClick: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp)
-            .background(
-                color = if (isFocused) Color(0xFF2B2B2B) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
-            )
-            .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 14.dp, vertical = 12.dp)
-    ) {
-        Text(
-            text = title,
-            color = if (isAdult) Color(0xFFFF6B6B) else Color.White,
-            fontSize = 15.sp,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal
-        )
-    }
-}
-
-@Composable
-private fun SearchTriggerBar(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Row(
-        modifier = modifier
-            .height(44.dp)
-            .background(
-                color = if (isFocused) Color(0xFF2A2A2A) else Color(0xFF161616),
-                shape = RoundedCornerShape(10.dp)
-            )
-            .border(
-                width = if (isFocused) 3.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.DarkGray,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = "Pretraži",
-            tint = if (isFocused) Color.White else Color.Gray,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "Pretraži filmove i serije...",
-            color = if (isFocused) Color.White else Color.Gray,
-            fontSize = 14.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun TabButton(
-    title: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Box(
-        modifier = modifier
-            .background(
-                color = if (isSelected) Color.Red else if (isFocused) Color(0xFF2B2B2B) else Color(0xFF1A1A1A),
-                shape = RoundedCornerShape(10.dp)
-            )
-            .border(
-                width = if (isFocused) 3.dp else 1.dp,
-                color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = title,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-fun MovieCategoryRow(
-    genre: GenreOption,
-    movies: List<ArchiveMovie>,
-    isNetflixTop10: Boolean = false,
-    isSeries: Boolean,
-    onMovieClick: (ArchiveMovie) -> Unit,
-    onHeaderClick: () -> Unit,
-    onFocus: (ArchiveMovie, Boolean) -> Unit // NOVO: Praćenje fokusa
-) {
-    if (movies.isEmpty()) return
-    val displayTitle = if (isNetflixTop10) "🔥 ${genre.title}" else genre.title
-    val headerInteraction = remember { MutableInteractionSource() }
-    val isHeaderFocused by headerInteraction.collectIsFocusedAsState()
-
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-                .background(
-                    color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
-                    shape = RoundedCornerShape(8.dp)
-                )
-                .border(
-                    width = if (isHeaderFocused) 2.5.dp else 0.dp,
-                    color = if (isHeaderFocused) Color.White else Color.Transparent,
-                    shape = RoundedCornerShape(8.dp)
-                )
-                .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = displayTitle,
-                color = Color.White,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold
-            )
-            if (genre.title != "🌟 Istaknuto (Favorites & Top)") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Svi",
-                        color = if (isHeaderFocused) Color.White else Color.Gray,
-                        fontSize = 13.sp,
-                        fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
-                    )
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = "Otvori žanr",
-                        tint = if (isHeaderFocused) Color.White else Color.Gray,
-                        modifier = Modifier.size(20.dp)
-                    )
+                val seriesDeferred = seriesGenreDefinitions.map { genre ->
+                    async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = if (isWeeklyTop) 150 else 100,
+                            page = 1,
+                            excludeAdult = true,
+                            isAdultCategory = false,
+                            isAnimationCategory = genre.isAnimationCategory,
+                            isSeriesCategory = true
+                        )
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                    }
                 }
-            }
-        }
 
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp)
-        ) {
-            itemsIndexed(movies) { index, movie ->
-                if (isNetflixTop10) {
-                    NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick, onFocus = onFocus)
-                } else {
-                    MovieCard(movie = movie, isSeries = isSeries, onMovieClick = onMovieClick, onFocus = onFocus)
-                }
-            }
-        }
-    }
-}
+                val loadedMovies = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedSeries = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit, onFocus: (ArchiveMovie, Boolean) -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
-    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    
-    val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("") }
-    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
+                _movieCategories.value = loadedMovies
+                _seriesCategories.value = loadedSeries
 
-    LaunchedEffect(isFocused) {
-        if (isFocused) onFocus(movie, isSeries)
-    }
-
-    LaunchedEffect(movie.title) {
-        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
-    }
-
-    Column(modifier = Modifier.width(162.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .width(162.dp)
-                .height(175.dp)
-                .scale(scale)
-        ) {
-            Card(
-                modifier = Modifier
-                    .width(115.dp)
-                    .height(170.dp)
-                    .align(Alignment.CenterEnd)
-                    .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                interactionSource = interactionSource,
-                onClick = { onMovieClick(movie) }
-            ) {
-                val painter = rememberAsyncImagePainter(
-                    model = posterUrl.ifBlank { fallbackUrl }
-                )
+                refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries)
                 
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
-                    }
-                    Image(
-                        painter = painter,
-                        contentDescription = movie.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    if (painter.state is AsyncImagePainter.State.Error) {
-                        Image(
-                            painter = rememberAsyncImagePainter(fallbackUrl),
-                            contentDescription = movie.title,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                }
-            }
-
-            val numberFontSize = if (rankNumber == 10) 86.sp else 96.sp
-            val numberLetterSpacing = if (rankNumber == 10) (-7).sp else 0.sp
-
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = 0.dp, y = 8.dp)
-            ) {
-                Text(
-                    text = "$rankNumber",
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = numberFontSize,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = numberLetterSpacing,
-                        drawStyle = Stroke(
-                            miter = 10f,
-                            width = 8f,
-                            join = StrokeJoin.Round
-                        )
-                    )
-                )
-                Text(
-                    text = "$rankNumber",
-                    style = TextStyle(
-                        color = Color(0xFFE50914),
-                        fontSize = numberFontSize,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = numberLetterSpacing
-                    )
-                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isLoading.value = false
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = movie.title,
-            color = if (isFocused) Color.White else Color.LightGray,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 12.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(162.dp).padding(start = 28.dp)
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit, onFocus: (ArchiveMovie, Boolean) -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
-    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    
-    val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("") }
-    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
-
-    LaunchedEffect(isFocused) {
-        if (isFocused) onFocus(movie, isSeries)
     }
 
-    LaunchedEffect(movie.title) {
-        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+    private fun refreshHeroItems(
+        favs: List<ArchiveMovie>,
+        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>
+    ) {
+        val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
+        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
+        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
+        
+        val combined = (topFavs + topM + topS).distinctBy { it.first.identifier }
+        _heroMovies.value = combined
+        
+        startHeroCarousel()
     }
 
-    Column(modifier = Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Card(
-            modifier = Modifier
-                .width(120.dp)
-                .height(175.dp)
-                .scale(scale)
-                .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
-            interactionSource = interactionSource,
-            onClick = { onMovieClick(movie) }
-        ) {
-            val painter = rememberAsyncImagePainter(
-                model = posterUrl.ifBlank { fallbackUrl }
-            )
+    private fun startHeroCarousel() {
+        carouselJob?.cancel()
+        _activeHeroIndex.value = 0
+        carouselJob = viewModelScope.launch {
+            while (isActive && _heroMovies.value.isNotEmpty()) {
+                delay(8000) 
+                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
+            }
+        }
+    }
+
+    fun setActiveHeroIndex(index: Int) {
+        if (index in _heroMovies.value.indices) {
+            _activeHeroIndex.value = index
+            startHeroCarousel() 
+        }
+    }
+
+    fun openGenre(genre: GenreOption) {
+        _selectedGenre.value = genre
+        loadGenrePage(1)
+    }
+
+    fun loadGenrePage(page: Int) {
+        val genre = _selectedGenre.value ?: return
+        if (page < 1) return
+
+        viewModelScope.launch {
+            _isGenreLoading.value = true
+            _currentGenrePage.value = page
+            try {
+                val isWeeklyTop = genre.title.startsWith("Top 10")
+                val fetchRows = if (isWeeklyTop) 150 else 120
+                val targetLimit = if (isWeeklyTop) 10 else pageSize
+
+                val (results, totalFound) = fetchAndRankByRelevance(
+                    query = genre.query,
+                    apiSort = if (isWeeklyTop) "week desc" else "downloads desc",
+                    rows = fetchRows,
+                    page = page,
+                    excludeAdult = !genre.isAdultCategory,
+                    isAdultCategory = genre.isAdultCategory,
+                    isAnimationCategory = genre.isAnimationCategory,
+                    isSeriesCategory = genre.isSeriesCategory
+                )
+
+                _genreMovies.value = results.take(targetLimit)
+
+                if (isWeeklyTop) {
+                    _totalGenreMoviesCount.value = 10
+                    _totalGenrePages.value = 1
+                } else {
+                    _totalGenreMoviesCount.value = totalFound
+                    val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
+                    _totalGenrePages.value = calculatedPages.coerceAtMost(100)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isGenreLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun fetchAndRankByRelevance(
+        query: String,
+        apiSort: String,
+        rows: Int,
+        page: Int,
+        excludeAdult: Boolean,
+        isAdultCategory: Boolean,
+        isAnimationCategory: Boolean,
+        isSeriesCategory: Boolean
+    ): Pair<List<RatedMovie>, Int> {
+        return try {
+            val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
+            val docs = responseBody?.docs ?: emptyList()
+            val numFound = responseBody?.numFound ?: docs.size
+
+            val scoredList = docs.mapNotNull { doc ->
+                val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val rawTitle = extractText(doc.title)
+                val finalTitle = rawTitle.ifBlank {
+                    id.replace("_", " ").replace("-", " ").replaceFirstChar { it.uppercase() }
+                }
+
+                val creatorText = extractText(doc.creator)
+                val descText = extractText(doc.description)
+                val collectionText = extractText(doc.collection)
+                val titleLower = finalTitle.lowercase()
+                val fullMetaLower = "$id $finalTitle$creatorText $descText$collectionText".lowercase()
+
+                if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
+                if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
+                if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
+
+                val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
+                if (isTrailerOrClip) return@mapNotNull null
+
+                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
+                if (runtimeMinutes in 1..22 && !isSeriesCategory) {
+                    return@mapNotNull null
+                }
+
+                val ratingVal = when (val r = doc.avgRating) {
+                    is Number -> r.toDouble()
+                    is String -> r.toDoubleOrNull() ?: 0.0
+                    else -> 0.0
+                }
+                val reviewsVal = when (val rev = doc.numReviews) {
+                    is Number -> rev.toInt()
+                    is String -> rev.toIntOrNull() ?: 0
+                    else -> 0
+                }
+
+                val itemSizeMb = parseSizeMb(doc.itemSize)
+                
+                var score = 0.0
+
+                if (ratingVal > 0.0) {
+                    score += ratingVal * 1000.0 
+                    if (reviewsVal > 0) {
+                        score += ln(reviewsVal.toDouble() + 1.0) * 300.0 
+                    }
+                } else {
+                    score += 500.0
+                }
+
+                val studioMatches = notableCinemaKeywords.count { kw -> fullMetaLower.contains(kw) }
+                score += studioMatches * 800.0 
+
+                val megaFranchiseMatches = megaFranchises.count { kw -> fullMetaLower.contains(kw) }
+                score += megaFranchiseMatches * 5000.0
+
+                if (collectionText.lowercase().contains("feature_films")) score += 200.0
+                if (runtimeMinutes >= 70) score += 300.0
+                if (itemSizeMb >= 600) score += 100.0
+                if (itemSizeMb in 1..150 && !isAnimationCategory && !isSeriesCategory) score -= 500.0
+
+                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
+
+                RatedMovie(
+                    movie = ArchiveMovie(identifier = id, title = finalTitle),
+                    rating = ratingStr,
+                    relevanceScore = score
+                )
+            }
+
+            val finalSorted = if (isSeriesCategory) {
+                val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
+                val mergedList = grouped.map { (baseTitle, group) ->
+                    val mergedIds = group.joinToString(",") { it.movie.identifier }
+                    val bestItem = group.maxByOrNull { it.relevanceScore } ?: group.first()
+                    RatedMovie(
+                        movie = ArchiveMovie(identifier = mergedIds, title = baseTitle),
+                        rating = bestItem.rating,
+                        relevanceScore = bestItem.relevanceScore
+                    )
+                }
+                mergedList.sortedByDescending { it.relevanceScore }
+            } else {
+                scoredList.sortedByDescending { it.relevanceScore }
+            }
             
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (painter.state is AsyncImagePainter.State.Loading) {
-                    CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
-                }
-                Image(
-                    painter = painter,
-                    contentDescription = movie.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-                if (painter.state is AsyncImagePainter.State.Error) {
-                    Image(
-                        painter = rememberAsyncImagePainter(fallbackUrl),
-                        contentDescription = movie.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                }
+            finalSorted to numFound
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList<RatedMovie>() to 0
+        }
+    }
+
+    private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
+        return rawTitle
+            .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
+            .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
+            .replace(Regex("(?i)\\bthe\\s+\\d+(st|nd|rd|th)\\s+season\\b.*"), "") 
+            .replace(Regex("(?i)complete\\b"), "")
+            .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
+            .replace(Regex("(?i)\\bS\\d{1,2}E\\d{1,3}\\b.*"), "") 
+            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "") 
+            .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
+            .replace(Regex("(?i)all\\s*\\d+\\s*eps.*"), "") 
+            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { rawTitle }
+    }
+
+    private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
+        val raw = extractText(runtimeValue).trim()
+        if (raw.isEmpty()) return 0
+        if (raw.contains(":")) {
+            val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
+            return when (parts.size) {
+                3 -> parts[0] * 60 + parts[1]
+                2 -> parts[0]
+                else -> 0
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = movie.title,
-            color = if (isFocused) Color.White else Color.LightGray,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 12.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(120.dp)
-        )
+        val numeric = raw.toDoubleOrNull() ?: return 0
+        return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
+    }
+
+    private fun parseSizeMb(sizeValue: Any?): Long {
+        val bytes = when (sizeValue) {
+            is Number -> sizeValue.toLong()
+            is String -> sizeValue.trim().toLongOrNull() ?: 0L
+            else -> 0L
+        }
+        return bytes / (1024L * 1024L)
+    }
+
+    private fun extractText(value: Any?): String {
+        return when (value) {
+            is String -> value.trim()
+            is List<*> -> value.filterNotNull().joinToString(" ").trim()
+            else -> ""
+        }
     }
 }
