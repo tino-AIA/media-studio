@@ -70,6 +70,10 @@ fun HomeScreen(
     val selectedTab by viewModel.selectedTab.collectAsState()
     val movieCategories by viewModel.movieCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
+    
+    // AŽURIRANO: Dohvaćanje kategorija koncerata iz ViewModela
+    val concertCategories by viewModel.concertCategories.collectAsState()
+    
     val favoriteMovies by viewModel.favoriteMovies.collectAsState()
     val heroMovies by viewModel.heroMovies.collectAsState()
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
@@ -99,8 +103,22 @@ fun HomeScreen(
         }
     }
 
-    val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
-    val activeDrawerList = if (selectedTab == ContentTab.MOVIES) viewModel.movieGenreDefinitions else viewModel.seriesGenreDefinitions
+    // AŽURIRANO: Određivanje aktivne liste za prikaz
+    val activeCategories = when (selectedTab) {
+        ContentTab.MOVIES -> movieCategories
+        ContentTab.SERIES -> seriesCategories
+        ContentTab.CONCERTS -> concertCategories
+        else -> emptyList()
+    }
+    
+    // AŽURIRANO: Određivanje menija s lijeve strane ovisno o odabranom tabu
+    val activeDrawerList = when (selectedTab) {
+        ContentTab.MOVIES -> viewModel.movieGenreDefinitions
+        ContentTab.SERIES -> viewModel.seriesGenreDefinitions
+        ContentTab.CONCERTS -> viewModel.concertGenreDefinitions
+        else -> emptyList()
+    }
+    
     val isSeriesTab = selectedTab == ContentTab.SERIES
 
     ModalNavigationDrawer(
@@ -135,7 +153,11 @@ fun HomeScreen(
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = if (isSeriesTab) "Kategorije serija" else "Žanrovi filmova",
+                        text = when (selectedTab) {
+                            ContentTab.SERIES -> "Kategorije serija"
+                            ContentTab.CONCERTS -> "Kategorije glazbe"
+                            else -> "Žanrovi filmova"
+                        },
                         color = Color.Gray,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
@@ -226,6 +248,7 @@ fun HomeScreen(
                             )
                         }
 
+                        // AŽURIRANO: Dodan Tab "Koncerti"
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -242,6 +265,12 @@ fun HomeScreen(
                                 title = "📺 Serije i kolekcije",
                                 isSelected = selectedTab == ContentTab.SERIES,
                                 onClick = { viewModel.selectTab(ContentTab.SERIES) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            TabButton(
+                                title = "🎵 Koncerti",
+                                isSelected = selectedTab == ContentTab.CONCERTS,
+                                onClick = { viewModel.selectTab(ContentTab.CONCERTS) },
                                 modifier = Modifier.weight(1f)
                             )
                             TabButton(
@@ -369,7 +398,7 @@ fun HomeScreen(
 
                         items(count = activeCategories.size) { index ->
                             val (genre, itemsList) = activeCategories[index]
-                            val isTop10 = genre.title.startsWith("Top 10")
+                            val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             MovieCategoryRow(
                                 genre = genre,
                                 movies = itemsList,
