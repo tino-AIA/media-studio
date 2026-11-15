@@ -73,7 +73,6 @@ private interface ArchiveSearchApi {
     ): ArchiveSearchResponse
 }
 
-// Promijenjeno u AndroidViewModel kako bi imali pristup SharedPreferences za snimanje favorita
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     
     private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
@@ -198,7 +197,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
 
-    // NOVO: Stanje za spremljene favorite
+    // NOVO: Istaknuti filmovi (Hero Row) za HBO Max izgled! (Sastoji se od Favorita + Top Filmova + Top Serija)
+    private val _heroMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val heroMovies: StateFlow<List<ArchiveMovie>> = _heroMovies
+
     private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
     val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
 
@@ -238,7 +240,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         loadAllContent()
     }
 
-    // NOVE FUNKCIJE ZA FAVORITE
     private fun loadFavorites() {
         val json = prefs.getString("favorites", "[]")
         if (json != null) {
@@ -267,6 +268,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
+        
+        // Odmah ažuriramo i Hero Row sekciju da se novi favorit pojavi tamo!
+        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value)
     }
 
     fun selectTab(tab: ContentTab) {
@@ -356,14 +360,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                _movieCategories.value = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
-                _seriesCategories.value = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedMovies = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedSeries = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+
+                _movieCategories.value = loadedMovies
+                _seriesCategories.value = loadedSeries
+
+                // Sastavljanje HERO sekcije
+                refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries)
+                
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    // NOVA FUNKCIJA: Sastavlja Hero Row (Favoriti + Top 3 Filma + Top 3 Serije)
+    private fun refreshHeroItems(
+        favs: List<ArchiveMovie>,
+        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>
+    ) {
+        val topFavs = favs.take(4)
+        val topM = movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()
+        val topS = series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()
+        _heroMovies.value = (topFavs + topM + topS).distinctBy { it.identifier }
     }
 
     fun openGenre(genre: GenreOption) {
@@ -412,7 +435,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // FIX ZA TOP 10 MATCHING: Uklonjen preserveApiOrder parametar, sada je SVE strogo sortirano po našem algoritmu!
     private suspend fun fetchAndRankByRelevance(
         query: String,
         apiSort: String,
@@ -508,10 +530,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         relevanceScore = bestItem.relevanceScore
                     )
                 }
-                // STROGO SORTIRANJE: Uvijek koristimo naš algoritam za prikaz
                 mergedList.sortedByDescending { it.relevanceScore }
             } else {
-                // STROGO SORTIRANJE
                 scoredList.sortedByDescending { it.relevanceScore }
             }
             
