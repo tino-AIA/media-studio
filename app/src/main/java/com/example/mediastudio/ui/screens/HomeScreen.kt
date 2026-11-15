@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -33,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +59,7 @@ fun HomeScreen(
     onGenreSelect: (GenreOption) -> Unit,
     onOpenSearch: () -> Unit
 ) {
+    val context = LocalContext.current
     val selectedTab by viewModel.selectedTab.collectAsState()
     val movieCategories by viewModel.movieCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
@@ -64,9 +67,17 @@ fun HomeScreen(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    
+    // Stanje za prikazivanje dijaloga za izlaz
+    var showExitDialog by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = drawerState.isOpen) {
-        scope.launch { drawerState.close() }
+    // Pametno hvatanje tipke Back (Zatvara izbornik, inače pita za izlaz)
+    BackHandler {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else {
+            showExitDialog = true
+        }
     }
 
     val activeCategories = if (selectedTab == ContentTab.MOVIES) movieCategories else seriesCategories
@@ -111,7 +122,7 @@ fun HomeScreen(
     ) {
         Scaffold(
             topBar = {
-                // OVO RJEŠAVA IZLAZAK: Sprječava Android TV-u da fokus pobjegne prema gore
+                // Sprječava Android TV-u da fokus pobjegne prema gore
                 Column(
                     modifier = Modifier
                         .padding(top = 6.dp)
@@ -196,6 +207,81 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // DIJALOG ZA POTVRDU IZLASKA
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog = false },
+            containerColor = Color(0xFF1A1A1A),
+            title = {
+                Text(
+                    text = "Izlaz iz aplikacije",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "Da li ste sigurni da želite izaći iz aplikacije Media Studio?",
+                    color = Color.LightGray,
+                    fontSize = 16.sp
+                )
+            },
+            confirmButton = {
+                DialogFocusableButton(
+                    text = "Da, izađi",
+                    isPrimary = true,
+                    onClick = { (context as? Activity)?.finish() }
+                )
+            },
+            dismissButton = {
+                DialogFocusableButton(
+                    text = "Odustani",
+                    isPrimary = false,
+                    onClick = { showExitDialog = false }
+                )
+            }
+        )
+    }
+}
+
+// PRILAGOĐENI GUMB ZA DIJALOG (TV FOCUS PODRŠKA)
+@Composable
+private fun DialogFocusableButton(
+    text: String,
+    isPrimary: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .background(
+                color = when {
+                    isFocused -> Color.Red
+                    isPrimary -> Color(0xFF990000)
+                    else -> Color(0xFF2B2B2B)
+                },
+                shape = RoundedCornerShape(8.dp)
+            )
+            .border(
+                width = if (isFocused) 2.5.dp else 1.dp,
+                color = if (isFocused) Color.White else Color.DarkGray,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
+        )
     }
 }
 
