@@ -162,6 +162,7 @@ fun DetailsScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
+                    // AŽURIRANO: Ako ima više videa (serija ili filmografija), ispisujemo listu umjesto gumba za rezolucije
                     if (info.qualities.size > 1) {
                         Text(
                             text = "Odaberi naslov iz kolekcije (${info.qualities.size}):",
@@ -172,6 +173,7 @@ fun DetailsScreen(
                             textAlign = TextAlign.Start
                         )
                         
+                        // Favoriti Gumb
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -208,10 +210,19 @@ fun DetailsScreen(
                             }
                         }
 
+                        // Lista Filmova/Epizoda
                         info.qualities.forEachIndexed { index, quality ->
                             val epInteractionSource = remember { MutableInteractionSource() }
                             val isEpFocused by epInteractionSource.collectIsFocusedAsState()
                             val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
+
+                            // AŽURIRANO: Čišćenje naziva datoteke kako bi izgledalo kao naslov filma
+                            val cleanTitle = quality.label
+                                .substringBeforeLast(".") // Uklanja .mp4 ili .mkv
+                                .replace(Regex("(?i)(_|-|\\.)"), " ") // Pretvara podvlake i crtice u razmak
+                                .replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip)\\b"), "") // Briše tehničke podatke
+                                .replace(Regex("\\s+"), " ")
+                                .trim()
 
                             Box(
                                 modifier = mod
@@ -239,20 +250,20 @@ fun DetailsScreen(
                                         fontSize = 16.sp,
                                         modifier = Modifier.width(36.dp)
                                     )
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                                         Text(
-                                            text = quality.label.substringBeforeLast(".").replace("_", " "),
+                                            text = cleanTitle.ifEmpty { "Naslov ${index + 1}" },
                                             color = Color.White,
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp
+                                            fontSize = 16.sp
                                         )
                                     }
-                                    Spacer(modifier = Modifier.weight(1f))
                                     Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
                                 }
                             }
                         }
                     } else {
+                        // Klasični prikaz za 1 film (samo gumb POKRENI i FAVORITI u jednom redu)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
