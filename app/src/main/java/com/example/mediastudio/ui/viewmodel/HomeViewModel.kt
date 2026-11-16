@@ -145,7 +145,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "seinfeld", "friends", "the simpsons", "x-files", "sopranos", "the wire", "breaking bad",
         "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter",
         "alf", "roots", "monty python", "aeon flux", "hitchhiker's guide", "shogun", "galactica",
-        "v the series", "alien nation"
+        "v the series", "alien nation", "buck rogers", "one step beyond", "quark", "creepy crawlers",
+        "chocky"
     )
     
     private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
@@ -663,6 +664,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
+                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
                 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
@@ -704,17 +706,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         var clean = rawTitle
-        // Ukloni godine (npr. (1998), [2004])
-        clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\])"), "")
+        // Ukloni godine (npr. (1998), [2004], 1984 85)
+        clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
         
-        // Odreži sve od sezone, epizode, dijela, volumena pa do kraja stringa
+        // Odreži sve od specifičnih riječi za epizode, sezone itd.
         clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
         
         // Odreži formate 1x01, 2x05
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
         
+        // Specifično rezanje za poznate serije (ako se pojave riječi nakon imena serije)
+        val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
+        for (series in knownSeries) {
+            if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
+                // Zadrži samo ime serije
+                clean = series
+                break
+            }
+        }
+        
         // Ukloni nepotrebne sufikse
-        clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized)"), "")
+        clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
         
         // Ukloni crtice s brojevima na kraju (npr. "Naziv serije - 01")
         clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
