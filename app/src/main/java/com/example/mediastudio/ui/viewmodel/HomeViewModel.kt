@@ -94,13 +94,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // STROGI 18+ FILTER
+    // STROGI 18+ FILTER (Osnovni)
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
         "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
         "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france",
         "nsfw", "nude", "naked", "masturbating", "vintage porn", "erotik film",
         "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
+    )
+
+    // AŽURIRANO: Specifični filter za izbacivanje samo Hentai i male gay sadržaja
+    private val blockedSpecificAdultKeywords = listOf(
+        "hentai", "yaoi", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
 
     // STROGI FILTER ZA DIGITALNO SMEĆE, VIJESTI I NEŽELJENE KULTURE
@@ -110,7 +115,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "islam", "quran", "khutba", "dourous", "muslim", "allah", "sheikh",
         "bollywood", "tollywood", "hindi", "telugu", "tamil", "urdu", "punjabi", "desi",
         "bengali", "malayalam", "marathi", "gujarati", "arab", "arabic",
-        "amateur", "vlog", "raw footage", "home movie", "home video", "commercials"
+        "amateur", "vlog", "raw footage", "home movie", "home video", "commercials",
+        "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
     )
 
     // PREMIUM HOLLYWOOD/EURO/JAPAN KLJUČNE RIJEČI ZA IMDB BODOVANJE I RANKING
@@ -121,8 +127,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood",
         "bbc", "channel 4", "film noir", "cult classic"
     )
-
-    // --- JEDNOSTAVNI API UPITI (Da izbjegnemo rušenje Archive.org servera) ---
     
     // Baza Filmova (Kolekcije iz tvojih slika)
     private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
@@ -152,7 +156,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    // Baza Serija (Tvoje kolekcije: classic_tv, television_inbox, televisionmovies)
+    // Baza Serija
     private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
@@ -170,7 +174,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val concertGenreDefinitions = listOf(
         GenreOption("Najgledaniji Koncerti", concertBaseQuery, "downloads desc", isConcertCategory = true),
         GenreOption("Najnovije (Live)", concertBaseQuery, "addeddate desc", isConcertCategory = true),
-        GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge)", "downloads desc", isConcertCategory = true),
+        GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge OR \"hard rock\")", "downloads desc", isConcertCategory = true),
         GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
         GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
     )
@@ -315,6 +319,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
     }
 
+    private fun isBannedSpecificAdultContent(id: String, title: String, desc: String): Boolean {
+        val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()}"
+        return blockedSpecificAdultKeywords.any { keyword -> combined.contains(keyword) }
+    }
+
     private fun loadAllContent() {
         viewModelScope.launch {
             _isLoading.value = true
@@ -357,10 +366,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val concertDeferred = concertGenreDefinitions.map { genre ->
                     async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = 150,
+                            rows = if (isWeeklyTop) 300 else 150,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -368,7 +378,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isSeriesCategory = false,
                             isConcertCategory = true
                         )
-                        genre to results.map { it.movie }.take(20)
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
                 }
 
@@ -472,7 +482,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // GLAVNA KOTLIN LOGIKA ZA FILTRIRANJE I RANGIRANJE
     private suspend fun fetchAndRankByRelevance(
         query: String,
         apiSort: String,
@@ -505,7 +514,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 // 1. BLOKADA SMEĆA (Arapsko, Indijsko, Vijesti, Amatersko)
                 if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
                 
-                // 2. 18+ Logika
+                // 2. 18+ Logika (Blokira Hentai/Gay posvuda)
+                if (isBannedSpecificAdultContent(id, finalTitle, descText)) return@mapNotNull null
                 if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
                 if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
 
@@ -519,11 +529,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     return@mapNotNull null
                 }
                 
-                // 5. Križanje kategorija (Film u Serijama i obrnuto)
-                if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
-                if (isConcertCategory && (titleLower.contains("season ") || titleLower.contains("episode ") || fullMetaLower.contains("tv series"))) return@mapNotNull null
+                // 5. STROGI KONCERT FILTERI
+                if (isConcertCategory) {
+                    if (runtimeMinutes in 1..39) return@mapNotNull null 
+                    if (titleLower.contains("season ") || titleLower.contains("episode ") || fullMetaLower.contains("tv series")) return@mapNotNull null
+                    if (titleLower.contains("news") || titleLower.contains("documentary") || titleLower.contains("music video")) return@mapNotNull null
+                }
 
-                // --- BODOVANJE (Premium Ranking) ---
+                // 6. Križanje kategorija
+                if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
+
                 var score = 0.0
 
                 val ratingVal = when (val r = doc.avgRating) {
@@ -556,11 +571,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
                 
-                // Trajanje (Pravi dugometražni filmovi iskaču na vrh)
+                // Trajanje 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
                 
-                // Veličina datoteke (Veće datoteke su bolja kvaliteta)
+                // Veličina datoteke
+                if (isConcertCategory && itemSizeMb < 400) return@mapNotNull null 
                 if (itemSizeMb >= 800) score += 1000.0
                 if (itemSizeMb >= 2000) score += 1500.0 
 
