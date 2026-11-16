@@ -103,7 +103,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
     )
 
-    // AŽURIRANO: Specifični filter za izbacivanje samo Hentai i male gay sadržaja
     private val blockedSpecificAdultKeywords = listOf(
         "hentai", "yaoi", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
@@ -119,13 +118,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
     )
 
-    // PREMIUM HOLLYWOOD/EURO/JAPAN KLJUČNE RIJEČI ZA IMDB BODOVANJE I RANKING
+    // AŽURIRANO: PREMIUM STUDIJI, REDATELJI I GLUMCI ZA BODOVANJE
     private val notableCinemaKeywords = listOf(
+        // Studiji i franšize
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
+        "bbc", "channel 4", "film noir", "cult classic", "masterpiece",
+        // Redatelji
         "kurosawa", "ghibli", "miyazaki", "tarantino", "scorsese", "spielberg", "hitchcock",
-        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood",
-        "bbc", "channel 4", "film noir", "cult classic"
+        "coppola", "cameron", "nolan", "kubrick", "ridley scott", "george lucas", "peter jackson",
+        // Glumci
+        "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
+        "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", "keanu reeves",
+        // Priznanja
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood"
+    )
+
+    // NOVO: LEGENDARNI NASLOVI (Serije i Filmovi koji automatski idu na Vrh!)
+    private val legendaryTitles = listOf(
+        "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
+        "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
+        "star trek", "everybody loves raymond", "3rd rock from the sun", "third rock from the sun",
+        "seinfeld", "friends", "the simpsons", "x-files", "sopranos", "the wire", "breaking bad",
+        "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter"
     )
     
     // Baza Filmova (Kolekcije iz tvojih slika)
@@ -211,6 +226,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSearchingGlobal = MutableStateFlow(false)
     val isSearchingGlobal: StateFlow<Boolean> = _isSearchingGlobal
 
+    private val _currentSearchQuery = MutableStateFlow("")
+    val currentSearchQuery: StateFlow<String> = _currentSearchQuery
+
     private var searchJob: Job? = null
 
     private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
@@ -276,6 +294,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun performGlobalSearch(query: String) {
         searchJob?.cancel()
         val trimmed = query.trim()
+        _currentSearchQuery.value = trimmed
+
         if (trimmed.length < 3) {
             _globalSearchResults.value = emptyList()
             _isSearchingGlobal.value = false
@@ -303,7 +323,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAdultCategory = false,
                     isAnimationCategory = true,
                     isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
-                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS
+                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS,
+                    searchQueryForRanking = trimmed
                 )
                 _globalSearchResults.value = results
             } catch (e: Exception) {
@@ -491,7 +512,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         isAdultCategory: Boolean,
         isAnimationCategory: Boolean,
         isSeriesCategory: Boolean,
-        isConcertCategory: Boolean
+        isConcertCategory: Boolean,
+        searchQueryForRanking: String? = null
     ): Pair<List<RatedMovie>, Int> {
         return try {
             val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
@@ -511,35 +533,40 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val titleLower = finalTitle.lowercase()
                 val fullMetaLower = "$id $finalTitle$creatorText $descText$collectionText".lowercase()
 
-                // 1. BLOKADA SMEĆA (Arapsko, Indijsko, Vijesti, Amatersko)
                 if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
                 
-                // 2. 18+ Logika (Blokira Hentai/Gay posvuda)
                 if (isBannedSpecificAdultContent(id, finalTitle, descText)) return@mapNotNull null
                 if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
                 if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
 
-                // 3. Blokada Trailera
                 val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
-                // 4. TRAJANJE (Strogo izbacivanje svega ispod 30 min, osim kratkih crtića/serija)
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
                 
-                // 5. STROGI KONCERT FILTERI
                 if (isConcertCategory) {
                     if (runtimeMinutes in 1..39) return@mapNotNull null 
                     if (titleLower.contains("season ") || titleLower.contains("episode ") || fullMetaLower.contains("tv series")) return@mapNotNull null
                     if (titleLower.contains("news") || titleLower.contains("documentary") || titleLower.contains("music video")) return@mapNotNull null
                 }
 
-                // 6. Križanje kategorija
                 if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
 
                 var score = 0.0
+
+                // AŽURIRANO: Ako je netko pretraživao točan naziv (npr "godfather"), leti na vrh s +10000!
+                if (searchQueryForRanking != null && searchQueryForRanking.isNotBlank()) {
+                    if (titleLower.contains(searchQueryForRanking.lowercase())) {
+                        score += 10000.0 
+                    }
+                }
+
+                // AŽURIRANO: "Legendarni" naslovi koji se automatski traže na naslovnici (Star wars, Godfather, Matrix...)
+                val legendaryMatches = legendaryTitles.count { titleLower.contains(it) }
+                score += legendaryMatches * 5000.0 
 
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
@@ -553,29 +580,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val itemSizeMb = parseSizeMb(doc.itemSize)
 
+                // IMDB i Ocjene
                 if (ratingVal > 0.0) {
-                    score += ratingVal * 1000.0 
-                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 300.0 
+                    score += ratingVal * 1500.0 // Povećan značaj ocjena
+                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 400.0 
                 } else {
                     score += 500.0
                 }
+                if (fullMetaLower.contains("imdb")) score += 2000.0
 
-                // IMDB, Oscar i poznati Hollywoodski/Europski redatelji i studiji dobivaju MASIVAN BOOST
+                // Redatelji, Glumci, Studiji
                 val premiumHits = notableCinemaKeywords.count { fullMetaLower.contains(it) }
                 score += premiumHits * 2500.0 
 
-                // Dodatni bodovi za vrhunske filmske kolekcije
                 if (collectionText.lowercase().contains("laserdiscarchive")) score += 3000.0
                 if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 3000.0
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
                 
-                // Trajanje 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
                 
-                // Veličina datoteke
                 if (isConcertCategory && itemSizeMb < 400) return@mapNotNull null 
                 if (itemSizeMb >= 800) score += 1000.0
                 if (itemSizeMb >= 2000) score += 1500.0 
