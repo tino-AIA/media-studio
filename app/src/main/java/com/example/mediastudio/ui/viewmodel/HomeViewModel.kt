@@ -778,7 +778,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
         
         // Odreži sve od specifičnih riječi za epizode, sezone itd.
-        clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
+        clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
         
         // Odreži formate 1x01, 2x05
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
