@@ -103,6 +103,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
     )
 
+    // Specifični filter za izbacivanje samo Hentai i male gay sadržaja
     private val blockedSpecificAdultKeywords = listOf(
         "hentai", "yaoi", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
@@ -166,7 +167,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    // AŽURIRANO: Baza Serija sada uključuje classic_tv_1970s
+    // Baza Serija
     private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
@@ -284,6 +285,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectTab(tab: ContentTab) {
         _selectedTab.value = tab
+    }
+    
+    fun updateSearchQuery(query: String) {
+        _currentSearchQuery.value = query
+        performGlobalSearch(query)
     }
 
     fun performGlobalSearch(query: String) {
@@ -574,7 +580,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val itemSizeMb = parseSizeMb(doc.itemSize)
 
                 if (ratingVal > 0.0) {
-                    score += ratingVal * 1500.0
+                    score += ratingVal * 1500.0 
                     if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 400.0 
                 } else {
                     score += 500.0
@@ -588,8 +594,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
-                
-                // AŽURIRANO: Mali boost i za serije kolekcije
                 if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
                 
                 if (runtimeMinutes >= 75) score += 1000.0
