@@ -118,23 +118,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
     )
 
-    // AŽURIRANO: PREMIUM STUDIJI, REDATELJI I GLUMCI ZA BODOVANJE
+    // PREMIUM STUDIJI, REDATELJI I GLUMCI ZA BODOVANJE
     private val notableCinemaKeywords = listOf(
-        // Studiji i franšize
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
         "bbc", "channel 4", "film noir", "cult classic", "masterpiece",
-        // Redatelji
         "kurosawa", "ghibli", "miyazaki", "tarantino", "scorsese", "spielberg", "hitchcock",
         "coppola", "cameron", "nolan", "kubrick", "ridley scott", "george lucas", "peter jackson",
-        // Glumci
         "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
         "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", "keanu reeves",
-        // Priznanja
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood"
     )
 
-    // NOVO: LEGENDARNI NASLOVI (Serije i Filmovi koji automatski idu na Vrh!)
+    // LEGENDARNI NASLOVI
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
         "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
@@ -143,7 +139,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter"
     )
     
-    // Baza Filmova (Kolekcije iz tvojih slika)
+    // Baza Filmova 
     private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
 
     val movieGenreDefinitions = listOf(
@@ -162,7 +158,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Dokumentarni", "$movieBaseQuery AND subject:documentary"),
         
-        // 18+ Zasebna kategorija
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\") OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
@@ -171,8 +166,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    // Baza Serija
-    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
+    // AŽURIRANO: Baza Serija sada uključuje classic_tv_1970s
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
@@ -557,14 +552,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 var score = 0.0
 
-                // AŽURIRANO: Ako je netko pretraživao točan naziv (npr "godfather"), leti na vrh s +10000!
                 if (searchQueryForRanking != null && searchQueryForRanking.isNotBlank()) {
                     if (titleLower.contains(searchQueryForRanking.lowercase())) {
                         score += 10000.0 
                     }
                 }
 
-                // AŽURIRANO: "Legendarni" naslovi koji se automatski traže na naslovnici (Star wars, Godfather, Matrix...)
                 val legendaryMatches = legendaryTitles.count { titleLower.contains(it) }
                 score += legendaryMatches * 5000.0 
 
@@ -580,16 +573,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val itemSizeMb = parseSizeMb(doc.itemSize)
 
-                // IMDB i Ocjene
                 if (ratingVal > 0.0) {
-                    score += ratingVal * 1500.0 // Povećan značaj ocjena
+                    score += ratingVal * 1500.0
                     if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 400.0 
                 } else {
                     score += 500.0
                 }
-                if (fullMetaLower.contains("imdb")) score += 2000.0
 
-                // Redatelji, Glumci, Studiji
                 val premiumHits = notableCinemaKeywords.count { fullMetaLower.contains(it) }
                 score += premiumHits * 2500.0 
 
@@ -598,6 +588,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
+                
+                // AŽURIRANO: Mali boost i za serije kolekcije
+                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
                 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
