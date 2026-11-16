@@ -130,13 +130,26 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
-        "bbc", "channel 4", "film noir", "cult classic", "masterpiece",
+        "bbc", "channel 4", "film noir", "cult classic", "masterpiece", "hollywood",
+
         "kurosawa", "ghibli", "miyazaki", "tarantino", "scorsese", "spielberg", "hitchcock",
         "coppola", "cameron", "nolan", "kubrick", "ridley scott", "george lucas", "peter jackson",
+        "david fincher", "wes anderson", "paul thomas anderson", "denis villeneuve",
+        "clint eastwood", "woody allen", "roman polanski", "david lynch", "ingmar bergman",
+        "federico fellini", "andrei tarkovsky", "jean-luc godard", "francois truffaut",
+        "luis bunuel", "john ford", "howard hawks", "charlie chaplin", "billy wilder",
+        "orson welles", "sergio leone", "brian de palma", "john carpenter", "david cronenberg",
+        "michael mann", "john woo", "takeshi kitano", "pedro almodovar", "guillermo del toro",
+        "alfonso cuaron", "bong joon ho", "park chan-wook", "wong kar-wai", "jesús franco", "jesus franco",
+        
         "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
         "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", "keanu reeves",
-        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood",
-        "lars von trier", "david cronenberg", "takeshi kitano", "jesús franco", "jesus franco"
+        "sylvester stallone", "arnold schwarzenegger", "bruce willis", "denzel washington", 
+        "johnny depp", "will smith", "christian bale", "matt damon", "anthony hopkins", 
+        "meryl streep", "cate blanchett", "nicole kidman", "jodie foster", "sigourney weaver", 
+        "natalie portman", "charlize theron", "angelina jolie", "scarlett johansson",
+
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
     private val legendaryTitles = listOf(
@@ -150,15 +163,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "chocky"
     )
     
-    // AŽURIRANO: Dodana kolekcija opensource_movies (Community Video) u bazični upit za normalne filmove
     private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
 
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
         
-        // NOVO: Kategorija samo za Filmografije i Kolekcije autora
-        GenreOption("Filmografije Redatelja", "$movieBaseQuery AND (title:filmography OR title:\"films of\" OR title:\"collection of\")", "downloads desc"),
+        GenreOption(
+            title = "Filmografije i Kolekcije Autora",
+            query = "$movieBaseQuery AND (title:filmography OR subject:filmography OR title:\"films of\" OR title:\"collection of\")",
+            defaultSort = "downloads desc"
+        ),
         
         GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$movieBaseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
@@ -173,7 +188,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
         
-        // AŽURIRANO: Uklonjen Lars von Trier iz erotskog queryja
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
