@@ -34,7 +34,8 @@ data class GenreOption(
     val isAdultCategory: Boolean = false,
     val isAnimationCategory: Boolean = false,
     val isSeriesCategory: Boolean = false,
-    val isConcertCategory: Boolean = false
+    val isConcertCategory: Boolean = false,
+    val isAuthorCollection: Boolean = false 
 )
 
 data class RatedMovie(
@@ -131,25 +132,36 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
         "bbc", "channel 4", "film noir", "cult classic", "masterpiece", "hollywood",
-
-        "kurosawa", "ghibli", "miyazaki", "tarantino", "scorsese", "spielberg", "hitchcock",
-        "coppola", "cameron", "nolan", "kubrick", "ridley scott", "george lucas", "peter jackson",
-        "david fincher", "wes anderson", "paul thomas anderson", "denis villeneuve",
-        "clint eastwood", "woody allen", "roman polanski", "david lynch", "ingmar bergman",
-        "federico fellini", "andrei tarkovsky", "jean-luc godard", "francois truffaut",
-        "luis bunuel", "john ford", "howard hawks", "charlie chaplin", "billy wilder",
-        "orson welles", "sergio leone", "brian de palma", "john carpenter", "david cronenberg",
-        "michael mann", "john woo", "takeshi kitano", "pedro almodovar", "guillermo del toro",
-        "alfonso cuaron", "bong joon ho", "park chan-wook", "wong kar-wai", "jesús franco", "jesus franco",
-        
-        "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
-        "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", "keanu reeves",
-        "sylvester stallone", "arnold schwarzenegger", "bruce willis", "denzel washington", 
-        "johnny depp", "will smith", "christian bale", "matt damon", "anthony hopkins", 
-        "meryl streep", "cate blanchett", "nicole kidman", "jodie foster", "sigourney weaver", 
-        "natalie portman", "charlize theron", "angelina jolie", "scarlett johansson",
-
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
+    )
+
+    private val knownAuthorsAndActors = listOf(
+        "david cronenberg", "elvis presley", "ingmar bergman", "sergio leone", "brian de palma",
+        "martin scorsese", "steven spielberg", "alfred hitchcock", "stanley kubrick", 
+        "francis ford coppola", "quentin tarantino", "christopher nolan", "james cameron", 
+        "ridley scott", "george lucas", "peter jackson", "david fincher", "wes anderson", 
+        "paul thomas anderson", "denis villeneuve", "clint eastwood", "woody allen", 
+        "roman polanski", "david lynch", "federico fellini", "andrei tarkovsky", 
+        "jean-luc godard", "francois truffaut", "luis bunuel", "john ford", "howard hawks", 
+        "charlie chaplin", "billy wilder", "orson welles", "michael mann", "john woo", 
+        "takeshi kitano", "pedro almodovar", "guillermo del toro", "alfonso cuaron", 
+        "bong joon ho", "park chan-wook", "wong kar-wai", "jesus franco", "jesús franco",
+        "akira kurosawa", "hayao miyazaki", "bela tarr", "werner herzog", "lars von trier", 
+        "john carpenter", "george a. romero", "dario argento", "lucio fulci", "mario bava", 
+        "jean renoir", "satyajit ray", "yasujiro ozu", "kenji mizoguchi", "edgar wright", 
+        "tim burton", "terry gilliam", "david lean", "sidney lumet", "buster keaton", 
+        "jacques rivette", "agnes varda", "john cassavetes",
+        "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
+        "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", 
+        "keanu reeves", "sylvester stallone", "arnold schwarzenegger", "bruce willis", 
+        "denzel washington", "johnny depp", "will smith", "christian bale", "matt damon", 
+        "anthony hopkins", "meryl streep", "cate blanchett", "nicole kidman", "jodie foster", 
+        "sigourney weaver", "natalie portman", "charlize theron", "angelina jolie", 
+        "scarlett johansson", "marilyn monroe", "james dean", "humphrey bogart", "cary grant", 
+        "audrey hepburn", "katherine hepburn", "paul newman", "steve mcqueen", "sean connery", 
+        "charles bronson", "chuck norris", "jackie chan", "bruce lee", "jet li", 
+        "jean-claude van damme", "dolph lundgren", "steven seagal", "kevin costner", 
+        "mel gibson", "tom hardy", "ryan gosling", "emma stone", "jennifer lawrence"
     )
 
     private val legendaryTitles = listOf(
@@ -171,8 +183,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         
         GenreOption(
             title = "Filmografije i Kolekcije Autora",
-            query = "$movieBaseQuery AND (title:filmography OR subject:filmography OR title:\"films of\" OR title:\"collection of\")",
-            defaultSort = "downloads desc"
+            query = "$movieBaseQuery AND (title:filmography OR subject:filmography OR title:\"films of\" OR title:\"collection of\" OR title:\"directed by\" OR title:\"starring\")",
+            defaultSort = "downloads desc",
+            isAuthorCollection = true 
         ),
         
         GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
@@ -388,6 +401,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAnimationCategory = true,
                     isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
                     isConcertCategory = _selectedTab.value == ContentTab.CONCERTS,
+                    isAuthorCollection = false,
                     searchQueryForRanking = trimmed
                 )
                 _globalSearchResults.value = results
@@ -428,7 +442,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isAdultCategory = genre.isAdultCategory,
                             isAnimationCategory = genre.isAnimationCategory,
                             isSeriesCategory = false,
-                            isConcertCategory = false
+                            isConcertCategory = false,
+                            isAuthorCollection = genre.isAuthorCollection
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -446,7 +461,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
                             isSeriesCategory = true,
-                            isConcertCategory = false
+                            isConcertCategory = false,
+                            isAuthorCollection = genre.isAuthorCollection
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -464,7 +480,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isAdultCategory = false,
                             isAnimationCategory = false,
                             isSeriesCategory = false,
-                            isConcertCategory = true
+                            isConcertCategory = true,
+                            isAuthorCollection = genre.isAuthorCollection
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -576,7 +593,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAdultCategory = genre.isAdultCategory,
                     isAnimationCategory = genre.isAnimationCategory,
                     isSeriesCategory = genre.isSeriesCategory,
-                    isConcertCategory = genre.isConcertCategory
+                    isConcertCategory = genre.isConcertCategory,
+                    isAuthorCollection = genre.isAuthorCollection
                 )
 
                 _genreMovies.value = results.take(targetLimit)
@@ -607,6 +625,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         isAnimationCategory: Boolean,
         isSeriesCategory: Boolean,
         isConcertCategory: Boolean,
+        isAuthorCollection: Boolean = false,
         searchQueryForRanking: String? = null
     ): Pair<List<RatedMovie>, Int> {
         return try {
@@ -636,11 +655,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
                 if (isTrailerOrClip) return@mapNotNull null
 
+                var score = 0.0
+
+                if (isAuthorCollection) {
+                    val matchesKnown = knownAuthorsAndActors.any { titleLower.contains(it) || fullMetaLower.contains(it) }
+                    val hasNamePattern = Regex("\\b[A-Z][a-z]+\\s+[A-Z][a-z]+\\b").containsMatchIn(finalTitle)
+                    
+                    val junkCollectionTerms = listOf(
+                        "sci-fi", "science fiction", "horror", "action", "comedy", "hitler", "nazi", 
+                        "history", "war", "public domain", "vintage", "retro", "classic", "vhs", "drive-in",
+                        "martial arts", "kung fu", "spaghetti western", "thriller", "mystery", "drama",
+                        "century", "decade", "various"
+                    )
+                    val isJunkCollection = junkCollectionTerms.any { 
+                        titleLower.contains("collection of $it") || titleLower.contains("$it films") || titleLower.contains(it) 
+                    }
+                    
+                    if (isJunkCollection && !matchesKnown) return@mapNotNull null
+                    if (!matchesKnown && !hasNamePattern) return@mapNotNull null
+                    
+                    if (matchesKnown) {
+                        score += 50000.0 
+                    } else if (hasNamePattern) {
+                        score += 15000.0 
+                    }
+                }
+
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 
                 if (isAdultCategory) {
                     if (runtimeMinutes in 1..10) return@mapNotNull null 
-                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
+                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory && !isAuthorCollection) {
                     return@mapNotNull null
                 }
                 
@@ -650,8 +695,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
-
-                var score = 0.0
 
                 if (searchQueryForRanking != null && searchQueryForRanking.isNotBlank()) {
                     if (titleLower.contains(searchQueryForRanking.lowercase())) {
