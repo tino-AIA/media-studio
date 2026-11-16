@@ -34,8 +34,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -103,6 +105,10 @@ fun PlayerScreen(
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
     var currentSubtitleText by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableLongStateOf(0L) }
+    
+    // NOVO: Audio dijalozi
+    var showAudioDialog by remember { mutableStateOf(false) }
+    var hasMultipleAudioTracks by remember { mutableStateOf(false) }
 
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
@@ -130,27 +136,24 @@ fun PlayerScreen(
             .build()
     }
 
-    // AŽURIRANO PONAŠANJE TIPKE BACK (Netflix OSD logika)
     BackHandler {
         when {
             showQualityDialog -> showQualityDialog = false
             showSubtitleDialog -> showSubtitleDialog = false
+            showAudioDialog -> showAudioDialog = false
             showControls -> {
-                // Ako je OSD vidljiv, samo ga sakrij i vrati fokus na korijen
                 showControls = false
                 try {
                     rootFocusRequester.requestFocus()
                 } catch (_: Exception) {}
             }
             exoPlayer.isPlaying -> {
-                // Ako OSD nije vidljiv i film ide, pauziraj
                 exoPlayer.pause()
                 isPlaying = false
                 quickHudMessage = "⏸ Pauzirano (pritisni Back ponovno za izlaz)"
                 quickHudTick++
             }
             else -> {
-                // Ako OSD nije vidljiv i film je pauziran, izađi
                 exoPlayer.stop()
                 onNavigateBack()
             }
@@ -185,8 +188,8 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(showControls, controlsInteractionTick, isPlaying, showQualityDialog, showSubtitleDialog) {
-        if (showControls && isPlaying && !showQualityDialog && !showSubtitleDialog) {
+    LaunchedEffect(showControls, controlsInteractionTick, isPlaying, showQualityDialog, showSubtitleDialog, showAudioDialog) {
+        if (showControls && isPlaying && !showQualityDialog && !showSubtitleDialog && !showAudioDialog) {
             delay(5000L)
             showControls = false
             try {
@@ -216,6 +219,12 @@ fun PlayerScreen(
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L)
                 }
+            }
+            
+            // NOVO: Otkrivanje broja audio traka kada se učitaju podaci (Tracks)
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                hasMultipleAudioTracks = audioGroups.sumOf { it.length } > 1
             }
         }
         exoPlayer.addListener(listener)
@@ -255,7 +264,7 @@ fun PlayerScreen(
                 val native = keyEvent.nativeKeyEvent
                 val keyCode = native.keyCode
 
-                if (showQualityDialog || showSubtitleDialog) {
+                if (showQualityDialog || showSubtitleDialog || showAudioDialog) {
                     return@onPreviewKeyEvent false
                 }
 
@@ -455,10 +464,22 @@ fun PlayerScreen(
                                 controlsInteractionTick++
                             }
                         )
-
-                        if (availableQualities.isNotEmpty()) {
+                        
+                        // NOVO: Prikaz gumba za Audio ako imamo više zvučnih traka
+                        if (hasMultipleAudioTracks) {
                             PlayerChipButton(
-                                label = selectedQuality?.label?.substringBefore(" ") ?: "HD",
+                                label = "🔊 Audio",
+                                onClick = { showAudioDialog = true }
+                            )
+                        }
+
+                        // AŽURIRANO: Logika za Epizode vs Rezolucije
+                        if (availableQualities.size > 1) {
+                            val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
+                            val btnLabel = if (isEpisodic) "📺 Epizode" else "⚙ Verzija"
+                            
+                            PlayerChipButton(
+                                label = btnLabel,
                                 onClick = { showQualityDialog = true }
                             )
                         }
@@ -572,12 +593,57 @@ fun PlayerScreen(
                 }
             }
         }
+        
+        // NOVO: Dijalog za odabir Audio trake
+        if (showAudioDialog) {
+            AlertDialog(
+                onDismissRequest = { showAudioDialog = false },
+                containerColor = Color(0xFF1A1A1A),
+                title = { Text("Odaberi audio traku", color = Color.White) },
+                text = {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        audioGroups.forEach { group ->
+                            for (trackIndex in 0 until group.length) {
+                                val format = group.getTrackFormat(trackIndex)
+                                val lang = format.language?.uppercase() ?: "NEPOZNATO"
+                                val label = format.label ?: "Traka ${trackIndex + 1}"
+                                val isSelected = group.isTrackSelected(trackIndex)
+                                
+                                item {
+                                    DialogFocusableRow(
+                                        label = "[$lang] $label",
+                                        isSelected = isSelected,
+                                        onClick = {
+                                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                .buildUpon()
+                                                .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+                                                .build()
+                                            showAudioDialog = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAudioDialog = false }) {
+                        Text("Zatvori", color = Color.Red)
+                    }
+                }
+            )
+        }
 
+        // AŽURIRANO: Izbornik za odabir epizode/rezolucije
         if (showQualityDialog) {
+            val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
+            val dialogTitle = if (isEpisodic) "Odaberi Epizodu" else "Odaberi Verziju / Rezoluciju"
+            
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = { Text("Odaberi rezoluciju videa", color = Color.White) },
+                title = { Text(dialogTitle, color = Color.White) },
                 text = {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(availableQualities) { quality ->
