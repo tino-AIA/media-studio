@@ -167,9 +167,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
         
+        // AŽURIRANO: Uključen "sex" subjekt i autor "Lars Von Trier"
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\") OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"lars von trier\"))",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
@@ -616,11 +617,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
+                
+                // AŽURIRANO: Specifično pravilo za 18+ (strogo dulje od 10 minuta, kratki isječci se odbacuju)
+                if (isAdultCategory) {
+                    if (runtimeMinutes in 1..10) return@mapNotNull null 
+                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
                 
                 if (isConcertCategory) {
+                    if (runtimeMinutes in 1..29) return@mapNotNull null 
                     if (titleLower.contains("season ") || titleLower.contains("episode ")) return@mapNotNull null
                 }
 
