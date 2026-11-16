@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,8 +45,10 @@ fun SearchScreen(
     val searchResults by viewModel.globalSearchResults.collectAsState()
     val isSearching by viewModel.isSearchingGlobal.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
-
-    var query by remember { mutableStateOf("") }
+    
+    // AŽURIRANO: Preuzima vrijednost DIREKTNO iz ViewModela kako bi preživio Back navigaciju
+    val query by viewModel.currentSearchQuery.collectAsState() 
+    
     val focusManager = LocalFocusManager.current
     val firstKeyFocusRequester = remember { FocusRequester() }
 
@@ -60,8 +63,7 @@ fun SearchScreen(
 
     BackHandler {
         if (query.isNotEmpty()) {
-            query = ""
-            viewModel.performGlobalSearch("")
+            viewModel.updateSearchQuery("") // Čisti query u ViewModelu
         } else {
             onBackClick()
         }
@@ -69,6 +71,7 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) {
         try {
+            // Ako želimo odmah na tipkovnicu kad se otvori search
             firstKeyFocusRequester.requestFocus()
         } catch (_: Exception) {
         }
@@ -114,8 +117,8 @@ fun SearchScreen(
                 OutlinedTextField(
                     value = query,
                     onValueChange = {
-                        query = it
-                        viewModel.performGlobalSearch(it)
+                        // AŽURIRANO: Update se sada šalje direktno u ViewModel
+                        viewModel.updateSearchQuery(it)
                     },
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true, // ONEMOGUĆUJE pojavljivanje sistemske tipkovnice preko cijelog ekrana
@@ -148,8 +151,7 @@ fun SearchScreen(
                         label = "RAZMAK",
                         modifier = Modifier.weight(1.2f),
                         onClick = {
-                            query += " "
-                            viewModel.performGlobalSearch(query)
+                            viewModel.updateSearchQuery(query + " ")
                         }
                     )
                     NetflixKeyButton(
@@ -157,8 +159,7 @@ fun SearchScreen(
                         modifier = Modifier.weight(1f),
                         onClick = {
                             if (query.isNotEmpty()) {
-                                query = query.dropLast(1)
-                                viewModel.performGlobalSearch(query)
+                                viewModel.updateSearchQuery(query.dropLast(1))
                             }
                         }
                     )
@@ -166,8 +167,7 @@ fun SearchScreen(
                         label = "OČISTI",
                         modifier = Modifier.weight(0.9f),
                         onClick = {
-                            query = ""
-                            viewModel.performGlobalSearch("")
+                            viewModel.updateSearchQuery("")
                         }
                     )
                 }
@@ -191,8 +191,7 @@ fun SearchScreen(
                                     label = keyChar,
                                     modifier = mod,
                                     onClick = {
-                                        query += keyChar.lowercase()
-                                        viewModel.performGlobalSearch(query)
+                                        viewModel.updateSearchQuery(query + keyChar.lowercase())
                                     }
                                 )
                             }
@@ -257,11 +256,12 @@ fun SearchScreen(
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 items(searchResults) { ratedItem ->
+                                    val isProbablySeries = selectedTab == ContentTab.SERIES
                                     RatedMovieGridCard(
                                         ratedMovie = ratedItem,
-                                        isSeries = selectedTab == ContentTab.SERIES,
+                                        isSeries = isProbablySeries,
                                         onMovieClick = { item ->
-                                            if (selectedTab == ContentTab.SERIES) onSeriesClick(item) else onMovieClick(item)
+                                            if (isProbablySeries) onSeriesClick(item) else onMovieClick(item)
                                         }
                                     )
                                 }
