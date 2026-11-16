@@ -165,6 +165,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
+        
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\") OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
@@ -614,7 +615,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory && !isConcertCategory) {
+                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
                 
@@ -662,7 +663,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
-                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
                 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
@@ -703,20 +703,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
-        return rawTitle
-            .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
-            .replace(Regex("(?i)\\b(part\\s*\\d+|vol\\.?\\s*\\d+|series\\s*\\d+)\\b.*"), "")
-            .replace(Regex("(?i)\\bthe\\s+\\d+(st|nd|rd|th)\\s+season\\b.*"), "") 
-            .replace(Regex("(?i)complete\\b"), "")
-            .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
-            .replace(Regex("(?i)\\bS\\d{1,2}E\\d{1,3}\\b.*"), "") 
-            .replace(Regex("(?i)\\bEpisode[s]?\\s*\\d+.*"), "") 
-            .replace(Regex("(?i)\\d+\\s*episodes?.*"), "")
-            .replace(Regex("(?i)all\\s*\\d+\\s*eps.*"), "") 
-            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-            .ifBlank { rawTitle }
+        var clean = rawTitle
+        // Ukloni godine (npr. (1998), [2004])
+        clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\])"), "")
+        
+        // Odreži sve od sezone, epizode, dijela, volumena pa do kraja stringa
+        clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
+        
+        // Odreži formate 1x01, 2x05
+        clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
+        
+        // Ukloni nepotrebne sufikse
+        clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized)"), "")
+        
+        // Ukloni crtice s brojevima na kraju (npr. "Naziv serije - 01")
+        clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
+        clean = clean.replace(Regex("\\s*-\\s*$"), "")
+        
+        // Ostavi samo slova i brojeve
+        clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+        clean = clean.replace(Regex("\\s+"), " ").trim()
+        
+        return clean.ifBlank { rawTitle }
     }
 
     private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
