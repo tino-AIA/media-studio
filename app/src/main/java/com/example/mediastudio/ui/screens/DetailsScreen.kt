@@ -45,7 +45,7 @@ import java.net.URLEncoder
 @Composable
 fun DetailsScreen(
     movie: ArchiveMovie,
-    viewModel: HomeViewModel, // NOVO: Trebamo ViewModel za Favorite
+    viewModel: HomeViewModel,
     onPlayClick: (String) -> Unit,
     onBackClick: () -> Unit
 ) {
@@ -54,15 +54,14 @@ fun DetailsScreen(
     var isLoading by remember { mutableStateOf(true) }
 
     val playButtonFocusRequester = remember { FocusRequester() }
+    val firstEpisodeFocusRequester = remember { FocusRequester() }
     
-    // Interakcije za Play i Favorite gumbe
     val playInteractionSource = remember { MutableInteractionSource() }
     val isPlayFocused by playInteractionSource.collectIsFocusedAsState()
 
     val favInteractionSource = remember { MutableInteractionSource() }
     val isFavFocused by favInteractionSource.collectIsFocusedAsState()
 
-    // Provjeravamo je li film već favorit
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
 
     BackHandler {
@@ -76,7 +75,11 @@ fun DetailsScreen(
         translatedDescription = translateToCroatian(info.description)
         isLoading = false
         try {
-            playButtonFocusRequester.requestFocus()
+            if (info.qualities.size > 1) {
+                firstEpisodeFocusRequester.requestFocus()
+            } else {
+                playButtonFocusRequester.requestFocus()
+            }
         } catch (_: Exception) {
         }
     }
@@ -84,7 +87,7 @@ fun DetailsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Detalji filma", color = Color.White) },
+                title = { Text(if (movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija / Serija" else "Detalji filma", color = Color.White) },
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
@@ -146,17 +149,6 @@ fun DetailsScreen(
                         )
                     }
 
-                    if (info.qualities.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Dostupno: ${info.qualities.joinToString(", ") { it.label }}",
-                            color = Color(0xFF4CAF50),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
@@ -167,86 +159,175 @@ fun DetailsScreen(
                         textAlign = TextAlign.Start,
                         modifier = Modifier.fillMaxWidth()
                     )
-                }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                // GUMBI ZA PLAY I FAVORITE
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Gumb POKRENI FILM
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(54.dp)
-                            .focusRequester(playButtonFocusRequester)
-                            .background(
-                                color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = if (isPlayFocused) 3.5.dp else 1.dp,
-                                color = if (isPlayFocused) Color.White else Color.Transparent,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable(interactionSource = playInteractionSource, indication = null) {
-                                onPlayClick(movieInfo?.year ?: "")
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "POKRENI",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                    if (info.qualities.size > 1) {
+                        Text(
+                            text = "Odaberi naslov iz kolekcije (${info.qualities.size}):",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                            textAlign = TextAlign.Start
+                        )
+                        
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                                .padding(bottom = 12.dp)
+                                .background(
+                                    color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .border(
+                                    width = if (isFavFocused) 3.5.dp else 1.dp,
+                                    color = if (isFavFocused) Color.White else Color.DarkGray,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable(interactionSource = favInteractionSource, indication = null) {
+                                    viewModel.toggleFavorite(movie)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = null,
+                                    tint = if (isFavorite) Color.Red else Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
                         }
-                    }
 
-                    // Gumb FAVORITI
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(54.dp)
-                            .background(
-                                color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = if (isFavFocused) 3.5.dp else 1.dp,
-                                color = if (isFavFocused) Color.White else Color.DarkGray,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable(interactionSource = favInteractionSource, indication = null) {
-                                viewModel.toggleFavorite(movie)
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = null,
-                                tint = if (isFavorite) Color.Red else Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                        info.qualities.forEachIndexed { index, quality ->
+                            val epInteractionSource = remember { MutableInteractionSource() }
+                            val isEpFocused by epInteractionSource.collectIsFocusedAsState()
+                            val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
+
+                            Box(
+                                modifier = mod
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp)
+                                    .background(
+                                        color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .border(
+                                        width = if (isEpFocused) 3.dp else 1.dp,
+                                        color = if (isEpFocused) Color.White else Color.DarkGray,
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable(interactionSource = epInteractionSource, indication = null) {
+                                        onPlayClick(quality.url)
+                                    }
+                                    .padding(16.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "${index + 1}.",
+                                        color = Color.Red,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                        modifier = Modifier.width(36.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = quality.label.substringBeforeLast(".").replace("_", " "),
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(54.dp)
+                                    .focusRequester(playButtonFocusRequester)
+                                    .background(
+                                        color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .border(
+                                        width = if (isPlayFocused) 3.5.dp else 1.dp,
+                                        color = if (isPlayFocused) Color.White else Color.Transparent,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable(interactionSource = playInteractionSource, indication = null) {
+                                        onPlayClick(info.year)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "POKRENI",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(54.dp)
+                                    .background(
+                                        color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .border(
+                                        width = if (isFavFocused) 3.5.dp else 1.dp,
+                                        color = if (isFavFocused) Color.White else Color.DarkGray,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable(interactionSource = favInteractionSource, indication = null) {
+                                        viewModel.toggleFavorite(movie)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                        contentDescription = null,
+                                        tint = if (isFavorite) Color.Red else Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                 }
