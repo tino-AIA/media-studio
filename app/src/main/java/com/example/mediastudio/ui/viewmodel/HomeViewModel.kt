@@ -153,7 +153,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
         GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
-        GenreOption("Dokumentarni", "$movieBaseQuery AND subject:documentary"),
+        // Moved from series
+        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
         
         GenreOption(
             title = "18+ / Erotski",
@@ -163,25 +164,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    // AŽURIRANO: Uključena 'classic_tv' kolekcija općenito kako bi uhvatili popularne serije
-    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv OR collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
-        // AŽURIRANO: Top 10 serija sada cilja classic_tv i sortira po tjednim pregledima
-        GenreOption("Top 10 serija danas", "mediatype:movies AND collection:classic_tv", "week desc", isSeriesCategory = true),
-        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
+        GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
-        // AŽURIRANO: Uklonjen Vestern, ostavljena samo Avantura
         GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
     )
 
-    private val concertBaseQuery = "mediatype:movies AND (collection:vhs_concerts_and_music OR collection:music_video OR subject:\"live concert\" OR subject:\"music performance\" OR subject:band OR subject:mtv)"
+    // AŽURIRANO: Eksplicitno se oslanja na vhs_concerts_and_music
+    private val concertBaseQuery = "mediatype:movies AND collection:vhs_concerts_and_music"
 
     val concertGenreDefinitions = listOf(
-        GenreOption("Najgledaniji Koncerti", concertBaseQuery, "downloads desc", isConcertCategory = true),
-        GenreOption("Najnovije (Live)", concertBaseQuery, "addeddate desc", isConcertCategory = true),
+        // AŽURIRANO: Sortiranje po tjednim pregledima za Top 10 Koncerte
+        GenreOption("Top 10 Koncerti", concertBaseQuery, "week desc", isConcertCategory = true),
         GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge OR \"hard rock\")", "downloads desc", isConcertCategory = true),
         GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
         GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
@@ -591,8 +589,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
-                // AŽURIRANO: Boost za classic_tv serije
-                if (collectionText.lowercase().contains("classic_tv")) score += 3000.0 
+                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
                 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
