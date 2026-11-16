@@ -183,7 +183,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
     )
 
-    private val concertBaseQuery = "mediatype:movies AND collection:vhs_concerts_and_music"
+    private val concertBaseQuery = "mediatype:movies AND collection:vhsconcerts_music"
 
     val concertGenreDefinitions = listOf(
         GenreOption("Top 10 Koncerti", concertBaseQuery, "week desc", isConcertCategory = true),
@@ -614,14 +614,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isTrailerOrClip) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
+                if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory && !isConcertCategory) {
                     return@mapNotNull null
                 }
                 
                 if (isConcertCategory) {
-                    if (runtimeMinutes in 1..39) return@mapNotNull null 
-                    if (titleLower.contains("season ") || titleLower.contains("episode ") || fullMetaLower.contains("tv series")) return@mapNotNull null
-                    if (titleLower.contains("news") || titleLower.contains("documentary") || titleLower.contains("music video")) return@mapNotNull null
+                    if (titleLower.contains("season ") || titleLower.contains("episode ")) return@mapNotNull null
                 }
 
                 if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
@@ -669,7 +667,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
                 
-                if (isConcertCategory && itemSizeMb < 400) return@mapNotNull null 
                 if (itemSizeMb >= 800) score += 1000.0
                 if (itemSizeMb >= 2000) score += 1500.0 
 
