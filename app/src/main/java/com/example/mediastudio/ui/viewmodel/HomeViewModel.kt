@@ -249,7 +249,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val pageSize = 60
     
-    // AŽURIRANO: Varijabla u kojoj čuvamo zadnje učitani cache
     private var lastLoadedCache: AppCache? = null
 
     init {
@@ -275,7 +274,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val cache = cacheAdapter.fromJson(cachedJson)
                 if (cache != null) {
-                    lastLoadedCache = cache // Spremi cache za brzo otvaranje kategorija
+                    lastLoadedCache = cache 
                     
                     val mMovies = cache.movieCategories.mapNotNull { c -> 
                         movieGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
@@ -464,7 +463,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     concertCategories = loadedConcerts.map { CachedCategory(it.first.title, it.second) },
                     heroMovies = _heroMovies.value.map { CachedHero(it.first, it.second) }
                 )
-                lastLoadedCache = newCache // Spremi i u varijablu da je dostupno odmah
+                lastLoadedCache = newCache 
                 prefs.edit().putString("app_content_cache", cacheAdapter.toJson(newCache)).apply()
                 
             } catch (e: Exception) {
@@ -475,11 +474,44 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // AŽURIRANO: loadGenrePage prvo prikazuje cache ako postoji, pa onda preuzima nove ako treba
+    private fun refreshHeroItems(
+        favs: List<ArchiveMovie>,
+        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
+    ) {
+        val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
+        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
+        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
+        val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
+
+        val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
+        _heroMovies.value = combined
+        
+        startHeroCarousel()
+    }
+
+    private fun startHeroCarousel() {
+        carouselJob?.cancel()
+        _activeHeroIndex.value = 0
+        carouselJob = viewModelScope.launch {
+            while (isActive && _heroMovies.value.isNotEmpty()) {
+                delay(8000) 
+                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
+            }
+        }
+    }
+
+    fun setActiveHeroIndex(index: Int) {
+        if (index in _heroMovies.value.indices) {
+            _activeHeroIndex.value = index
+            startHeroCarousel() 
+        }
+    }
+
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
         
-        // Brzo učitavanje iz već skinutog sadržaja (Cache)
         val cachedContent = when {
             genre.isConcertCategory -> _concertCategories.value.find { it.first.title == genre.title }?.second
             genre.isSeriesCategory -> _seriesCategories.value.find { it.first.title == genre.title }?.second
@@ -494,7 +526,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _genreMovies.value = emptyList()
         }
         
-        // Zatim pozovi API da dohvati ostatak (Page 1)
         loadGenrePage(1)
     }
 
@@ -503,7 +534,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (page < 1) return
 
         viewModelScope.launch {
-            // Ako nemamo već učitane rezultate, upali loader
             if (_genreMovies.value.isEmpty()) {
                 _isGenreLoading.value = true
             }
