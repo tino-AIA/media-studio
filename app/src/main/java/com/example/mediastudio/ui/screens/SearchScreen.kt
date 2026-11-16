@@ -19,10 +19,16 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -34,7 +40,7 @@ import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SearchScreen(
     viewModel: HomeViewModel,
@@ -46,11 +52,11 @@ fun SearchScreen(
     val isSearching by viewModel.isSearchingGlobal.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
     
-    // AŽURIRANO: Preuzima vrijednost DIREKTNO iz ViewModela kako bi preživio Back navigaciju
     val query by viewModel.currentSearchQuery.collectAsState() 
     
     val focusManager = LocalFocusManager.current
     val firstKeyFocusRequester = remember { FocusRequester() }
+    val resultsFocusRequester = remember { FocusRequester() }
 
     val keys = listOf(
         "A", "B", "C", "D", "E", "F",
@@ -63,7 +69,7 @@ fun SearchScreen(
 
     BackHandler {
         if (query.isNotEmpty()) {
-            viewModel.updateSearchQuery("") // Čisti query u ViewModelu
+            viewModel.updateSearchQuery("") 
         } else {
             onBackClick()
         }
@@ -71,7 +77,6 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) {
         try {
-            // Ako želimo odmah na tipkovnicu kad se otvori search
             firstKeyFocusRequester.requestFocus()
         } catch (_: Exception) {
         }
@@ -108,20 +113,29 @@ fun SearchScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // LIJEVI STUPAC: Netflix TV tipkovnica za daljinski upravljač
             Column(
                 modifier = Modifier
                     .width(330.dp)
                     .fillMaxHeight()
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionRight) {
+                            if (searchResults.isNotEmpty()) {
+                                try {
+                                    resultsFocusRequester.requestFocus()
+                                    return@onPreviewKeyEvent true
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        false
+                    }
             ) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = {
-                        // AŽURIRANO: Update se sada šalje direktno u ViewModel
                         viewModel.updateSearchQuery(it)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    readOnly = true, // ONEMOGUĆUJE pojavljivanje sistemske tipkovnice preko cijelog ekrana
+                    readOnly = true, 
                     placeholder = { Text("Upiši naziv film/serije...", color = Color.Gray, fontSize = 14.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Red) },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -142,7 +156,6 @@ fun SearchScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Gumbi RAZMAK, BRIŠI, OČISTI
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -151,7 +164,7 @@ fun SearchScreen(
                         label = "RAZMAK",
                         modifier = Modifier.weight(1.2f),
                         onClick = {
-                            viewModel.updateSearchQuery(query + " ")
+                            viewModel.updateSearchQuery("$query ")
                         }
                     )
                     NetflixKeyButton(
@@ -174,7 +187,6 @@ fun SearchScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Mreža slova i brojeva 6x6
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     keys.chunked(6).forEachIndexed { rowIndex, rowKeys ->
                         Row(
@@ -200,7 +212,6 @@ fun SearchScreen(
                 }
             }
 
-            // DESNI STUPAC: Rezultati pretrage uživo
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -255,15 +266,25 @@ fun SearchScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(searchResults) { ratedItem ->
+                                items(searchResults.size) { index ->
+                                    val ratedItem = searchResults[index]
                                     val isProbablySeries = selectedTab == ContentTab.SERIES
-                                    RatedMovieGridCard(
-                                        ratedMovie = ratedItem,
-                                        isSeries = isProbablySeries,
-                                        onMovieClick = { item ->
-                                            if (isProbablySeries) onSeriesClick(item) else onMovieClick(item)
-                                        }
-                                    )
+                                    
+                                    val modifier = if (index == 0) {
+                                        Modifier.focusRequester(resultsFocusRequester)
+                                    } else {
+                                        Modifier
+                                    }
+                                    
+                                    Box(modifier = modifier) {
+                                        RatedMovieGridCard(
+                                            ratedMovie = ratedItem,
+                                            isSeries = isProbablySeries,
+                                            onMovieClick = { item ->
+                                                if (isProbablySeries) onSeriesClick(item) else onMovieClick(item)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
