@@ -43,6 +43,15 @@ data class RatedMovie(
     val relevanceScore: Double = 0.0
 )
 
+data class CachedCategory(val genreTitle: String, val movies: List<ArchiveMovie>)
+data class CachedHero(val movie: ArchiveMovie, val isSeries: Boolean)
+data class AppCache(
+    val movieCategories: List<CachedCategory>,
+    val seriesCategories: List<CachedCategory>,
+    val concertCategories: List<CachedCategory>,
+    val heroMovies: List<CachedHero>
+)
+
 private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
 private data class ArchiveResponseBody(
     val numFound: Int?,
@@ -87,6 +96,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
         Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
     )
+    
+    private val cacheAdapter = moshi.adapter(AppCache::class.java)
 
     private val api: ArchiveSearchApi = Retrofit.Builder()
         .baseUrl("https://archive.org/")
@@ -153,9 +164,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
         GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
-        // Moved from series
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
-        
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\") OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
@@ -167,18 +176,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
+        GenreOption("Top 10 serija danas", seriesBaseQuery, "week desc", isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
         GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
     )
 
-    // AŽURIRANO: Eksplicitno se oslanja na vhs_concerts_and_music
     private val concertBaseQuery = "mediatype:movies AND collection:vhs_concerts_and_music"
 
     val concertGenreDefinitions = listOf(
-        // AŽURIRANO: Sortiranje po tjednim pregledima za Top 10 Koncerte
         GenreOption("Top 10 Koncerti", concertBaseQuery, "week desc", isConcertCategory = true),
         GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge OR \"hard rock\")", "downloads desc", isConcertCategory = true),
         GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
@@ -241,10 +248,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
 
     val pageSize = 60
+    
+    // AŽURIRANO: Varijabla u kojoj čuvamo zadnje učitani cache
+    private var lastLoadedCache: AppCache? = null
 
     init {
         loadFavorites()
-        loadAllContent()
+        loadCacheAndFetchNew()
     }
 
     private fun loadFavorites() {
@@ -257,6 +267,42 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 e.printStackTrace()
             }
         }
+    }
+
+    private fun loadCacheAndFetchNew() {
+        val cachedJson = prefs.getString("app_content_cache", null)
+        if (cachedJson != null) {
+            try {
+                val cache = cacheAdapter.fromJson(cachedJson)
+                if (cache != null) {
+                    lastLoadedCache = cache // Spremi cache za brzo otvaranje kategorija
+                    
+                    val mMovies = cache.movieCategories.mapNotNull { c -> 
+                        movieGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    val mSeries = cache.seriesCategories.mapNotNull { c -> 
+                        seriesGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    val mConcerts = cache.concertCategories.mapNotNull { c -> 
+                        concertGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    
+                    if (mMovies.isNotEmpty()) _movieCategories.value = mMovies
+                    if (mSeries.isNotEmpty()) _seriesCategories.value = mSeries
+                    if (mConcerts.isNotEmpty()) _concertCategories.value = mConcerts
+                    
+                    if (cache.heroMovies.isNotEmpty()) {
+                        _heroMovies.value = cache.heroMovies.map { it.movie to it.isSeries }
+                        startHeroCarousel()
+                    }
+                    _isLoading.value = false 
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        loadAllContent()
     }
 
     fun isFavorite(identifier: String): Boolean {
@@ -343,7 +389,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadAllContent() {
         viewModelScope.launch {
-            _isLoading.value = true
+            if (_movieCategories.value.isEmpty()) {
+                _isLoading.value = true
+            }
+            
             try {
                 val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
@@ -409,6 +458,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries, loadedConcerts)
                 
+                val newCache = AppCache(
+                    movieCategories = loadedMovies.map { CachedCategory(it.first.title, it.second) },
+                    seriesCategories = loadedSeries.map { CachedCategory(it.first.title, it.second) },
+                    concertCategories = loadedConcerts.map { CachedCategory(it.first.title, it.second) },
+                    heroMovies = _heroMovies.value.map { CachedHero(it.first, it.second) }
+                )
+                lastLoadedCache = newCache // Spremi i u varijablu da je dostupno odmah
+                prefs.edit().putString("app_content_cache", cacheAdapter.toJson(newCache)).apply()
+                
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -417,43 +475,26 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun refreshHeroItems(
-        favs: List<ArchiveMovie>,
-        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
-        series: List<Pair<GenreOption, List<ArchiveMovie>>>,
-        concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
-    ) {
-        val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
-        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
-        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
-        val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
-
-        val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
-        _heroMovies.value = combined
-        
-        startHeroCarousel()
-    }
-
-    private fun startHeroCarousel() {
-        carouselJob?.cancel()
-        _activeHeroIndex.value = 0
-        carouselJob = viewModelScope.launch {
-            while (isActive && _heroMovies.value.isNotEmpty()) {
-                delay(8000) 
-                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
-            }
-        }
-    }
-
-    fun setActiveHeroIndex(index: Int) {
-        if (index in _heroMovies.value.indices) {
-            _activeHeroIndex.value = index
-            startHeroCarousel() 
-        }
-    }
-
+    // AŽURIRANO: loadGenrePage prvo prikazuje cache ako postoji, pa onda preuzima nove ako treba
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
+        
+        // Brzo učitavanje iz već skinutog sadržaja (Cache)
+        val cachedContent = when {
+            genre.isConcertCategory -> _concertCategories.value.find { it.first.title == genre.title }?.second
+            genre.isSeriesCategory -> _seriesCategories.value.find { it.first.title == genre.title }?.second
+            else -> _movieCategories.value.find { it.first.title == genre.title }?.second
+        }
+
+        if (cachedContent != null && cachedContent.isNotEmpty()) {
+            _genreMovies.value = cachedContent.map { RatedMovie(it, "", 0.0) }
+            _totalGenreMoviesCount.value = cachedContent.size
+            _totalGenrePages.value = 1
+        } else {
+            _genreMovies.value = emptyList()
+        }
+        
+        // Zatim pozovi API da dohvati ostatak (Page 1)
         loadGenrePage(1)
     }
 
@@ -462,7 +503,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (page < 1) return
 
         viewModelScope.launch {
-            _isGenreLoading.value = true
+            // Ako nemamo već učitane rezultate, upali loader
+            if (_genreMovies.value.isEmpty()) {
+                _isGenreLoading.value = true
+            }
+            
             _currentGenrePage.value = page
             try {
                 val isWeeklyTop = genre.title.startsWith("Top 10")
