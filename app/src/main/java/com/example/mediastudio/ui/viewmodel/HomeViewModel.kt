@@ -94,7 +94,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    // STROGI 18+ FILTER (Osnovni)
     private val blockedAdultKeywords = listOf(
         "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
         "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
@@ -103,12 +102,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
     )
 
-    // Specifični filter za izbacivanje samo Hentai i male gay sadržaja
     private val blockedSpecificAdultKeywords = listOf(
         "hentai", "yaoi", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
 
-    // STROGI FILTER ZA DIGITALNO SMEĆE, VIJESTI I NEŽELJENE KULTURE
     private val junkNonMovieKeywords = listOf(
         "speedrun", "gameplay", "walkthrough", "playthrough", "podcast", "tutorial",
         "news broadcast", "entertainment tonight", "news report", "breaking news", "newscast",
@@ -119,7 +116,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
     )
 
-    // PREMIUM STUDIJI, REDATELJI I GLUMCI ZA BODOVANJE
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
@@ -131,16 +127,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood"
     )
 
-    // LEGENDARNI NASLOVI
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
         "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
         "star trek", "everybody loves raymond", "3rd rock from the sun", "third rock from the sun",
         "seinfeld", "friends", "the simpsons", "x-files", "sopranos", "the wire", "breaking bad",
-        "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter"
+        "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter",
+        "alf", "roots", "monty python", "aeon flux", "hitchhiker's guide", "shogun", "galactica",
+        "v the series", "alien nation"
     )
     
-    // Baza Filmova 
     private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
 
     val movieGenreDefinitions = listOf(
@@ -167,19 +163,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    // Baza Serija
-    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
+    // AŽURIRANO: Uključena 'classic_tv' kolekcija općenito kako bi uhvatili popularne serije
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv OR collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
 
     val seriesGenreDefinitions = listOf(
-        GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
+        // AŽURIRANO: Top 10 serija sada cilja classic_tv i sortira po tjednim pregledima
+        GenreOption("Top 10 serija danas", "mediatype:movies AND collection:classic_tv", "week desc", isSeriesCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true, isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
-        GenreOption("Vestern i avanturističke serije", "$seriesBaseQuery AND (subject:western OR subject:adventure)", "downloads desc", isSeriesCategory = true)
+        // AŽURIRANO: Uklonjen Vestern, ostavljena samo Avantura
+        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
     )
 
-    // Baza Koncerata
     private val concertBaseQuery = "mediatype:movies AND (collection:vhs_concerts_and_music OR collection:music_video OR subject:\"live concert\" OR subject:\"music performance\" OR subject:band OR subject:mtv)"
 
     val concertGenreDefinitions = listOf(
@@ -594,7 +591,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
                 if (collectionText.lowercase().contains("feature_films")) score += 1500.0
                 if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
-                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
+                // AŽURIRANO: Boost za classic_tv serije
+                if (collectionText.lowercase().contains("classic_tv")) score += 3000.0 
                 
                 if (runtimeMinutes >= 75) score += 1000.0
                 if (runtimeMinutes >= 100) score += 1500.0 
