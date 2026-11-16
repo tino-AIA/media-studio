@@ -135,33 +135,23 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
+    // AŽURIRANO: Ekskluzivna lista traženih autora, posložena tvojim redoslijedom
     private val knownAuthorsAndActors = listOf(
-        "david cronenberg", "elvis presley", "ingmar bergman", "sergio leone", "brian de palma",
-        "martin scorsese", "steven spielberg", "alfred hitchcock", "stanley kubrick", 
-        "francis ford coppola", "quentin tarantino", "christopher nolan", "james cameron", 
-        "ridley scott", "george lucas", "peter jackson", "david fincher", "wes anderson", 
-        "paul thomas anderson", "denis villeneuve", "clint eastwood", "woody allen", 
-        "roman polanski", "david lynch", "federico fellini", "andrei tarkovsky", 
-        "jean-luc godard", "francois truffaut", "luis bunuel", "john ford", "howard hawks", 
-        "charlie chaplin", "billy wilder", "orson welles", "michael mann", "john woo", 
-        "takeshi kitano", "pedro almodovar", "guillermo del toro", "alfonso cuaron", 
-        "bong joon ho", "park chan-wook", "wong kar-wai", "jesus franco", "jesús franco",
-        "akira kurosawa", "hayao miyazaki", "bela tarr", "werner herzog", "lars von trier", 
-        "john carpenter", "george a. romero", "dario argento", "lucio fulci", "mario bava", 
-        "jean renoir", "satyajit ray", "yasujiro ozu", "kenji mizoguchi", "edgar wright", 
-        "tim burton", "terry gilliam", "david lean", "sidney lumet", "buster keaton", 
-        "jacques rivette", "agnes varda", "john cassavetes",
-        "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
-        "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", 
-        "keanu reeves", "sylvester stallone", "arnold schwarzenegger", "bruce willis", 
-        "denzel washington", "johnny depp", "will smith", "christian bale", "matt damon", 
-        "anthony hopkins", "meryl streep", "cate blanchett", "nicole kidman", "jodie foster", 
-        "sigourney weaver", "natalie portman", "charlize theron", "angelina jolie", 
-        "scarlett johansson", "marilyn monroe", "james dean", "humphrey bogart", "cary grant", 
-        "audrey hepburn", "katherine hepburn", "paul newman", "steve mcqueen", "sean connery", 
-        "charles bronson", "chuck norris", "jackie chan", "bruce lee", "jet li", 
-        "jean-claude van damme", "dolph lundgren", "steven seagal", "kevin costner", 
-        "mel gibson", "tom hardy", "ryan gosling", "emma stone", "jennifer lawrence"
+        "alfred hitchcock", "francis ford coppola", "brian de palma", "sergio leone", 
+        "lars von trier", "paul verhoeven", "roman polanski", "werner herzog", "jean-luc godard", 
+        "david cronenberg", "john cassavetes", "mira nair", "takeshi kitano", "freddie francis", 
+        "elvis presley", "david lean", "ingmar bergman", "roger corman", "david decoteau", 
+        "françois truffaut", "francois truffaut", "pier paolo pasolini", "budd boetticher", 
+        "wim wenders", "nicholas roeg", "john ford", "mario bava", "akira kurosawa", 
+        "jacques rivette", "costa-gavras", "louis malle", "federico fellini", "george a. romero", 
+        "otto preminger", "herschell gordon lewis", "harmony korine", "orson welles", 
+        "norman jewison", "curtis harrington", "bernardo bertolucci", "ken russell", 
+        "krzysztof kieślowski", "krzysztof kieslowski", "alejandro jodorowsky", "ruggero deodato", 
+        "andy milligan", "ted v. mikels", "lina wertmüller", "lina wertmuller", "carl theodor dreyer", 
+        "greydon clark", "bill zebub", "sean baker", "pta filmography", "paul thomas anderson", 
+        "andy warhol", "leos carax", "volker schlöndorff", "volker schlondorff", "albert pyun", 
+        "giuseppe tornatore", "bo widerberg", "jackie collins", "rick sloane", "errol morris", 
+        "gordon hessler", "russ meyer", "gaspar noé", "gaspar noe"
     )
 
     private val legendaryTitles = listOf(
@@ -659,25 +649,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (isAuthorCollection) {
                     val matchesKnown = knownAuthorsAndActors.any { titleLower.contains(it) || fullMetaLower.contains(it) }
-                    val hasNamePattern = Regex("\\b[A-Z][a-z]+\\s+[A-Z][a-z]+\\b").containsMatchIn(finalTitle)
                     
-                    val junkCollectionTerms = listOf(
-                        "sci-fi", "science fiction", "horror", "action", "comedy", "hitler", "nazi", 
-                        "history", "war", "public domain", "vintage", "retro", "classic", "vhs", "drive-in",
-                        "martial arts", "kung fu", "spaghetti western", "thriller", "mystery", "drama",
-                        "century", "decade", "various"
-                    )
-                    val isJunkCollection = junkCollectionTerms.any { 
-                        titleLower.contains("collection of $it") || titleLower.contains("$it films") || titleLower.contains(it) 
-                    }
+                    if (!matchesKnown) return@mapNotNull null
                     
-                    if (isJunkCollection && !matchesKnown) return@mapNotNull null
-                    if (!matchesKnown && !hasNamePattern) return@mapNotNull null
-                    
-                    if (matchesKnown) {
-                        score += 50000.0 
-                    } else if (hasNamePattern) {
-                        score += 15000.0 
+                    // AŽURIRANO: Poredak po redoslijedu iz knownAuthorsAndActors (najviši dobiva najviše bodova)
+                    val authorIndex = knownAuthorsAndActors.indexOfFirst { titleLower.contains(it) || fullMetaLower.contains(it) }
+                    if (authorIndex != -1) {
+                        score += 100000.0 - (authorIndex * 1000.0)
                     }
                 }
 
