@@ -135,7 +135,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "coppola", "cameron", "nolan", "kubrick", "ridley scott", "george lucas", "peter jackson",
         "marlon brando", "al pacino", "robert de niro", "jack nicholson", "morgan freeman",
         "tom hanks", "leonardo dicaprio", "brad pitt", "tom cruise", "harrison ford", "keanu reeves",
-        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood"
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "hollywood",
+        "lars von trier", "david cronenberg", "takeshi kitano", "jesús franco", "jesus franco"
     )
 
     private val legendaryTitles = listOf(
@@ -149,11 +150,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "chocky"
     )
     
-    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
+    // AŽURIRANO: Dodana kolekcija opensource_movies (Community Video) u bazični upit za normalne filmove
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
 
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
+        
+        // NOVO: Kategorija samo za Filmografije i Kolekcije autora
+        GenreOption("Filmografije Redatelja", "$movieBaseQuery AND (title:filmography OR title:\"films of\" OR title:\"collection of\")", "downloads desc"),
+        
         GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
         GenreOption("Akcija i avantura", "$movieBaseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
         GenreOption("Triler i misterija", "$movieBaseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
@@ -167,10 +173,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
         
-        // AŽURIRANO: Uključen "sex" subjekt i autor "Lars Von Trier"
+        // AŽURIRANO: Uklonjen Lars von Trier iz erotskog queryja
         GenreOption(
             title = "18+ / Erotski",
-            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\" OR \"lars von trier\"))",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
             defaultSort = "downloads desc",
             isAdultCategory = true
         )
@@ -618,7 +624,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 
-                // AŽURIRANO: Specifično pravilo za 18+ (strogo dulje od 10 minuta, kratki isječci se odbacuju)
                 if (isAdultCategory) {
                     if (runtimeMinutes in 1..10) return@mapNotNull null 
                 } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
