@@ -22,9 +22,6 @@ import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import kotlin.math.ceil
 import kotlin.math.ln
 
@@ -226,6 +223,74 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
+    // KONACNO RJEŠENJE ZA SLIKE - DIREKTNA MAPA BEZ EKSPLICITNIH TIPOVA KOJI ZBUNJUJU KOMPAJLER
+    val authorImages = MutableStateFlow(
+        mapOf(
+            "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
+            "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
+            "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
+            "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
+            "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg",
+            "Paul Verhoeven" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Paul_Verhoeven_%282016%29.jpg/400px-Paul_Verhoeven_%282016%29.jpg",
+            "Roman Polanski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Roman_Polanski_at_Cannes_2013.jpg/400px-Roman_Polanski_at_Cannes_2013.jpg",
+            "Werner Herzog" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Werner_Herzog_%282018%29.jpg/400px-Werner_Herzog_%282018%29.jpg",
+            "Jean-Luc Godard" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Jean-Luc_Godard_1968.jpg/400px-Jean-Luc_Godard_1968.jpg",
+            "David Cronenberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/David_Cronenberg_at_Cannes_2014.jpg/400px-David_Cronenberg_at_Cannes_2014.jpg",
+            "John Cassavetes" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/John_Cassavetes_%281969%29.jpg/400px-John_Cassavetes_%281969%29.jpg",
+            "Mira Nair" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Mira_Nair.jpg/400px-Mira_Nair.jpg",
+            "Takeshi Kitano" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Takeshi_Kitano.jpg/400px-Takeshi_Kitano.jpg",
+            "Freddie Francis" to "https://upload.wikimedia.org/wikipedia/en/3/3f/Freddie_Francis.jpg",
+            "Elvis Presley" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Elvis_Presley_promoting_Jailhouse_Rock.jpg/400px-Elvis_Presley_promoting_Jailhouse_Rock.jpg",
+            "David Lean" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/David_Lean.jpg/400px-David_Lean.jpg",
+            "Ingmar Bergman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Ingmar_Bergman_1960.jpg/400px-Ingmar_Bergman_1960.jpg",
+            "Roger Corman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/Roger_Corman_2010.jpg/400px-Roger_Corman_2010.jpg",
+            "François Truffaut" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Fran%C3%A7ois_Truffaut_%281980%29.jpg/400px-Fran%C3%A7ois_Truffaut_%281980%29.jpg",
+            "Pier Paolo Pasolini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Pier_Paolo_Pasolini_1960s.jpg/400px-Pier_Paolo_Pasolini_1960s.jpg",
+            "Budd Boetticher" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Budd_Boetticher.jpg/400px-Budd_Boetticher.jpg",
+            "Wim Wenders" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Wim_Wenders_-_Berlinale_2015.jpg/400px-Wim_Wenders_-_Berlinale_2015.jpg",
+            "Nicholas Roeg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Nicolas_Roeg.jpg/400px-Nicolas_Roeg.jpg",
+            "John Ford" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/22/John_Ford_1946.jpg/400px-John_Ford_1946.jpg",
+            "Mario Bava" to "https://upload.wikimedia.org/wikipedia/en/c/c8/Mario_Bava_photo.jpg",
+            "Akira Kurosawa" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Akira_Kurosawa_in_1953.jpg/400px-Akira_Kurosawa_in_1953.jpg",
+            "Jacques Rivette" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Jacques_Rivette_1968.jpg/400px-Jacques_Rivette_1968.jpg",
+            "Costa-Gavras" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Costa-Gavras_Cannes_2015.jpg/400px-Costa-Gavras_Cannes_2015.jpg",
+            "Louis Malle" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Louis_Malle_%281989%29.jpg/400px-Louis_Malle_%281989%29.jpg",
+            "Federico Fellini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Fellini.jpg/400px-Fellini.jpg",
+            "George A. Romero" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/George_A_Romero.jpg/400px-George_A_Romero.jpg",
+            "Otto Preminger" to "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Otto_Preminger_1955.jpg/400px-Otto_Preminger_1955.jpg",
+            "Herschell Gordon Lewis" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Herschell_Gordon_Lewis_-_Cinedelphia.jpg/400px-Herschell_Gordon_Lewis_-_Cinedelphia.jpg",
+            "Harmony Korine" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Harmony_Korine_in_2013_%28cropped%29.jpg/400px-Harmony_Korine_in_2013_%28cropped%29.jpg",
+            "Orson Welles" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Orson_Welles_1937.jpg/400px-Orson_Welles_1937.jpg",
+            "Norman Jewison" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Norman_Jewison_%281973%29.jpg/400px-Norman_Jewison_%281973%29.jpg",
+            "Curtis Harrington" to "https://upload.wikimedia.org/wikipedia/en/9/9f/Curtis_Harrington.jpg",
+            "Bernardo Bertolucci" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Bernardo_Bertolucci_1975.jpg/400px-Bernardo_Bertolucci_1975.jpg",
+            "Ken Russell" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Ken_Russell_2008.jpg/400px-Ken_Russell_2008.jpg",
+            "Krzysztof Kieślowski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Krzysztof_Kieslowski.jpg/400px-Krzysztof_Kieslowski.jpg",
+            "Alejandro Jodorowsky" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Alejandro_Jodorowsky_at_Cannes.jpg/400px-Alejandro_Jodorowsky_at_Cannes.jpg",
+            "Ruggero Deodato" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Ruggero_Deodato_%282009%29.jpg/400px-Ruggero_Deodato_%282009%29.jpg",
+            "Andy Milligan" to "https://upload.wikimedia.org/wikipedia/en/3/37/Andy_Milligan.jpg",
+            "Ted V. Mikels" to "https://upload.wikimedia.org/wikipedia/en/9/90/Ted_V_Mikels_photo.jpg",
+            "Lina Wertmüller" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Lina_Wertm%C3%BCller_2015.jpg/400px-Lina_Wertm%C3%BCller_2015.jpg",
+            "Carl Theodor Dreyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Carl_Theodor_Dreyer_1965.jpg/400px-Carl_Theodor_Dreyer_1965.jpg",
+            "Greydon Clark" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Greydon_Clark.jpg/400px-Greydon_Clark.jpg",
+            "Bill Zebub" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/Bill_Zebub.jpg/400px-Bill_Zebub.jpg",
+            "Sean Baker" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sean_Baker_2017.jpg/400px-Sean_Baker_2017.jpg",
+            "PTA Filmography" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Paul_Thomas_Anderson_2018.jpg/400px-Paul_Thomas_Anderson_2018.jpg",
+            "Andy Warhol" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Andy_Warhol_by_Jack_Mitchell.jpg/400px-Andy_Warhol_by_Jack_Mitchell.jpg",
+            "Leos Carax" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Leos_Carax_2012.jpg/400px-Leos_Carax_2012.jpg",
+            "Volker Schlöndorff" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Volker_Schl%C3%B6ndorff_2012.jpg/400px-Volker_Schl%C3%B6ndorff_2012.jpg",
+            "Albert Pyun" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Albert_Pyun.jpg/400px-Albert_Pyun.jpg",
+            "Giuseppe Tornatore" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Giuseppe_Tornatore.jpg/400px-Giuseppe_Tornatore.jpg",
+            "Bo Widerberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Bo_Widerberg_1968.jpg/400px-Bo_Widerberg_1968.jpg",
+            "Jackie Collins" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Jackie_Collins_2012.jpg/400px-Jackie_Collins_2012.jpg",
+            "Rick Sloane" to "https://upload.wikimedia.org/wikipedia/en/8/87/Rick_Sloane.jpg",
+            "Errol Morris" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Errol_Morris_by_Gage_Skidmore.jpg/400px-Errol_Morris_by_Gage_Skidmore.jpg",
+            "Gordon Hessler" to "https://upload.wikimedia.org/wikipedia/en/c/c9/Gordon_Hessler.jpg",
+            "Russ Meyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Russ_Meyer_1973.jpg/400px-Russ_Meyer_1973.jpg",
+            "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg"
+        )
+    )
+
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
         "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
@@ -290,11 +355,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
     )
 
-    // STABILNA SINTAKSA BEZ TYPE INFERENCE GREŠAKA
-    private val emptyStringMap = mapOf<String, String>()
-    private val _authorImages = MutableStateFlow(emptyStringMap)
-    val authorImages: StateFlow> = _authorImages
-
     private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
     val selectedTab: StateFlow<ContentTab> = _selectedTab
 
@@ -355,68 +415,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private var lastLoadedCache: AppCache? = null
 
     init {
-        // Zato što je asinkrono dohvaćanje kompliciralo aplikaciju i usporavalo,
-        // ovdje izravno dodjeljujemo mapu sigurnih poznatih slika. Nema greške pri pokretanju!
-        val predefinedImages = mapOf(
-            "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
-            "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
-            "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
-            "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
-            "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg",
-            "Paul Verhoeven" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Paul_Verhoeven_%282016%29.jpg/400px-Paul_Verhoeven_%282016%29.jpg",
-            "Roman Polanski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Roman_Polanski_at_Cannes_2013.jpg/400px-Roman_Polanski_at_Cannes_2013.jpg",
-            "Werner Herzog" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Werner_Herzog_%282018%29.jpg/400px-Werner_Herzog_%282018%29.jpg",
-            "Jean-Luc Godard" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Jean-Luc_Godard_1968.jpg/400px-Jean-Luc_Godard_1968.jpg",
-            "David Cronenberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/David_Cronenberg_at_Cannes_2014.jpg/400px-David_Cronenberg_at_Cannes_2014.jpg",
-            "John Cassavetes" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/John_Cassavetes_%281969%29.jpg/400px-John_Cassavetes_%281969%29.jpg",
-            "Mira Nair" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Mira_Nair.jpg/400px-Mira_Nair.jpg",
-            "Takeshi Kitano" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Takeshi_Kitano.jpg/400px-Takeshi_Kitano.jpg",
-            "Freddie Francis" to "https://upload.wikimedia.org/wikipedia/en/3/3f/Freddie_Francis.jpg",
-            "Elvis Presley" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Elvis_Presley_promoting_Jailhouse_Rock.jpg/400px-Elvis_Presley_promoting_Jailhouse_Rock.jpg",
-            "David Lean" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/David_Lean.jpg/400px-David_Lean.jpg",
-            "Ingmar Bergman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Ingmar_Bergman_1960.jpg/400px-Ingmar_Bergman_1960.jpg",
-            "Roger Corman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/Roger_Corman_2010.jpg/400px-Roger_Corman_2010.jpg",
-            "François Truffaut" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Fran%C3%A7ois_Truffaut_%281980%29.jpg/400px-Fran%C3%A7ois_Truffaut_%281980%29.jpg",
-            "Pier Paolo Pasolini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Pier_Paolo_Pasolini_1960s.jpg/400px-Pier_Paolo_Pasolini_1960s.jpg",
-            "Budd Boetticher" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Budd_Boetticher.jpg/400px-Budd_Boetticher.jpg",
-            "Wim Wenders" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Wim_Wenders_-_Berlinale_2015.jpg/400px-Wim_Wenders_-_Berlinale_2015.jpg",
-            "Nicholas Roeg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Nicolas_Roeg.jpg/400px-Nicolas_Roeg.jpg",
-            "John Ford" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/22/John_Ford_1946.jpg/400px-John_Ford_1946.jpg",
-            "Mario Bava" to "https://upload.wikimedia.org/wikipedia/en/c/c8/Mario_Bava_photo.jpg",
-            "Akira Kurosawa" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Akira_Kurosawa_in_1953.jpg/400px-Akira_Kurosawa_in_1953.jpg",
-            "Jacques Rivette" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Jacques_Rivette_1968.jpg/400px-Jacques_Rivette_1968.jpg",
-            "Costa-Gavras" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Costa-Gavras_Cannes_2015.jpg/400px-Costa-Gavras_Cannes_2015.jpg",
-            "Louis Malle" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Louis_Malle_%281989%29.jpg/400px-Louis_Malle_%281989%29.jpg",
-            "Federico Fellini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Fellini.jpg/400px-Fellini.jpg",
-            "George A. Romero" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/George_A_Romero.jpg/400px-George_A_Romero.jpg",
-            "Otto Preminger" to "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Otto_Preminger_1955.jpg/400px-Otto_Preminger_1955.jpg",
-            "Herschell Gordon Lewis" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Herschell_Gordon_Lewis_-_Cinedelphia.jpg/400px-Herschell_Gordon_Lewis_-_Cinedelphia.jpg",
-            "Harmony Korine" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Harmony_Korine_in_2013_%28cropped%29.jpg/400px-Harmony_Korine_in_2013_%28cropped%29.jpg",
-            "Orson Welles" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Orson_Welles_1937.jpg/400px-Orson_Welles_1937.jpg",
-            "Norman Jewison" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Norman_Jewison_%281973%29.jpg/400px-Norman_Jewison_%281973%29.jpg",
-            "Curtis Harrington" to "https://upload.wikimedia.org/wikipedia/en/9/9f/Curtis_Harrington.jpg",
-            "Bernardo Bertolucci" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Bernardo_Bertolucci_1975.jpg/400px-Bernardo_Bertolucci_1975.jpg",
-            "Ken Russell" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Ken_Russell_2008.jpg/400px-Ken_Russell_2008.jpg",
-            "Krzysztof Kieślowski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Krzysztof_Kieslowski.jpg/400px-Krzysztof_Kieslowski.jpg",
-            "Alejandro Jodorowsky" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Alejandro_Jodorowsky_at_Cannes.jpg/400px-Alejandro_Jodorowsky_at_Cannes.jpg",
-            "Ruggero Deodato" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Ruggero_Deodato_%282009%29.jpg/400px-Ruggero_Deodato_%282009%29.jpg",
-            "Ted V. Mikels" to "https://upload.wikimedia.org/wikipedia/en/9/90/Ted_V_Mikels_photo.jpg",
-            "Lina Wertmüller" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Lina_Wertm%C3%BCller_2015.jpg/400px-Lina_Wertm%C3%BCller_2015.jpg",
-            "Carl Theodor Dreyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Carl_Theodor_Dreyer_1965.jpg/400px-Carl_Theodor_Dreyer_1965.jpg",
-            "Sean Baker" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sean_Baker_2017.jpg/400px-Sean_Baker_2017.jpg",
-            "PTA Filmography" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Paul_Thomas_Anderson_2018.jpg/400px-Paul_Thomas_Anderson_2018.jpg",
-            "Andy Warhol" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Andy_Warhol_by_Jack_Mitchell.jpg/400px-Andy_Warhol_by_Jack_Mitchell.jpg",
-            "Leos Carax" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Leos_Carax_2012.jpg/400px-Leos_Carax_2012.jpg",
-            "Volker Schlöndorff" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Volker_Schl%C3%B6ndorff_2012.jpg/400px-Volker_Schl%C3%B6ndorff_2012.jpg",
-            "Giuseppe Tornatore" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Giuseppe_Tornatore.jpg/400px-Giuseppe_Tornatore.jpg",
-            "Bo Widerberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Bo_Widerberg_1968.jpg/400px-Bo_Widerberg_1968.jpg",
-            "Jackie Collins" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Jackie_Collins_2012.jpg/400px-Jackie_Collins_2012.jpg",
-            "Errol Morris" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Errol_Morris_by_Gage_Skidmore.jpg/400px-Errol_Morris_by_Gage_Skidmore.jpg",
-            "Russ Meyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Russ_Meyer_1973.jpg/400px-Russ_Meyer_1973.jpg",
-            "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg"
-        )
-        _authorImages.value = predefinedImages
-        
         loadFavorites()
         loadCacheAndFetchNew()
     }
