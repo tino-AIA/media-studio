@@ -55,13 +55,7 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -83,6 +77,8 @@ fun HomeScreen(
     val heroMovies by viewModel.heroMovies.collectAsState()
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+
+    val authorImages by viewModel.authorImages.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -309,6 +305,7 @@ fun HomeScreen(
                                     movie = movie,
                                     isSeries = isProbablySeries,
                                     viewModel = viewModel,
+                                    authorImages = authorImages,
                                     onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) }
                                 )
                             }
@@ -408,6 +405,7 @@ fun HomeScreen(
                                 isNetflixTop10 = isTop10,
                                 isSeries = isSeriesTab,
                                 viewModel = viewModel,
+                                authorImages = authorImages,
                                 onMovieClick = { item ->
                                     if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
                                 },
@@ -679,6 +677,7 @@ fun MovieCategoryRow(
     isNetflixTop10: Boolean = false,
     isSeries: Boolean,
     viewModel: HomeViewModel,
+    authorImages: Map<String, String>,
     onMovieClick: (ArchiveMovie) -> Unit,
     onHeaderClick: () -> Unit
 ) {
@@ -736,8 +735,7 @@ fun MovieCategoryRow(
                 if (isNetflixTop10) {
                     NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick)
                 } else {
-                    // AŽURIRANO: Ovdje prosljeđujemo viewModel u MovieCard kako bismo dohvatili fiksnu sliku
-                    MovieCard(movie = movie, isSeries = isSeries, viewModel = viewModel, onMovieClick = onMovieClick)
+                    MovieCard(movie = movie, isSeries = isSeries, viewModel = viewModel, authorImages = authorImages, onMovieClick = onMovieClick)
                 }
             }
         }
@@ -853,7 +851,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
+fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, authorImages: Map<String, String>, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
@@ -863,10 +861,13 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
     var posterUrl by remember { mutableStateOf("") }
 
-    LaunchedEffect(movie.title) {
+    LaunchedEffect(movie.title, authorImages) {
         if (isAuthor) {
-            // AŽURIRANO: Momentalno preuzima sliku s TMDB baze u Viewmodelu
-            posterUrl = viewModel.getAuthorImage(movie.title)
+            val authorName = movie.title
+            val archiveId = viewModel.getAuthorArchiveId(authorName)
+            val wikiImage = authorImages[authorName] ?: ""
+            // Ako nema na Wikipediji, potegne fallback s archive.org kolekcije iz tvoje tablice
+            posterUrl = wikiImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
             val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
