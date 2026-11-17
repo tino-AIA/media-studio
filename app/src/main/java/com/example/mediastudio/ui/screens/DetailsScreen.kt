@@ -68,6 +68,7 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
+    // Dohvati onu popravljenu mapu iz ViewModela bez problema
     val authorImages by viewModel.authorImages.collectAsState()
 
     BackHandler {
@@ -80,7 +81,7 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Ovdje se povlači slika koju je pronašao HomeViewModel u pozadini
+            // Ovdje se ispravno povlači slika redatelja s Wikipedije
             val mappedImage = authorImages[authorName] ?: ""
             imageUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
             
@@ -191,7 +192,10 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // Ako imamo više datoteka (bilo koja kolekcija ili serija)
                 if (currentInfo != null && currentInfo.qualities.size > 1) {
+                    
+                    // Gumb za Favorite 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
@@ -222,6 +226,48 @@ fun DetailsScreen(
                             Text(
                                 text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
                                 fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                    
+                    // Glavni Gumb "POKRENI" za Kolekcije - sada pušta PRVI FILM u listi, a ne prazan ID redatelja
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(54.dp)
+                            .padding(bottom = 24.dp)
+                            .focusRequester(playButtonFocusRequester)
+                            .background(
+                                color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .border(
+                                width = if (isPlayFocused) 3.5.dp else 1.dp,
+                                color = if (isPlayFocused) Color.White else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable(interactionSource = playInteractionSource, indication = null) {
+                                // OVO JE POPRAVAK: Uzimamo URL PRVOG .mp4 filma iz kolekcije!
+                                val firstMovieUrl = currentInfo.qualities.firstOrNull()?.url
+                                if (firstMovieUrl != null) {
+                                    onPlayClick(firstMovieUrl)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "POKRENI PRVI FILM",
+                                fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
@@ -262,6 +308,7 @@ fun DetailsScreen(
                         
                     }.sortedByDescending { it.third }
 
+                    // Lista pojedinačnih filmova
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
@@ -307,6 +354,7 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
+                    // Za obične pojedinačne filmove koji nisu kolekcija
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -327,9 +375,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    // POPRAVLJENO: Prosljeđujemo ispravan Identifier
-                                    val idToPlay = if (isAuthorMode) viewModel.getAuthorArchiveId(movie.identifier.substringAfter("AUTHOR|")) else movie.identifier
-                                    onPlayClick(idToPlay)
+                                    onPlayClick(movie.identifier)
                                 },
                             contentAlignment = Alignment.Center
                         ) {
