@@ -135,22 +135,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
-    private val knownAuthorsAndActors = listOf(
-        "alfred hitchcock", "francis ford coppola", "brian de palma", "sergio leone", 
-        "lars von trier", "paul verhoeven", "roman polanski", "werner herzog", "jean-luc godard", 
-        "david cronenberg", "john cassavetes", "mira nair", "takeshi kitano", "freddie francis", 
-        "elvis presley", "david lean", "ingmar bergman", "roger corman", "david decoteau", 
-        "françois truffaut", "francois truffaut", "pier paolo pasolini", "budd boetticher", 
-        "wim wenders", "nicholas roeg", "john ford", "mario bava", "akira kurosawa", 
-        "jacques rivette", "costa-gavras", "louis malle", "federico fellini", "george a. romero", 
-        "otto preminger", "herschell gordon lewis", "harmony korine", "orson welles", 
-        "norman jewison", "curtis harrington", "bernardo bertolucci", "ken russell", 
-        "krzysztof kieślowski", "krzysztof kieslowski", "alejandro jodorowsky", "ruggero deodato", 
-        "andy milligan", "ted v. mikels", "lina wertmüller", "lina wertmuller", "carl theodor dreyer", 
-        "greydon clark", "bill zebub", "sean baker", "pta filmography", "paul thomas anderson", 
-        "andy warhol", "leos carax", "volker schlöndorff", "volker schlondorff", "albert pyun", 
-        "giuseppe tornatore", "bo widerberg", "jackie collins", "rick sloane", "errol morris", 
-        "gordon hessler", "russ meyer", "gaspar noé", "gaspar noe"
+    // AŽURIRANO: STROGA LISTA AUTORA TOČNO PO TVOM REDOSLIJEDU
+    private val exactAuthorOrder = listOf(
+        "Alfred Hitchcock", "Francis Ford Coppola", "Brian De Palma", "Sergio Leone", "Lars von Trier",
+        "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard", "David Cronenberg",
+        "John Cassavetes", "Mira Nair", "Takeshi Kitano", "Freddie Francis", "Elvis Presley",
+        "David Lean", "Ingmar Bergman", "Roger Corman", "David DeCoteau", "François Truffaut",
+        "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders", "Nicholas Roeg", "John Ford",
+        "Mario Bava", "Akira Kurosawa", "Jacques Rivette", "Costa-Gavras", "Louis Malle",
+        "Federico Fellini", "George A. Romero", "Otto Preminger", "Herschell Gordon Lewis",
+        "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
+        "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
+        "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
+        "Bill Zebub", "Sean Baker", "Paul Thomas Anderson", "Andy Warhol", "Leos Carax",
+        "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
+        "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
 
     private val legendaryTitles = listOf(
@@ -170,9 +169,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
         
+        // AŽURIRANO: Poboljšan upit kako bi garantirao pronalazak unutar opensource_movies
         GenreOption(
             title = "Filmografije i Kolekcije Autora",
-            query = "$movieBaseQuery AND (title:filmography OR subject:filmography OR title:\"films of\" OR title:\"collection of\" OR title:\"directed by\" OR title:\"starring\")",
+            query = "mediatype:movies AND collection:opensource_movies AND (subject:filmography OR title:filmography OR title:\"films of\")",
             defaultSort = "downloads desc",
             isAuthorCollection = true 
         ),
@@ -422,10 +422,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
                         val isWeeklyTop = genre.title.startsWith("Top 10")
+                        // AŽURIRANO: Ogroman dohvat od 500 rezultata isključivo za kolekcije autora kako nitko ne bi promaknuo
+                        val fetchRows = if (genre.isAuthorCollection) 500 else if (isWeeklyTop) 300 else 150
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = if (isWeeklyTop) 300 else 150, 
+                            rows = fetchRows, 
                             page = 1,
                             excludeAdult = !genre.isAdultCategory,
                             isAdultCategory = genre.isAdultCategory,
@@ -434,7 +436,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isConcertCategory = false,
                             isAuthorCollection = genre.isAuthorCollection
                         )
-                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                        // AŽURIRANO: Ovdje povlačimo onoliko autora koliko ih točno imaš na listi
+                        val limit = if (genre.isAuthorCollection) exactAuthorOrder.size else if (isWeeklyTop) 10 else 20
+                        genre to results.map { it.movie }.take(limit)
                     }
                 }
 
@@ -570,8 +574,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _currentGenrePage.value = page
             try {
                 val isWeeklyTop = genre.title.startsWith("Top 10")
-                val fetchRows = if (isWeeklyTop) 300 else 150
-                val targetLimit = if (isWeeklyTop) 10 else pageSize
+                // AŽURIRANO: Opet tražimo 500 ako je u pitanju kolekcija autora
+                val fetchRows = if (genre.isAuthorCollection) 500 else if (isWeeklyTop) 300 else 150
+                val targetLimit = if (genre.isAuthorCollection) exactAuthorOrder.size else if (isWeeklyTop) 10 else pageSize
 
                 val (results, totalFound) = fetchAndRankByRelevance(
                     query = genre.query,
@@ -646,21 +651,30 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 var score = 0.0
 
+                // AŽURIRANO: Ekskluzivno mapiranje, preimenovanje i strogo redoslijedno bodovanje za autore
                 if (isAuthorCollection) {
-                    val authorIndex = knownAuthorsAndActors.indexOfFirst { author ->
-                        titleLower.contains(author) || fullMetaLower.contains(author) || 
-                        (author == "pta filmography" && (titleLower.contains("paul thomas anderson") || fullMetaLower.contains("paul thomas anderson")))
+                    val authorIndex = exactAuthorOrder.indexOfFirst { author ->
+                        val searchName = if (author == "Paul Thomas Anderson") "pta filmography" else author.lowercase()
+                        val altName = author.lowercase().replace("ç", "c").replace("é", "e").replace("ü", "u").replace("ö", "o").replace("ś", "s")
+                        
+                        titleLower.contains(searchName) || fullMetaLower.contains(searchName) ||
+                        titleLower.contains(altName) || fullMetaLower.contains(altName)
                     }
                     
-                    if (authorIndex == -1) return@mapNotNull null 
+                    // Ako nije pronađen na tvojoj točnoj listi, preskoči (obriši) taj rezultat
+                    if (authorIndex == -1) return@mapNotNull null
                     
-                    val matchedAuthor = knownAuthorsAndActors[authorIndex]
-                    finalTitle = matchedAuthor.split(" ").joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
-                        .replace("Pta Filmography", "Paul Thomas Anderson")
-                        .replace("Francois Truffaut", "François Truffaut")
-                        .replace("Lina Wertmuller", "Lina Wertmüller")
+                    // Preimenuj karticu čisto u Autorovo ime
+                    val finalTitleStr = exactAuthorOrder[authorIndex]
+                    // Bodovi se računaju tako da #1 na listi dobiva apsolutno najviše bodova
+                    val authorScore = 1000000.0 - (authorIndex * 10000.0)
                     
-                    score += 1000000.0 - (authorIndex * 1000.0) 
+                    // Za kolekcije autora odmah vraćamo rezultat kako ocjene i preuzimanja ne bi pomiješale tvoj redoslijed!
+                    return@mapNotNull RatedMovie(
+                        movie = ArchiveMovie(identifier = id, title = finalTitleStr),
+                        rating = "", // Nema ocjene na mapi redatelja
+                        relevanceScore = authorScore
+                    )
                 }
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
@@ -731,7 +745,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            val finalSorted = if (isSeriesCategory) {
+            // AŽURIRANO: Za kolekcije autora izbacujemo moguće duplikate ako netko ima više postavljenih arhiva, ostavljamo samo jednu!
+            val finalSorted = if (isAuthorCollection) {
+                scoredList
+                    .sortedByDescending { it.relevanceScore }
+                    .distinctBy { it.movie.title }
+            } else if (isSeriesCategory) {
                 val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
                 val mergedList = grouped.map { (baseTitle, group) ->
                     val mergedIds = group.joinToString(",") { it.movie.identifier }
@@ -756,21 +775,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         var clean = rawTitle
+        // Ukloni godine (npr. (1998), [2004], 1984 85)
         clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
+        
+        // Odreži sve od specifičnih riječi za epizode, sezone itd.
         clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
+        
+        // Odreži formate 1x01, 2x05
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
         
+        // Specifično rezanje za poznate serije (ako se pojave riječi nakon imena serije)
         val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
         for (series in knownSeries) {
             if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
+                // Zadrži samo ime serije
                 clean = series
                 break
             }
         }
         
+        // Ukloni nepotrebne sufikse
         clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
+        
+        // Ukloni crtice s brojevima na kraju (npr. "Naziv serije - 01")
         clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
         clean = clean.replace(Regex("\\s*-\\s*$"), "")
+        
+        // Ostavi samo slova i brojeve
         clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
         clean = clean.replace(Regex("\\s+"), " ").trim()
         
