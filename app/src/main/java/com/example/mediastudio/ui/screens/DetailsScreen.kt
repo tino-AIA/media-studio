@@ -77,12 +77,10 @@ fun DetailsScreen(
         if (isAuthorMode) {
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             
-            // 1. Dohvaćanje s Wikipedije
             val wikiData = fetchWikiInfo(authorName)
             imageUrl = wikiData.first
             translatedDescription = translateToCroatian(wikiData.second)
             
-            // 2. Traženje Archive.org identifikatora kolekcije za ovog autora
             val archiveId = fetchArchiveCollectionId(authorName)
             if (archiveId != null) {
                 movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
@@ -129,7 +127,6 @@ fun DetailsScreen(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // AŽURIRANO: Prikazujemo wiki sliku (ili standardnu Archive sliku)
             if (imageUrl.isNotEmpty()) {
                 Image(
                     painter = rememberAsyncImagePainter(imageUrl),
@@ -227,7 +224,6 @@ fun DetailsScreen(
                         }
                     }
 
-                    // AŽURIRANO: Lista filmova formatirana kao "Naziv filma (Godina)"
                     currentInfo.qualities.forEachIndexed { index, quality ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
@@ -241,19 +237,18 @@ fun DetailsScreen(
                         
                         val originalName = decodedUrl.substringBeforeLast(".")
                         
-                        // Izvlačimo godinu iz naziva (19xx ili 20xx)
                         val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
                         val extractedYear = yearMatch?.value ?: ""
 
-                        // Čistimo ime filma od smeća i godine
                         var cleanTitle = originalName.replace(Regex("(?i)(_|-|\\.)"), " ")
                         cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip)\\b"), "")
                         if (extractedYear.isNotEmpty()) {
                             cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
                         }
+                        // AŽURIRANO: Briše brojeve ako se nalaze točno na POČETKU naziva (npr "3 Spinout" postaje "Spinout")
+                        cleanTitle = cleanTitle.replace(Regex("^\\s*\\d+\\s+"), "")
                         cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
 
-                        // Spajamo Naziv + (Godina)
                         val finalFormattedTitle = if (extractedYear.isNotEmpty() && cleanTitle.isNotEmpty()) {
                             "$cleanTitle ($extractedYear)"
                         } else if (cleanTitle.isNotEmpty()) {
@@ -301,7 +296,6 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
-                    // Klasični prikaz za 1 film
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -322,7 +316,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    onPlayClick(currentInfo.year) // Ako je 1 film, URL se obično skriva tu u postojećoj logici
+                                    onPlayClick(currentInfo.year)
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -390,8 +384,6 @@ fun DetailsScreen(
         }
     }
 }
-
-// POMOĆNE FUNKCIJE ZA DOHVAT PODATAKA U POZADINI
 
 private suspend fun fetchWikiInfo(authorName: String): Pair<String, String> = withContext(Dispatchers.IO) {
     try {
