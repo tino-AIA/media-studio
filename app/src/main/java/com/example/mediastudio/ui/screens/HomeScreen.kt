@@ -78,7 +78,7 @@ fun HomeScreen(
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
-    val authorImages = viewModel.authorImages
+    val authorImages by viewModel.authorImages.collectAsState()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -866,7 +866,7 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
             val authorName = movie.title
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             val mappedImage = authorImages[authorName] ?: ""
-            // Ovdje automatski vuče sliku iz tvoje mape. Ako je prazno, koristi arhivu.
+            // Ovdje povlači sliku, i ako je nema pokušat će povući sa archive.org za taj ID
             posterUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
@@ -899,8 +899,10 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                    if (painter.state is AsyncImagePainter.State.Error && !isAuthor) {
-                        val fallback = "https://archive.org/services/img/${movie.identifier.split(",").first()}"
+                    // Ako pukne učitavanje slike redatelja ili filma, stavi fallback
+                    if (painter.state is AsyncImagePainter.State.Error) {
+                         val fallbackId = if (isAuthor) viewModel.getAuthorArchiveId(movie.title) else movie.identifier.split(",").first()
+                         val fallback = "https://archive.org/services/img/$fallbackId"
                         Image(
                             painter = rememberAsyncImagePainter(fallback),
                             contentDescription = movie.title,
