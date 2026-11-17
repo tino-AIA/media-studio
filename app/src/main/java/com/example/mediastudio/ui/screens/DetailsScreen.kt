@@ -68,8 +68,6 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
-    val authorImages = viewModel.staticAuthorImages
-
     BackHandler {
         onBackClick()
     }
@@ -80,8 +78,8 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            val mappedImage = authorImages[authorName] ?: ""
-            imageUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
+            // Za autore ne koristimo imageUrl jer ne prikazujemo sliku u detaljima prema tvojoj želji.
+            imageUrl = ""
             
             val wikiData = fetchWikiInfo(authorName)
             translatedDescription = wikiData
@@ -130,22 +128,27 @@ fun DetailsScreen(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (imageUrl.isNotEmpty()) {
-                Image(
-                    painter = rememberAsyncImagePainter(imageUrl),
-                    contentDescription = movie.title,
-                    modifier = Modifier
-                        .width(180.dp)
-                        .height(255.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
-                    contentScale = ContentScale.Crop
-                )
+            // Prikazuje sliku samo ako NIJE autor (odnosno običan pojedinačni film)
+            if (!isAuthorMode) {
+                if (imageUrl.isNotEmpty()) {
+                    Image(
+                        painter = rememberAsyncImagePainter(imageUrl),
+                        contentDescription = movie.title,
+                        modifier = Modifier
+                            .width(180.dp)
+                            .height(255.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(modifier = Modifier.width(180.dp).height(255.dp).background(Color.DarkGray))
+                }
+                Spacer(modifier = Modifier.height(16.dp))
             } else {
-                Box(modifier = Modifier.width(180.dp).height(255.dp).background(Color.DarkGray))
+                // Dodani razmak ako preskočimo sliku da ime ne bude skroz na vrhu ekrana
+                Spacer(modifier = Modifier.height(10.dp))
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
 
             Text(
                 text = if (isAuthorMode) movie.identifier.substringAfter("AUTHOR|") else movie.title,
@@ -190,12 +193,13 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // Za kolekcije (Autori ili Serije s više epizoda)
                 if (currentInfo != null && currentInfo.qualities.size > 1) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
                             .height(50.dp)
-                            .padding(bottom = 12.dp)
+                            .padding(bottom = 24.dp)
                             .background(
                                 color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                 shape = RoundedCornerShape(12.dp)
@@ -227,45 +231,7 @@ fun DetailsScreen(
                         }
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            .height(54.dp)
-                            .padding(bottom = 24.dp)
-                            .focusRequester(playButtonFocusRequester)
-                            .background(
-                                color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = if (isPlayFocused) 3.5.dp else 1.dp,
-                                color = if (isPlayFocused) Color.White else Color.Transparent,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable(interactionSource = playInteractionSource, indication = null) {
-                                val firstMovieUrl = currentInfo.qualities.firstOrNull()?.url
-                                if (firstMovieUrl != null) {
-                                    onPlayClick(firstMovieUrl)
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "POKRENI PRVI FILM",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-                    }
+                    // NAPOMENA: Potpuno uklonjen gumb "POKRENI PRVI FILM" prema zahtjevu
 
                     val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
@@ -301,6 +267,7 @@ fun DetailsScreen(
                         
                     }.sortedByDescending { it.third }
 
+                    // Lista filmova - klik prosljeđuje točan i spreman URL
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
@@ -320,6 +287,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
+                                    // Klikom na jedan film iz liste ovdje šaljemo link, a PlayerActivity će ga otvoriti
                                     onPlayClick(quality.url)
                                 }
                                 .padding(16.dp)
@@ -345,6 +313,7 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
+                    // Za obične pojedinačne filmove (koji nemaju kolekciju) ostaje glavno crveno dugme POKRENI
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
