@@ -151,7 +151,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
         "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
         "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
-        "Bill Zebub", "Sean Baker", "Paul Thomas Anderson", "Andy Warhol", "Leos Carax",
+        "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol", "Leos Carax",
         "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
         "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
@@ -207,7 +207,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Greydon Clark" to "filmography-greydon-clark",
         "Bill Zebub" to "filmography-bill-zebub",
         "Sean Baker" to "the.-florida.-project.-2017.2160p.-webrip.-3500-mb.-ddp-5.1.x-264-galaxy-rg",
-        "Paul Thomas Anderson" to "boogie-nights-1997_202604",
+        "PTA Filmography" to "boogie-nights-1997_202604",
         "Andy Warhol" to "andy-warhol-complete-films-collection",
         "Leos Carax" to "filmography-leos-carax",
         "Volker Schlöndorff" to "filmography-volker-schlondorff",
@@ -226,7 +226,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // ISPRAVLJENO: Dodano "= MutableStateFlow(emptyMap())"
+    // ISPRAVLJENA DEFINICIJA
     private val _authorImages = MutableStateFlow>(emptyMap())
     val authorImages: StateFlow> = _authorImages
 
