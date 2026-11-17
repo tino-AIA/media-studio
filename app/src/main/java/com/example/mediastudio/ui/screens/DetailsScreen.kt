@@ -68,7 +68,7 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
-    val authorImages = viewModel.authorImages
+    val authorImages by viewModel.authorImages.collectAsState()
 
     BackHandler {
         onBackClick()
@@ -80,7 +80,7 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // ISTA SLIKA KAO I VANI
+            // Ovdje se povlači slika koju je pronašao HomeViewModel u pozadini
             val mappedImage = authorImages[authorName] ?: ""
             imageUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
             
@@ -327,7 +327,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    // ISPRAVLJEN BUB: Prosljeđujemo pravi ID, a ne godinu!
+                                    // POPRAVLJENO: Prosljeđujemo ispravan Identifier
                                     val idToPlay = if (isAuthorMode) viewModel.getAuthorArchiveId(movie.identifier.substringAfter("AUTHOR|")) else movie.identifier
                                     onPlayClick(idToPlay)
                                 },
