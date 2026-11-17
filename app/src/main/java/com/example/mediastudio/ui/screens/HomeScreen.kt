@@ -58,54 +58,10 @@ import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-// AŽURIRANO: Fiksni rječnik slika za redatelje kako bi učitavanje bilo momentalno i pouzdano (bez API limita)
-val authorImages = mapOf(
-    "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Alfred_Hitchcock_portrait_retouched.jpg/400px-Alfred_Hitchcock_portrait_retouched.jpg",
-    "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Francis_Ford_Coppola_2011_CC.jpg/400px-Francis_Ford_Coppola_2011_CC.jpg",
-    "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Brian_De_Palma.jpg/400px-Brian_De_Palma.jpg",
-    "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Sergio_Leone.jpg/400px-Sergio_Leone.jpg",
-    "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ad/Lars_von_Trier.jpg/400px-Lars_von_Trier.jpg",
-    "Paul Verhoeven" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Paul_Verhoeven_%282016%29.jpg/400px-Paul_Verhoeven_%282016%29.jpg",
-    "Roman Polanski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9d/Roman_Polanski_2011.jpg/400px-Roman_Polanski_2011.jpg",
-    "Werner Herzog" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Werner_Herzog.jpg/400px-Werner_Herzog.jpg",
-    "Jean-Luc Godard" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Jean-Luc_Godard_1965.jpg/400px-Jean-Luc_Godard_1965.jpg",
-    "David Cronenberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/David_Cronenberg_Cannes_2014.jpg/400px-David_Cronenberg_Cannes_2014.jpg",
-    "John Cassavetes" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/John_Cassavetes.jpg/400px-John_Cassavetes.jpg",
-    "Mira Nair" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Mira_Nair_2012.jpg/400px-Mira_Nair_2012.jpg",
-    "Takeshi Kitano" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/29/Takeshi_Kitano.jpg/400px-Takeshi_Kitano.jpg",
-    "Freddie Francis" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Freddie_Francis.jpg/400px-Freddie_Francis.jpg",
-    "Elvis Presley" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Elvis_Presley_promoting_Jailhouse_Rock.jpg/400px-Elvis_Presley_promoting_Jailhouse_Rock.jpg",
-    "David Lean" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/David_Lean_1952.jpg/400px-David_Lean_1952.jpg",
-    "Ingmar Bergman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/57/Ingmar_Bergman_1957.jpg/400px-Ingmar_Bergman_1957.jpg",
-    "Roger Corman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Roger_Corman_2010.jpg/400px-Roger_Corman_2010.jpg",
-    "David DeCoteau" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/David_DeCoteau.jpg/400px-David_DeCoteau.jpg",
-    "François Truffaut" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Francois_Truffaut.jpg/400px-Francois_Truffaut.jpg",
-    "Pier Paolo Pasolini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/Pier_Paolo_Pasolini.jpg/400px-Pier_Paolo_Pasolini.jpg",
-    "Budd Boetticher" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Budd_Boetticher.jpg/400px-Budd_Boetticher.jpg",
-    "Wim Wenders" to "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Wim_Wenders_2018.jpg/400px-Wim_Wenders_2018.jpg",
-    "Nicholas Roeg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Nicolas_Roeg.jpg/400px-Nicolas_Roeg.jpg",
-    "John Ford" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/John_Ford_1946.jpg/400px-John_Ford_1946.jpg",
-    "Mario Bava" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Mario_Bava.jpg/400px-Mario_Bava.jpg",
-    "Akira Kurosawa" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ed/Akira_Kurosawa_1953.jpg/400px-Akira_Kurosawa_1953.jpg",
-    "Jacques Rivette" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Jacques_Rivette.jpg/400px-Jacques_Rivette.jpg",
-    "Costa-Gavras" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Costa-Gavras_2016.jpg/400px-Costa-Gavras_2016.jpg",
-    "Louis Malle" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Louis_Malle.jpg/400px-Louis_Malle.jpg",
-    "Federico Fellini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Federico_Fellini.jpg/400px-Federico_Fellini.jpg",
-    "George A. Romero" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/George_A._Romero.jpg/400px-George_A._Romero.jpg",
-    "Otto Preminger" to "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/Otto_Preminger_1955.jpg/400px-Otto_Preminger_1955.jpg",
-    "Harmony Korine" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Harmony_Korine_2013.jpg/400px-Harmony_Korine_2013.jpg",
-    "Orson Welles" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Orson_Welles_1937.jpg/400px-Orson_Welles_1937.jpg",
-    "Norman Jewison" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/84/Norman_Jewison.jpg/400px-Norman_Jewison.jpg",
-    "Bernardo Bertolucci" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Bernardo_Bertolucci.jpg/400px-Bernardo_Bertolucci.jpg",
-    "Ken Russell" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Ken_Russell.jpg/400px-Ken_Russell.jpg",
-    "Krzysztof Kieślowski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Krzysztof_Kieslowski.jpg/400px-Krzysztof_Kieslowski.jpg",
-    "Alejandro Jodorowsky" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Alejandro_Jodorowsky_2013.jpg/400px-Alejandro_Jodorowsky_2013.jpg",
-    "Carl Theodor Dreyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/Carl_Theodor_Dreyer.jpg/400px-Carl_Theodor_Dreyer.jpg",
-    "Paul Thomas Anderson" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Paul_Thomas_Anderson_2018.jpg/400px-Paul_Thomas_Anderson_2018.jpg",
-    "Andy Warhol" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Andy_Warhol_1977.jpg/400px-Andy_Warhol_1977.jpg",
-    "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Gaspar_Noe_2015.jpg/400px-Gaspar_Noe_2015.jpg"
-)
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -352,6 +308,7 @@ fun HomeScreen(
                                 MovieCard(
                                     movie = movie,
                                     isSeries = isProbablySeries,
+                                    viewModel = viewModel,
                                     onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) }
                                 )
                             }
@@ -450,6 +407,7 @@ fun HomeScreen(
                                 movies = itemsList,
                                 isNetflixTop10 = isTop10,
                                 isSeries = isSeriesTab,
+                                viewModel = viewModel,
                                 onMovieClick = { item ->
                                     if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
                                 },
@@ -720,6 +678,7 @@ fun MovieCategoryRow(
     movies: List<ArchiveMovie>,
     isNetflixTop10: Boolean = false,
     isSeries: Boolean,
+    viewModel: HomeViewModel,
     onMovieClick: (ArchiveMovie) -> Unit,
     onHeaderClick: () -> Unit
 ) {
@@ -777,7 +736,8 @@ fun MovieCategoryRow(
                 if (isNetflixTop10) {
                     NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick)
                 } else {
-                    MovieCard(movie = movie, isSeries = isSeries, onMovieClick = onMovieClick)
+                    // AŽURIRANO: Ovdje prosljeđujemo viewModel u MovieCard kako bismo dohvatili fiksnu sliku
+                    MovieCard(movie = movie, isSeries = isSeries, viewModel = viewModel, onMovieClick = onMovieClick)
                 }
             }
         }
@@ -893,7 +853,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
+fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, onMovieClick: (ArchiveMovie) -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
@@ -905,9 +865,8 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
 
     LaunchedEffect(movie.title) {
         if (isAuthor) {
-            // AŽURIRANO: Vuče sliku izravno iz fiksne liste za najbrže učitavanje
-            val authorName = movie.title
-            posterUrl = authorImages[authorName] ?: ""
+            // AŽURIRANO: Momentalno preuzima sliku s TMDB baze u Viewmodelu
+            posterUrl = viewModel.getAuthorImage(movie.title)
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
             val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
