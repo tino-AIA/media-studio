@@ -68,6 +68,8 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
+    val authorImages by viewModel.authorImages.collectAsState()
+
     BackHandler {
         onBackClick()
     }
@@ -76,21 +78,18 @@ fun DetailsScreen(
         isLoading = true
         if (isAuthorMode) {
             val authorName = movie.identifier.substringAfter("AUTHOR|")
+            val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // 1. Momentalno postavlja sliku iz ViewModela
-            imageUrl = viewModel.getAuthorImage(authorName)
+            // Postavlja sliku na Wikipedijinu, a ako je nema, na archive.org bazu
+            val wikiImage = authorImages[authorName] ?: ""
+            imageUrl = wikiImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
             
-            // 2. Traži biografiju direktno s HR Wikipedije (ako postoji), a inače s EN pa prevodi
             val wikiData = fetchWikiInfo(authorName)
             translatedDescription = wikiData
             
-            // 3. Traži točan identifikator filmografije ovog autora preko moćnijeg queryja
-            val archiveQuery = viewModel.getAuthorSearchQuery(authorName)
-            val archiveId = fetchArchiveCollectionId(archiveQuery)
+            // Točno pogađa tvoju unesenu kolekciju s id-em
+            movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
             
-            if (archiveId != null) {
-                movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
-            }
         } else {
             imageUrl = "https://archive.org/services/img/${movie.identifier}"
             val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
@@ -230,11 +229,8 @@ fun DetailsScreen(
                         }
                     }
 
-                    currentInfo.qualities.forEachIndexed { index, quality ->
-                        val epInteractionSource = remember { MutableInteractionSource() }
-                        val isEpFocused by epInteractionSource.collectIsFocusedAsState()
-                        val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
-
+                    // AŽURIRANO: Algoritam za prepoznavanje godine, uređivanje naziva i preslagivanje (najnovije prvo)
+                    val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
                             URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
                         } catch (e: Exception) {
@@ -243,16 +239,21 @@ fun DetailsScreen(
                         
                         val originalName = decodedUrl.substringBeforeLast(".")
                         
+                        // Traži godinu u nazivu
                         val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
                         val extractedYear = yearMatch?.value ?: ""
 
+                        // Brisanje crtica, točaka i ostalih tehničkih oznaka
                         var cleanTitle = originalName.replace(Regex("(?i)(_|-|\\.)"), " ")
-                        cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip)\\b"), "")
+                        cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip|web|dl|hd|sd)\\b"), "")
+                        
+                        // Briše godinu iz glavnog stringa kako ne bi pisalo dva puta
                         if (extractedYear.isNotEmpty()) {
                             cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
                         }
-                        // AŽURIRANO: Briše bilo kakve brojke i razmake sa SAMOG POČETKA naziva datoteke
-                        cleanTitle = cleanTitle.replace(Regex("^\\s*\\d+\\s+"), "")
+                        
+                        // Briše uvodne brojeve (npr "3 Spinout")
+                        cleanTitle = cleanTitle.replace(Regex("^\\s*[0-9]+[\\.\\-]?\\s*"), "")
                         cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
 
                         val finalFormattedTitle = if (extractedYear.isNotEmpty() && cleanTitle.isNotEmpty()) {
@@ -260,8 +261,19 @@ fun DetailsScreen(
                         } else if (cleanTitle.isNotEmpty()) {
                             cleanTitle
                         } else {
-                            "Naslov ${index + 1}"
+                            quality.label
                         }
+                        
+                        // Stvara paket koji se može sortirati po broju godine
+                        Triple(quality, finalFormattedTitle, extractedYear.toIntOrNull() ?: 0)
+                        
+                    }.sortedByDescending { it.third } // OVDJE se obavlja sortiranje: Najnovije godine su prve
+
+                    // Iscrtavanje sortirane liste
+                    formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
+                        val epInteractionSource = remember { MutableInteractionSource() }
+                        val isEpFocused by epInteractionSource.collectIsFocusedAsState()
+                        val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
 
                         Box(
                             modifier = mod
@@ -391,13 +403,13 @@ fun DetailsScreen(
     }
 }
 
-// AŽURIRANO: Traži po HR Wikipediji, ako faila traži EN Wikipediju pa prevodi na HR
+// AŽURIRANO: Povuče i osigura se da prvo provjeri Hrvatsku Wikipediju (redirects=1 uključen za pogađanje pravog naziva stranice)
 private suspend fun fetchWikiInfo(authorName: String): String = withContext(Dispatchers.IO) {
     try {
-        val encodedName = URLEncoder.encode(authorName.replace(" ", "_"), "UTF-8")
+        val searchName = if (authorName == "PTA Filmography") "Paul Thomas Anderson" else authorName
+        val encodedName = URLEncoder.encode(searchName, "UTF-8")
         
-        // 1. Probaj dohvatit s Hrvatske Wikipedije
-        var url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json")
+        var url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
         var conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
         var response = conn.inputStream.bufferedReader().use { it.readText() }
@@ -414,8 +426,7 @@ private suspend fun fetchWikiInfo(authorName: String): String = withContext(Disp
             }
         }
         
-        // 2. Ako nema HR Wiki, povuci EN Wiki pa ga ubaci u Translate API
-        url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json")
+        url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
         conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
         response = conn.inputStream.bufferedReader().use { it.readText() }
@@ -431,33 +442,16 @@ private suspend fun fetchWikiInfo(authorName: String): String = withContext(Disp
                 return@withContext translateToCroatian(englishExtract)
             }
         }
-        return@withContext "Biografija nije pronađena."
+        return@withContext "Biografija nije pronađena na Wikipediji."
     } catch (e: Exception) {
-        return@withContext "Biografija nije pronađena."
-    }
-}
-
-// AŽURIRANO: Precizniji API zahtjev koristeći query izrađen iz ViewModela
-private suspend fun fetchArchiveCollectionId(archiveQuery: String): String? = withContext(Dispatchers.IO) {
-    try {
-        val encodedQuery = URLEncoder.encode(archiveQuery, "UTF-8")
-        val url = URL("https://archive.org/advancedsearch.php?q=$encodedQuery&fl[]=identifier&output=json&rows=1")
-        val conn = url.openConnection() as HttpURLConnection
-        val response = conn.inputStream.bufferedReader().use { it.readText() }
-        val jsonObject = JSONObject(response)
-        val docs = jsonObject.getJSONObject("response").getJSONArray("docs")
-        if (docs.length() > 0) {
-            docs.getJSONObject(0).getString("identifier")
-        } else null
-    } catch (e: Exception) {
-        null
+        return@withContext "Greška prilikom preuzimanja biografije."
     }
 }
 
 private suspend fun translateToCroatian(text: String): String = withContext(Dispatchers.IO) {
     if (text.isBlank() || text.startsWith("Opis za ovaj naslov")) return@withContext text
     try {
-        val limitedText = text.take(2200)
+        val limitedText = text.take(1500)
         val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
         val translatedBuilder = StringBuilder()
 
