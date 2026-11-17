@@ -37,6 +37,7 @@ import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
@@ -52,6 +53,7 @@ fun DetailsScreen(
 ) {
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
     var translatedDescription by remember { mutableStateOf("") }
+    var imageUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
     val playButtonFocusRequester = remember { FocusRequester() }
@@ -64,6 +66,7 @@ fun DetailsScreen(
     val isFavFocused by favInteractionSource.collectIsFocusedAsState()
 
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
+    val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
     BackHandler {
         onBackClick()
@@ -71,24 +74,40 @@ fun DetailsScreen(
 
     LaunchedEffect(movie.identifier) {
         isLoading = true
-        val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
-        movieInfo = info
-        translatedDescription = translateToCroatian(info.description)
+        if (isAuthorMode) {
+            val authorName = movie.identifier.substringAfter("AUTHOR|")
+            
+            // 1. Dohvaćanje s Wikipedije
+            val wikiData = fetchWikiInfo(authorName)
+            imageUrl = wikiData.first
+            translatedDescription = translateToCroatian(wikiData.second)
+            
+            // 2. Traženje Archive.org identifikatora kolekcije za ovog autora
+            val archiveId = fetchArchiveCollectionId(authorName)
+            if (archiveId != null) {
+                movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
+            }
+        } else {
+            imageUrl = "https://archive.org/services/img/${movie.identifier}"
+            val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
+            movieInfo = info
+            translatedDescription = translateToCroatian(info.description)
+        }
+        
         isLoading = false
         try {
-            if (info.qualities.size > 1) {
+            if (movieInfo?.qualities?.size ?: 0 > 1) {
                 firstEpisodeFocusRequester.requestFocus()
             } else {
                 playButtonFocusRequester.requestFocus()
             }
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija Autora / Serija" else "Detalji filma", color = Color.White) },
+                title = { Text(if (isAuthorMode || movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija Autora" else "Detalji filma", color = Color.White) },
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
@@ -110,21 +129,26 @@ fun DetailsScreen(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Image(
-                painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
-                contentDescription = movie.title,
-                modifier = Modifier
-                    .width(180.dp)
-                    .height(255.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
-                contentScale = ContentScale.Crop
-            )
+            // AŽURIRANO: Prikazujemo wiki sliku (ili standardnu Archive sliku)
+            if (imageUrl.isNotEmpty()) {
+                Image(
+                    painter = rememberAsyncImagePainter(imageUrl),
+                    contentDescription = movie.title,
+                    modifier = Modifier
+                        .width(180.dp)
+                        .height(255.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(modifier = Modifier.width(180.dp).height(255.dp).background(Color.DarkGray))
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = movie.title,
+                text = if (isAuthorMode) movie.identifier.substringAfter("AUTHOR|") else movie.title,
                 color = Color.White,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
@@ -135,10 +159,12 @@ fun DetailsScreen(
                 Spacer(modifier = Modifier.height(20.dp))
                 CircularProgressIndicator(color = Color.Red)
             } else {
-                movieInfo?.let { info ->
+                val currentInfo = movieInfo
+                
+                if (!isAuthorMode && currentInfo != null) {
                     val metaParts = buildList {
-                        if (info.year.isNotEmpty()) add("Godina: ${info.year}")
-                        if (info.director.isNotEmpty()) add("Redatelj: ${info.director}")
+                        if (currentInfo.year.isNotEmpty()) add("Godina: ${currentInfo.year}")
+                        if (currentInfo.director.isNotEmpty()) add("Redatelj: ${currentInfo.director}")
                     }
                     if (metaParts.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(6.dp))
@@ -149,26 +175,178 @@ fun DetailsScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                    Text(
-                        text = translatedDescription.ifEmpty { info.description },
-                        color = Color(0xFFDDDDDD),
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
-                    )
+                Text(
+                    text = translatedDescription.ifEmpty { currentInfo?.description ?: "Nema dostupnog opisa." },
+                    color = Color(0xFFDDDDDD),
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                )
 
-                    Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-                    if (info.qualities.size > 1) {
+                if (currentInfo != null && currentInfo.qualities.size > 1) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(50.dp)
+                            .padding(bottom = 12.dp)
+                            .background(
+                                color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .border(
+                                width = if (isFavFocused) 3.5.dp else 1.dp,
+                                color = if (isFavFocused) Color.White else Color.DarkGray,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable(interactionSource = favInteractionSource, indication = null) {
+                                viewModel.toggleFavorite(movie)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = null,
+                                tint = if (isFavorite) Color.Red else Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    // AŽURIRANO: Lista filmova formatirana kao "Naziv filma (Godina)"
+                    currentInfo.qualities.forEachIndexed { index, quality ->
+                        val epInteractionSource = remember { MutableInteractionSource() }
+                        val isEpFocused by epInteractionSource.collectIsFocusedAsState()
+                        val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
+
+                        val decodedUrl = try {
+                            URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
+                        } catch (e: Exception) {
+                            quality.label
+                        }
+                        
+                        val originalName = decodedUrl.substringBeforeLast(".")
+                        
+                        // Izvlačimo godinu iz naziva (19xx ili 20xx)
+                        val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
+                        val extractedYear = yearMatch?.value ?: ""
+
+                        // Čistimo ime filma od smeća i godine
+                        var cleanTitle = originalName.replace(Regex("(?i)(_|-|\\.)"), " ")
+                        cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip)\\b"), "")
+                        if (extractedYear.isNotEmpty()) {
+                            cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
+                        }
+                        cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
+
+                        // Spajamo Naziv + (Godina)
+                        val finalFormattedTitle = if (extractedYear.isNotEmpty() && cleanTitle.isNotEmpty()) {
+                            "$cleanTitle ($extractedYear)"
+                        } else if (cleanTitle.isNotEmpty()) {
+                            cleanTitle
+                        } else {
+                            "Naslov ${index + 1}"
+                        }
+
+                        Box(
+                            modifier = mod
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                                .background(
+                                    color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .border(
+                                    width = if (isEpFocused) 3.dp else 1.dp,
+                                    color = if (isEpFocused) Color.White else Color.DarkGray,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable(interactionSource = epInteractionSource, indication = null) {
+                                    onPlayClick(quality.url)
+                                }
+                                .padding(16.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${index + 1}.",
+                                    color = Color.Red,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.width(36.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                    Text(
+                                        text = finalFormattedTitle,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                }
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
+                            }
+                        }
+                    }
+                } else if (currentInfo != null) {
+                    // Klasični prikaz za 1 film
+                    Row(
+                        modifier = Modifier.fillMaxWidth(0.9f),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.8f)
-                                .height(50.dp)
-                                .padding(bottom = 12.dp)
+                                .weight(1f)
+                                .height(54.dp)
+                                .focusRequester(playButtonFocusRequester)
+                                .background(
+                                    color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .border(
+                                    width = if (isPlayFocused) 3.5.dp else 1.dp,
+                                    color = if (isPlayFocused) Color.White else Color.Transparent,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable(interactionSource = playInteractionSource, indication = null) {
+                                    onPlayClick(currentInfo.year) // Ako je 1 film, URL se obično skriva tu u postojećoj logici
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "POKRENI",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(54.dp)
                                 .background(
                                     color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                     shape = RoundedCornerShape(12.dp)
@@ -199,145 +377,58 @@ fun DetailsScreen(
                                 )
                             }
                         }
-
-                        info.qualities.forEachIndexed { index, quality ->
-                            val epInteractionSource = remember { MutableInteractionSource() }
-                            val isEpFocused by epInteractionSource.collectIsFocusedAsState()
-                            val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
-
-                            val decodedUrl = try {
-                                URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
-                            } catch (e: Exception) {
-                                quality.label
-                            }
-                            
-                            val cleanTitle = decodedUrl
-                                .substringBeforeLast(".") 
-                                .replace(Regex("(?i)(_|-|\\.)"), " ") 
-                                .replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip)\\b"), "")
-                                .replace(Regex("\\s+"), " ")
-                                .trim()
-
-                            Box(
-                                modifier = mod
-                                    .fillMaxWidth()
-                                    .padding(vertical = 6.dp)
-                                    .background(
-                                        color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .border(
-                                        width = if (isEpFocused) 3.dp else 1.dp,
-                                        color = if (isEpFocused) Color.White else Color.DarkGray,
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                                    .clickable(interactionSource = epInteractionSource, indication = null) {
-                                        onPlayClick(quality.url)
-                                    }
-                                    .padding(16.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "${index + 1}.",
-                                        color = Color.Red,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        modifier = Modifier.width(36.dp)
-                                    )
-                                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                                        Text(
-                                            text = cleanTitle.ifEmpty { "Film / Naslov ${index + 1}" },
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
-                                        )
-                                    }
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
-                                }
-                            }
-                        }
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(0.9f),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(54.dp)
-                                    .focusRequester(playButtonFocusRequester)
-                                    .background(
-                                        color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .border(
-                                        width = if (isPlayFocused) 3.5.dp else 1.dp,
-                                        color = if (isPlayFocused) Color.White else Color.Transparent,
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable(interactionSource = playInteractionSource, indication = null) {
-                                        onPlayClick(info.year)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "POKRENI",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(54.dp)
-                                    .background(
-                                        color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .border(
-                                        width = if (isFavFocused) 3.5.dp else 1.dp,
-                                        color = if (isFavFocused) Color.White else Color.DarkGray,
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable(interactionSource = favInteractionSource, indication = null) {
-                                        viewModel.toggleFavorite(movie)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                        contentDescription = null,
-                                        tint = if (isFavorite) Color.Red else Color.White,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                            }
-                        }
                     }
+                } else if (isAuthorMode) {
+                    Text(
+                        text = "Nažalost, nismo uspjeli pronaći filmove za ovog autora u arhivi.",
+                        color = Color.Gray,
+                        modifier = Modifier.padding(top = 20.dp)
+                    )
                 }
                 Spacer(modifier = Modifier.height(30.dp))
             }
         }
+    }
+}
+
+// POMOĆNE FUNKCIJE ZA DOHVAT PODATAKA U POZADINI
+
+private suspend fun fetchWikiInfo(authorName: String): Pair<String, String> = withContext(Dispatchers.IO) {
+    try {
+        val encodedName = URLEncoder.encode(authorName.replace(" ", "_"), "UTF-8")
+        val url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=pageimages|extracts&exintro=1&explaintext=1&pithumbsize=600&format=json")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        val response = conn.inputStream.bufferedReader().use { it.readText() }
+        
+        val jsonObject = JSONObject(response)
+        val pages = jsonObject.getJSONObject("query").getJSONObject("pages")
+        val pageId = pages.keys().next()
+        if (pageId == "-1") return@withContext Pair("", "")
+        
+        val page = pages.getJSONObject(pageId)
+        val extract = if (page.has("extract")) page.getString("extract") else ""
+        val imgUrl = if (page.has("thumbnail")) page.getJSONObject("thumbnail").getString("source") else ""
+        
+        Pair(imgUrl, extract)
+    } catch (e: Exception) {
+        Pair("", "")
+    }
+}
+
+private suspend fun fetchArchiveCollectionId(authorName: String): String? = withContext(Dispatchers.IO) {
+    try {
+        val query = URLEncoder.encode("collection:opensource_movies AND (\"$authorName\") AND (filmography OR \"films of\" OR \"collection of\")", "UTF-8")
+        val url = URL("https://archive.org/advancedsearch.php?q=$query&fl[]=identifier&output=json&rows=1")
+        val conn = url.openConnection() as HttpURLConnection
+        val response = conn.inputStream.bufferedReader().use { it.readText() }
+        val jsonObject = JSONObject(response)
+        val docs = jsonObject.getJSONObject("response").getJSONArray("docs")
+        if (docs.length() > 0) {
+            docs.getJSONObject(0).getString("identifier")
+        } else null
+    } catch (e: Exception) {
+        null
     }
 }
 
