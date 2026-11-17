@@ -15,6 +15,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -226,9 +227,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // FINALNO ISPRAVLJENO: Koristimo mapOf za type inference, bez angle brackets u MutableStateFlow
+    // KONACNO, NAJCISCA I NAJSIGURNIJA SINTAKSA BEZ GRESKE
     private val _authorImages = MutableStateFlow(mapOf<String, String>())
-    val authorImages: StateFlow> = _authorImages
+    val authorImages = _authorImages.asStateFlow()
 
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
