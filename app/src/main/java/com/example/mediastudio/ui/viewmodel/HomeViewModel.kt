@@ -135,7 +135,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
-    // AŽURIRANO: STROGA LISTA AUTORA TOČNO PO TVOM REDOSLIJEDU
+    // AŽURIRANO: Fiksna lista točno tvojim redoslijedom
     private val exactAuthorOrder = listOf(
         "Alfred Hitchcock", "Francis Ford Coppola", "Brian De Palma", "Sergio Leone", "Lars von Trier",
         "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard", "David Cronenberg",
@@ -169,11 +169,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
         
-        // AŽURIRANO: Poboljšan upit kako bi garantirao pronalazak unutar opensource_movies
+        // AŽURIRANO: Ovdje signaliziramo da je ovo autorska kolekcija
         GenreOption(
             title = "Filmografije i Kolekcije Autora",
-            query = "mediatype:movies AND collection:opensource_movies AND (subject:filmography OR title:filmography OR title:\"films of\")",
-            defaultSort = "downloads desc",
+            query = "", // Query nam više ne treba za ovo, rješavamo hardkodirano
+            defaultSort = "",
             isAuthorCollection = true 
         ),
         
@@ -390,7 +390,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAnimationCategory = true,
                     isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
                     isConcertCategory = _selectedTab.value == ContentTab.CONCERTS,
-                    isAuthorCollection = false,
                     searchQueryForRanking = trimmed
                 )
                 _globalSearchResults.value = results
@@ -421,24 +420,31 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
-                        val isWeeklyTop = genre.title.startsWith("Top 10")
-                        // AŽURIRANO: Ogroman dohvat od 500 rezultata isključivo za kolekcije autora kako nitko ne bi promaknuo
-                        val fetchRows = if (genre.isAuthorCollection) 500 else if (isWeeklyTop) 300 else 150
-                        val (results, _) = fetchAndRankByRelevance(
-                            query = genre.query,
-                            apiSort = genre.defaultSort,
-                            rows = fetchRows, 
-                            page = 1,
-                            excludeAdult = !genre.isAdultCategory,
-                            isAdultCategory = genre.isAdultCategory,
-                            isAnimationCategory = genre.isAnimationCategory,
-                            isSeriesCategory = false,
-                            isConcertCategory = false,
-                            isAuthorCollection = genre.isAuthorCollection
-                        )
-                        // AŽURIRANO: Ovdje povlačimo onoliko autora koliko ih točno imaš na listi
-                        val limit = if (genre.isAuthorCollection) exactAuthorOrder.size else if (isWeeklyTop) 10 else 20
-                        genre to results.map { it.movie }.take(limit)
+                        // AŽURIRANO: Ako je kolekcija autora, učitaj ju trenutačno iz hardkodirane liste! Nema gubljenja vremena.
+                        if (genre.isAuthorCollection) {
+                            val authorMovies = exactAuthorOrder.map { authorName ->
+                                ArchiveMovie(
+                                    identifier = "AUTHOR|$authorName", // Prepoznatljiv prefix koji ćemo hvatati u DetailsScreen
+                                    title = authorName
+                                )
+                            }
+                            genre to authorMovies
+                        } else {
+                            val isWeeklyTop = genre.title.startsWith("Top 10")
+                            val fetchRows = if (isWeeklyTop) 300 else 150
+                            val (results, _) = fetchAndRankByRelevance(
+                                query = genre.query,
+                                apiSort = genre.defaultSort,
+                                rows = fetchRows, 
+                                page = 1,
+                                excludeAdult = !genre.isAdultCategory,
+                                isAdultCategory = genre.isAdultCategory,
+                                isAnimationCategory = genre.isAnimationCategory,
+                                isSeriesCategory = false,
+                                isConcertCategory = false
+                            )
+                            genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                        }
                     }
                 }
 
@@ -454,8 +460,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isAdultCategory = false,
                             isAnimationCategory = genre.isAnimationCategory,
                             isSeriesCategory = true,
-                            isConcertCategory = false,
-                            isAuthorCollection = genre.isAuthorCollection
+                            isConcertCategory = false
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -473,8 +478,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isAdultCategory = false,
                             isAnimationCategory = false,
                             isSeriesCategory = false,
-                            isConcertCategory = true,
-                            isAuthorCollection = genre.isAuthorCollection
+                            isConcertCategory = true
                         )
                         genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
                     }
@@ -573,33 +577,45 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             
             _currentGenrePage.value = page
             try {
-                val isWeeklyTop = genre.title.startsWith("Top 10")
-                // AŽURIRANO: Opet tražimo 500 ako je u pitanju kolekcija autora
-                val fetchRows = if (genre.isAuthorCollection) 500 else if (isWeeklyTop) 300 else 150
-                val targetLimit = if (genre.isAuthorCollection) exactAuthorOrder.size else if (isWeeklyTop) 10 else pageSize
-
-                val (results, totalFound) = fetchAndRankByRelevance(
-                    query = genre.query,
-                    apiSort = if (isWeeklyTop) "week desc" else "downloads desc",
-                    rows = fetchRows,
-                    page = page,
-                    excludeAdult = !genre.isAdultCategory,
-                    isAdultCategory = genre.isAdultCategory,
-                    isAnimationCategory = genre.isAnimationCategory,
-                    isSeriesCategory = genre.isSeriesCategory,
-                    isConcertCategory = genre.isConcertCategory,
-                    isAuthorCollection = genre.isAuthorCollection
-                )
-
-                _genreMovies.value = results.take(targetLimit)
-
-                if (isWeeklyTop) {
-                    _totalGenreMoviesCount.value = 10
+                // AŽURIRANO: Ako je kolekcija autora, odmah ubacujemo cijelu listu
+                if (genre.isAuthorCollection) {
+                    val authorMovies = exactAuthorOrder.map { authorName ->
+                        RatedMovie(
+                            movie = ArchiveMovie(identifier = "AUTHOR|$authorName", title = authorName),
+                            rating = "",
+                            relevanceScore = 0.0
+                        )
+                    }
+                    _genreMovies.value = authorMovies
+                    _totalGenreMoviesCount.value = exactAuthorOrder.size
                     _totalGenrePages.value = 1
                 } else {
-                    _totalGenreMoviesCount.value = totalFound
-                    val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
-                    _totalGenrePages.value = calculatedPages.coerceAtMost(100)
+                    val isWeeklyTop = genre.title.startsWith("Top 10")
+                    val fetchRows = if (isWeeklyTop) 300 else 150
+                    val targetLimit = if (isWeeklyTop) 10 else pageSize
+
+                    val (results, totalFound) = fetchAndRankByRelevance(
+                        query = genre.query,
+                        apiSort = if (isWeeklyTop) "week desc" else "downloads desc",
+                        rows = fetchRows,
+                        page = page,
+                        excludeAdult = !genre.isAdultCategory,
+                        isAdultCategory = genre.isAdultCategory,
+                        isAnimationCategory = genre.isAnimationCategory,
+                        isSeriesCategory = genre.isSeriesCategory,
+                        isConcertCategory = genre.isConcertCategory
+                    )
+
+                    _genreMovies.value = results.take(targetLimit)
+
+                    if (isWeeklyTop) {
+                        _totalGenreMoviesCount.value = 10
+                        _totalGenrePages.value = 1
+                    } else {
+                        _totalGenreMoviesCount.value = totalFound
+                        val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
+                        _totalGenrePages.value = calculatedPages.coerceAtMost(100)
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -619,7 +635,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         isAnimationCategory: Boolean,
         isSeriesCategory: Boolean,
         isConcertCategory: Boolean,
-        isAuthorCollection: Boolean = false,
         searchQueryForRanking: String? = null
     ): Pair<List<RatedMovie>, Int> {
         return try {
@@ -651,37 +666,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 var score = 0.0
 
-                // AŽURIRANO: Ekskluzivno mapiranje, preimenovanje i strogo redoslijedno bodovanje za autore
-                if (isAuthorCollection) {
-                    val authorIndex = exactAuthorOrder.indexOfFirst { author ->
-                        val searchName = if (author == "Paul Thomas Anderson") "pta filmography" else author.lowercase()
-                        val altName = author.lowercase().replace("ç", "c").replace("é", "e").replace("ü", "u").replace("ö", "o").replace("ś", "s")
-                        
-                        titleLower.contains(searchName) || fullMetaLower.contains(searchName) ||
-                        titleLower.contains(altName) || fullMetaLower.contains(altName)
-                    }
-                    
-                    // Ako nije pronađen na tvojoj točnoj listi, preskoči (obriši) taj rezultat
-                    if (authorIndex == -1) return@mapNotNull null
-                    
-                    // Preimenuj karticu čisto u Autorovo ime
-                    val finalTitleStr = exactAuthorOrder[authorIndex]
-                    // Bodovi se računaju tako da #1 na listi dobiva apsolutno najviše bodova
-                    val authorScore = 1000000.0 - (authorIndex * 10000.0)
-                    
-                    // Za kolekcije autora odmah vraćamo rezultat kako ocjene i preuzimanja ne bi pomiješale tvoj redoslijed!
-                    return@mapNotNull RatedMovie(
-                        movie = ArchiveMovie(identifier = id, title = finalTitleStr),
-                        rating = "", // Nema ocjene na mapi redatelja
-                        relevanceScore = authorScore
-                    )
-                }
-
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 
                 if (isAdultCategory) {
                     if (runtimeMinutes in 1..10) return@mapNotNull null 
-                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory && !isAuthorCollection) {
+                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
                 
@@ -745,12 +734,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // AŽURIRANO: Za kolekcije autora izbacujemo moguće duplikate ako netko ima više postavljenih arhiva, ostavljamo samo jednu!
-            val finalSorted = if (isAuthorCollection) {
-                scoredList
-                    .sortedByDescending { it.relevanceScore }
-                    .distinctBy { it.movie.title }
-            } else if (isSeriesCategory) {
+            val finalSorted = if (isSeriesCategory) {
                 val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
                 val mergedList = grouped.map { (baseTitle, group) ->
                     val mergedIds = group.joinToString(",") { it.movie.identifier }
@@ -775,33 +759,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         var clean = rawTitle
-        // Ukloni godine (npr. (1998), [2004], 1984 85)
         clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
-        
-        // Odreži sve od specifičnih riječi za epizode, sezone itd.
         clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
-        
-        // Odreži formate 1x01, 2x05
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
         
-        // Specifično rezanje za poznate serije (ako se pojave riječi nakon imena serije)
         val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
         for (series in knownSeries) {
             if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
-                // Zadrži samo ime serije
                 clean = series
                 break
             }
         }
         
-        // Ukloni nepotrebne sufikse
         clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
-        
-        // Ukloni crtice s brojevima na kraju (npr. "Naziv serije - 01")
         clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
         clean = clean.replace(Regex("\\s*-\\s*$"), "")
-        
-        // Ostavi samo slova i brojeve
         clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
         clean = clean.replace(Regex("\\s+"), " ").trim()
         
