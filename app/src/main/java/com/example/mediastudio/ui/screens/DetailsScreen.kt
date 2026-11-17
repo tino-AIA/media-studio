@@ -77,11 +77,17 @@ fun DetailsScreen(
         if (isAuthorMode) {
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             
-            val wikiData = fetchWikiInfo(authorName)
-            imageUrl = wikiData.first
-            translatedDescription = translateToCroatian(wikiData.second)
+            // 1. Momentalno postavlja sliku iz ViewModela
+            imageUrl = viewModel.getAuthorImage(authorName)
             
-            val archiveId = fetchArchiveCollectionId(authorName)
+            // 2. Traži biografiju direktno s HR Wikipedije (ako postoji), a inače s EN pa prevodi
+            val wikiData = fetchWikiInfo(authorName)
+            translatedDescription = wikiData
+            
+            // 3. Traži točan identifikator filmografije ovog autora preko moćnijeg queryja
+            val archiveQuery = viewModel.getAuthorSearchQuery(authorName)
+            val archiveId = fetchArchiveCollectionId(archiveQuery)
+            
             if (archiveId != null) {
                 movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
             }
@@ -245,7 +251,7 @@ fun DetailsScreen(
                         if (extractedYear.isNotEmpty()) {
                             cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
                         }
-                        // AŽURIRANO: Briše brojeve ako se nalaze točno na POČETKU naziva (npr "3 Spinout" postaje "Spinout")
+                        // AŽURIRANO: Briše bilo kakve brojke i razmake sa SAMOG POČETKA naziva datoteke
                         cleanTitle = cleanTitle.replace(Regex("^\\s*\\d+\\s+"), "")
                         cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
 
@@ -316,7 +322,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    onPlayClick(currentInfo.year)
+                                    onPlayClick(currentInfo.year) 
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -385,33 +391,57 @@ fun DetailsScreen(
     }
 }
 
-private suspend fun fetchWikiInfo(authorName: String): Pair<String, String> = withContext(Dispatchers.IO) {
+// AŽURIRANO: Traži po HR Wikipediji, ako faila traži EN Wikipediju pa prevodi na HR
+private suspend fun fetchWikiInfo(authorName: String): String = withContext(Dispatchers.IO) {
     try {
         val encodedName = URLEncoder.encode(authorName.replace(" ", "_"), "UTF-8")
-        val url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=pageimages|extracts&exintro=1&explaintext=1&pithumbsize=600&format=json")
-        val conn = url.openConnection() as HttpURLConnection
+        
+        // 1. Probaj dohvatit s Hrvatske Wikipedije
+        var url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json")
+        var conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        val response = conn.inputStream.bufferedReader().use { it.readText() }
+        var response = conn.inputStream.bufferedReader().use { it.readText() }
         
-        val jsonObject = JSONObject(response)
-        val pages = jsonObject.getJSONObject("query").getJSONObject("pages")
-        val pageId = pages.keys().next()
-        if (pageId == "-1") return@withContext Pair("", "")
+        var jsonObject = JSONObject(response)
+        var pages = jsonObject.getJSONObject("query").getJSONObject("pages")
+        var pageId = pages.keys().next()
         
-        val page = pages.getJSONObject(pageId)
-        val extract = if (page.has("extract")) page.getString("extract") else ""
-        val imgUrl = if (page.has("thumbnail")) page.getJSONObject("thumbnail").getString("source") else ""
+        if (pageId != "-1") {
+            val page = pages.getJSONObject(pageId)
+            if (page.has("extract")) {
+                val extract = page.getString("extract").trim()
+                if (extract.isNotEmpty()) return@withContext extract
+            }
+        }
         
-        Pair(imgUrl, extract)
+        // 2. Ako nema HR Wiki, povuci EN Wiki pa ga ubaci u Translate API
+        url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json")
+        conn = url.openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        response = conn.inputStream.bufferedReader().use { it.readText() }
+        
+        jsonObject = JSONObject(response)
+        pages = jsonObject.getJSONObject("query").getJSONObject("pages")
+        pageId = pages.keys().next()
+        
+        if (pageId != "-1") {
+            val page = pages.getJSONObject(pageId)
+            if (page.has("extract")) {
+                val englishExtract = page.getString("extract").trim()
+                return@withContext translateToCroatian(englishExtract)
+            }
+        }
+        return@withContext "Biografija nije pronađena."
     } catch (e: Exception) {
-        Pair("", "")
+        return@withContext "Biografija nije pronađena."
     }
 }
 
-private suspend fun fetchArchiveCollectionId(authorName: String): String? = withContext(Dispatchers.IO) {
+// AŽURIRANO: Precizniji API zahtjev koristeći query izrađen iz ViewModela
+private suspend fun fetchArchiveCollectionId(archiveQuery: String): String? = withContext(Dispatchers.IO) {
     try {
-        val query = URLEncoder.encode("collection:opensource_movies AND (\"$authorName\") AND (filmography OR \"films of\" OR \"collection of\")", "UTF-8")
-        val url = URL("https://archive.org/advancedsearch.php?q=$query&fl[]=identifier&output=json&rows=1")
+        val encodedQuery = URLEncoder.encode(archiveQuery, "UTF-8")
+        val url = URL("https://archive.org/advancedsearch.php?q=$encodedQuery&fl[]=identifier&output=json&rows=1")
         val conn = url.openConnection() as HttpURLConnection
         val response = conn.inputStream.bufferedReader().use { it.readText() }
         val jsonObject = JSONObject(response)
