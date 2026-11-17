@@ -15,7 +15,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -157,6 +156,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
 
+    // OVDJE UBACI SVOJE LINKOVE IZ TABLICE - Ostavio sam par primjera
+    val authorImages = mapOf(
+        "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
+        "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
+        "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
+        "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
+        "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg"
+        // Dodaj ostale ispod po istom principu: "Ime Redatelja" to "url_slike",
+    )
+
     private val authorArchiveIds = mapOf(
         "Alfred Hitchcock" to "filmography-alfred-hitchcock",
         "Francis Ford Coppola" to "filmography-francis-ford-coppola",
@@ -226,10 +235,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun getAuthorArchiveId(authorName: String): String {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
-
-    // KONACNO, NAJCISCA I NAJSIGURNIJA SINTAKSA BEZ GRESKE
-    private val _authorImages = MutableStateFlow(mapOf<String, String>())
-    val authorImages = _authorImages.asStateFlow()
 
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
@@ -357,43 +362,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         loadFavorites()
         loadCacheAndFetchNew()
-        fetchAuthorImagesInBackground()
-    }
-
-    private fun fetchAuthorImagesInBackground() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val map = mutableMapOf<String, String>()
-            val deferreds = exactAuthorOrder.map { author ->
-                async {
-                    try {
-                        val searchName = if (author == "PTA Filmography") "Paul Thomas Anderson" else author
-                        val encoded = URLEncoder.encode(searchName, "UTF-8")
-                        val url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=pageimages&pithumbsize=400&format=json&redirects=1")
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-                        val response = conn.inputStream.bufferedReader().use { it.readText() }
-                        val json = JSONObject(response)
-                        val pages = json.getJSONObject("query").getJSONObject("pages")
-                        val pageId = pages.keys().next()
-                        if (pageId != "-1") {
-                            val page = pages.getJSONObject(pageId)
-                            if (page.has("thumbnail")) {
-                                return@async author to page.getJSONObject("thumbnail").getString("source")
-                            }
-                        }
-                    } catch (e: Exception) {}
-                    return@async author to ""
-                }
-            }
-            
-            deferreds.forEach {
-                val (author, url) = it.await()
-                if (url.isNotEmpty()) {
-                    map[author] = url
-                    _authorImages.value = map.toMap()
-                }
-            }
-        }
     }
 
     private fun loadFavorites() {
