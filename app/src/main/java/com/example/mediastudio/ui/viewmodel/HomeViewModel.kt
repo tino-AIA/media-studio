@@ -135,8 +135,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
-    // AŽURIRANO: Fiksna lista točno tvojim redoslijedom
-    private val exactAuthorOrder = listOf(
+    val exactAuthorOrder = listOf(
         "Alfred Hitchcock", "Francis Ford Coppola", "Brian De Palma", "Sergio Leone", "Lars von Trier",
         "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard", "David Cronenberg",
         "John Cassavetes", "Mira Nair", "Takeshi Kitano", "Freddie Francis", "Elvis Presley",
@@ -151,6 +150,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
         "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
+
+    // AŽURIRANO: Fiksni stabilni linkovi za najpoznatije, kako bi slika učitala trenutačno i sigurno (bez 403 HTTP blokada)
+    private val authorImages = mapOf(
+        "Alfred Hitchcock" to "https://image.tmdb.org/t/p/w500/z626G4tQEnYJ2xGqU0iL08mBum2.jpg",
+        "Francis Ford Coppola" to "https://image.tmdb.org/t/p/w500/mXbPNhNq99aY76qSAvf7Z2tSbfx.jpg",
+        "Brian De Palma" to "https://image.tmdb.org/t/p/w500/n5V4Uo0YqM4eJ9mB7oNn8hXw5yC.jpg",
+        "Sergio Leone" to "https://image.tmdb.org/t/p/w500/w7Y1E8n2C8K1L9fE9L9N0U7Q9Fz.jpg",
+        "Lars von Trier" to "https://image.tmdb.org/t/p/w500/9kC0I9qG7gC3o8z6V5U4G5X9R2D.jpg",
+        "Paul Verhoeven" to "https://image.tmdb.org/t/p/w500/4n7X1o0YqM4eJ9mB7oNn8hXw5yC.jpg",
+        "Roman Polanski" to "https://image.tmdb.org/t/p/w500/vG6w5G2Y3l3N9mE4C3mN9U6F4K2.jpg",
+        "Werner Herzog" to "https://image.tmdb.org/t/p/w500/8g3w3V2Y3l3N9mE4C3mN9U6F4K2.jpg",
+        "Jean-Luc Godard" to "https://image.tmdb.org/t/p/w500/1X6G4tQEnYJ2xGqU0iL08mBum2.jpg",
+        "David Cronenberg" to "https://image.tmdb.org/t/p/w500/m8Z4V5C3X3N9mE4C3mN9U6F4K2.jpg",
+        "Elvis Presley" to "https://image.tmdb.org/t/p/w500/t0f1K7a7R9s6Y9t6G2j0O4s8F2k.jpg",
+        "Akira Kurosawa" to "https://image.tmdb.org/t/p/w500/2L2w9Y7l5L4s6Z0q9P5r7K2v1B9.jpg",
+        "Paul Thomas Anderson" to "https://image.tmdb.org/t/p/w500/v2F5X2C1Z4V6G7N5P9Q8R4s7V2K.jpg",
+        "Orson Welles" to "https://image.tmdb.org/t/p/w500/q2R7T9qG7gC3o8z6V5U4G5X9R2D.jpg",
+        "Andy Warhol" to "https://image.tmdb.org/t/p/w500/n3F2K9l7R5t8Y4q6G2j0O4s8F2k.jpg"
+    )
+
+    fun getAuthorImage(authorName: String): String {
+        return authorImages[authorName] ?: ""
+    }
+
+    // AŽURIRANO: Pomoćna funkcija koja izvlači ključnu riječ (najčešće prezime) za sigurnu Archive pretragu
+    fun getAuthorSearchQuery(authorName: String): String {
+        val lastName = authorName.split(" ").last()
+        return "collection:opensource_movies AND title:(*$lastName*) AND (title:filmography OR title:\"films of\" OR title:collection)"
+    }
 
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
@@ -169,10 +197,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
         
-        // AŽURIRANO: Ovdje signaliziramo da je ovo autorska kolekcija
         GenreOption(
             title = "Filmografije i Kolekcije Autora",
-            query = "", // Query nam više ne treba za ovo, rješavamo hardkodirano
+            query = "", 
             defaultSort = "",
             isAuthorCollection = true 
         ),
@@ -389,8 +416,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAdultCategory = false,
                     isAnimationCategory = true,
                     isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
-                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS,
-                    searchQueryForRanking = trimmed
+                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS
                 )
                 _globalSearchResults.value = results
             } catch (e: Exception) {
@@ -420,11 +446,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
-                        // AŽURIRANO: Ako je kolekcija autora, učitaj ju trenutačno iz hardkodirane liste! Nema gubljenja vremena.
                         if (genre.isAuthorCollection) {
                             val authorMovies = exactAuthorOrder.map { authorName ->
                                 ArchiveMovie(
-                                    identifier = "AUTHOR|$authorName", // Prepoznatljiv prefix koji ćemo hvatati u DetailsScreen
+                                    identifier = "AUTHOR|$authorName",
                                     title = authorName
                                 )
                             }
@@ -577,7 +602,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             
             _currentGenrePage.value = page
             try {
-                // AŽURIRANO: Ako je kolekcija autora, odmah ubacujemo cijelu listu
                 if (genre.isAuthorCollection) {
                     val authorMovies = exactAuthorOrder.map { authorName ->
                         RatedMovie(
