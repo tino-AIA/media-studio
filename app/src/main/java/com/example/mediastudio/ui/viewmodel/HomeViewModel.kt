@@ -226,7 +226,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // THE FIX: Initialized MutableStateFlow properly with emptyMap()
     private val _authorImages = MutableStateFlow>(emptyMap())
     val authorImages: StateFlow> = _authorImages
 
