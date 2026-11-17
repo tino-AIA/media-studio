@@ -226,7 +226,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // SLIKE SU SADA OBIČNA KOTLIN MAPA - COMPILER OVO NE MOŽE SRUŠITI
     val staticAuthorImages = mapOf(
         "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
         "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
