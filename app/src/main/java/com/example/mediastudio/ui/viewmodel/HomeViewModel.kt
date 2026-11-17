@@ -135,7 +135,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
     )
 
-    // AŽURIRANO: Ekskluzivna lista traženih autora, posložena tvojim redoslijedom
     private val knownAuthorsAndActors = listOf(
         "alfred hitchcock", "francis ford coppola", "brian de palma", "sergio leone", 
         "lars von trier", "paul verhoeven", "roman polanski", "werner herzog", "jean-luc godard", 
@@ -626,7 +625,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             val scoredList = docs.mapNotNull { doc ->
                 val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val rawTitle = extractText(doc.title)
-                val finalTitle = rawTitle.ifBlank {
+                var finalTitle = rawTitle.ifBlank {
                     id.replace("_", " ").replace("-", " ").replaceFirstChar { it.uppercase() }
                 }
 
@@ -648,15 +647,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 var score = 0.0
 
                 if (isAuthorCollection) {
-                    val matchesKnown = knownAuthorsAndActors.any { titleLower.contains(it) || fullMetaLower.contains(it) }
-                    
-                    if (!matchesKnown) return@mapNotNull null
-                    
-                    // AŽURIRANO: Poredak po redoslijedu iz knownAuthorsAndActors (najviši dobiva najviše bodova)
-                    val authorIndex = knownAuthorsAndActors.indexOfFirst { titleLower.contains(it) || fullMetaLower.contains(it) }
-                    if (authorIndex != -1) {
-                        score += 100000.0 - (authorIndex * 1000.0)
+                    val authorIndex = knownAuthorsAndActors.indexOfFirst { author ->
+                        titleLower.contains(author) || fullMetaLower.contains(author) || 
+                        (author == "pta filmography" && (titleLower.contains("paul thomas anderson") || fullMetaLower.contains("paul thomas anderson")))
                     }
+                    
+                    if (authorIndex == -1) return@mapNotNull null 
+                    
+                    val matchedAuthor = knownAuthorsAndActors[authorIndex]
+                    finalTitle = matchedAuthor.split(" ").joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
+                        .replace("Pta Filmography", "Paul Thomas Anderson")
+                        .replace("Francois Truffaut", "François Truffaut")
+                        .replace("Lina Wertmuller", "Lina Wertmüller")
+                    
+                    score += 1000000.0 - (authorIndex * 1000.0) 
                 }
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
@@ -752,33 +756,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         var clean = rawTitle
-        // Ukloni godine (npr. (1998), [2004], 1984 85)
         clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
-        
-        // Odreži sve od specifičnih riječi za epizode, sezone itd.
         clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
-        
-        // Odreži formate 1x01, 2x05
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
         
-        // Specifično rezanje za poznate serije (ako se pojave riječi nakon imena serije)
         val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
         for (series in knownSeries) {
             if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
-                // Zadrži samo ime serije
                 clean = series
                 break
             }
         }
         
-        // Ukloni nepotrebne sufikse
         clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
-        
-        // Ukloni crtice s brojevima na kraju (npr. "Naziv serije - 01")
         clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
         clean = clean.replace(Regex("\\s*-\\s*$"), "")
-        
-        // Ostavi samo slova i brojeve
         clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
         clean = clean.replace(Regex("\\s+"), " ").trim()
         
