@@ -226,8 +226,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // ISPRAVLJENO: Koristimo Map<String, String>() izravno
-    private val _authorImages = MutableStateFlow(Map<String, String>())
+    private val _authorImages = MutableStateFlow>(emptyMap())
     val authorImages: StateFlow> = _authorImages
 
     private val legendaryTitles = listOf(
