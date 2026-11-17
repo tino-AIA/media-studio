@@ -68,7 +68,7 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
-    val authorImages by viewModel.authorImages.collectAsState()
+    val authorImages = viewModel.authorImages
 
     BackHandler {
         onBackClick()
@@ -80,14 +80,13 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Postavlja sliku na Wikipedijinu, a ako je nema, na archive.org bazu
-            val wikiImage = authorImages[authorName] ?: ""
-            imageUrl = wikiImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
+            // ISTA SLIKA KAO I VANI
+            val mappedImage = authorImages[authorName] ?: ""
+            imageUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
             
             val wikiData = fetchWikiInfo(authorName)
             translatedDescription = wikiData
             
-            // Točno pogađa tvoju unesenu kolekciju s id-em
             movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
             
         } else {
@@ -229,7 +228,6 @@ fun DetailsScreen(
                         }
                     }
 
-                    // AŽURIRANO: Algoritam za prepoznavanje godine, uređivanje naziva i preslagivanje (najnovije prvo)
                     val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
                             URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
@@ -239,20 +237,16 @@ fun DetailsScreen(
                         
                         val originalName = decodedUrl.substringBeforeLast(".")
                         
-                        // Traži godinu u nazivu
                         val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
                         val extractedYear = yearMatch?.value ?: ""
 
-                        // Brisanje crtica, točaka i ostalih tehničkih oznaka
                         var cleanTitle = originalName.replace(Regex("(?i)(_|-|\\.)"), " ")
                         cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip|web|dl|hd|sd)\\b"), "")
                         
-                        // Briše godinu iz glavnog stringa kako ne bi pisalo dva puta
                         if (extractedYear.isNotEmpty()) {
                             cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
                         }
                         
-                        // Briše uvodne brojeve (npr "3 Spinout")
                         cleanTitle = cleanTitle.replace(Regex("^\\s*[0-9]+[\\.\\-]?\\s*"), "")
                         cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
 
@@ -264,12 +258,10 @@ fun DetailsScreen(
                             quality.label
                         }
                         
-                        // Stvara paket koji se može sortirati po broju godine
                         Triple(quality, finalFormattedTitle, extractedYear.toIntOrNull() ?: 0)
                         
-                    }.sortedByDescending { it.third } // OVDJE se obavlja sortiranje: Najnovije godine su prve
+                    }.sortedByDescending { it.third }
 
-                    // Iscrtavanje sortirane liste
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
@@ -289,6 +281,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
+                                    // Klikom na pojedinačni film prosljeđujemo točan URL
                                     onPlayClick(quality.url)
                                 }
                                 .padding(16.dp)
@@ -334,7 +327,9 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    onPlayClick(currentInfo.year) 
+                                    // ISPRAVLJEN BUB: Prosljeđujemo pravi ID, a ne godinu!
+                                    val idToPlay = if (isAuthorMode) viewModel.getAuthorArchiveId(movie.identifier.substringAfter("AUTHOR|")) else movie.identifier
+                                    onPlayClick(idToPlay)
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -403,7 +398,6 @@ fun DetailsScreen(
     }
 }
 
-// AŽURIRANO: Povuče i osigura se da prvo provjeri Hrvatsku Wikipediju (redirects=1 uključen za pogađanje pravog naziva stranice)
 private suspend fun fetchWikiInfo(authorName: String): String = withContext(Dispatchers.IO) {
     try {
         val searchName = if (authorName == "PTA Filmography") "Paul Thomas Anderson" else authorName
