@@ -55,7 +55,13 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -71,7 +77,6 @@ fun HomeScreen(
     val movieCategories by viewModel.movieCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
     
-    // AŽURIRANO: Dohvaćanje kategorija koncerata iz ViewModela
     val concertCategories by viewModel.concertCategories.collectAsState()
     
     val favoriteMovies by viewModel.favoriteMovies.collectAsState()
@@ -103,7 +108,6 @@ fun HomeScreen(
         }
     }
 
-    // AŽURIRANO: Određivanje aktivne liste za prikaz
     val activeCategories = when (selectedTab) {
         ContentTab.MOVIES -> movieCategories
         ContentTab.SERIES -> seriesCategories
@@ -111,7 +115,6 @@ fun HomeScreen(
         else -> emptyList()
     }
     
-    // AŽURIRANO: Određivanje menija s lijeve strane ovisno o odabranom tabu
     val activeDrawerList = when (selectedTab) {
         ContentTab.MOVIES -> viewModel.movieGenreDefinitions
         ContentTab.SERIES -> viewModel.seriesGenreDefinitions
@@ -248,7 +251,6 @@ fun HomeScreen(
                             )
                         }
 
-                        // AŽURIRANO: Dodan Tab "Koncerti"
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -854,13 +856,38 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     
-    val firstArchiveId = movie.identifier.split(",").first()
+    val isAuthor = movie.identifier.startsWith("AUTHOR|")
     var posterUrl by remember { mutableStateOf("") }
-    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
 
     LaunchedEffect(movie.title) {
-        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+        if (isAuthor) {
+            val authorName = movie.title
+            try {
+                val encodedName = URLEncoder.encode(authorName.replace(" ", "_"), "UTF-8")
+                val url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=pageimages&pithumbsize=400&format=json")
+                withContext(Dispatchers.IO) {
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    val response = conn.inputStream.bufferedReader().use { it.readText() }
+                    val jsonObject = JSONObject(response)
+                    val pages = jsonObject.getJSONObject("query").getJSONObject("pages")
+                    val pageId = pages.keys().next()
+                    if (pageId != "-1") {
+                        val page = pages.getJSONObject(pageId)
+                        if (page.has("thumbnail")) {
+                            posterUrl = page.getJSONObject("thumbnail").getString("source")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Greška dohvaćanja slike ostavlja URL praznim
+            }
+        } else {
+            val firstArchiveId = movie.identifier.split(",").first()
+            val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
+            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+            posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+        }
     }
 
     Column(modifier = Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -874,28 +901,30 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, onMovieClick: (ArchiveMovi
             interactionSource = interactionSource,
             onClick = { onMovieClick(movie) }
         ) {
-            val painter = rememberAsyncImagePainter(
-                model = posterUrl.ifBlank { fallbackUrl }
-            )
-            
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (painter.state is AsyncImagePainter.State.Loading) {
-                    CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
-                }
-                Image(
-                    painter = painter,
-                    contentDescription = movie.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-                if (painter.state is AsyncImagePainter.State.Error) {
+            if (posterUrl.isNotEmpty()) {
+                val painter = rememberAsyncImagePainter(model = posterUrl)
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (painter.state is AsyncImagePainter.State.Loading) {
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                    }
                     Image(
-                        painter = rememberAsyncImagePainter(fallbackUrl),
+                        painter = painter,
                         contentDescription = movie.title,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
+                    if (painter.state is AsyncImagePainter.State.Error && !isAuthor) {
+                        val fallback = "https://archive.org/services/img/${movie.identifier.split(",").first()}"
+                        Image(
+                            painter = rememberAsyncImagePainter(fallback),
+                            contentDescription = movie.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
+            } else {
+                Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray))
             }
         }
         Spacer(modifier = Modifier.height(6.dp))
