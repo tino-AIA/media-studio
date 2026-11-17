@@ -78,7 +78,7 @@ fun HomeScreen(
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
-    val authorImages by viewModel.authorImages.collectAsState()
+    val authorImages = viewModel.authorImages
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -865,9 +865,9 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
         if (isAuthor) {
             val authorName = movie.title
             val archiveId = viewModel.getAuthorArchiveId(authorName)
-            val wikiImage = authorImages[authorName] ?: ""
-            // Ako nema na Wikipediji, potegne fallback s archive.org kolekcije iz tvoje tablice
-            posterUrl = wikiImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
+            val mappedImage = authorImages[authorName] ?: ""
+            // Ovdje automatski vuče sliku iz tvoje mape. Ako je prazno, koristi arhivu.
+            posterUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
             val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
