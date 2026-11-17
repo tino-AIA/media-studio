@@ -9,6 +9,7 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -16,10 +17,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import kotlin.math.ceil
 import kotlin.math.ln
 
@@ -146,39 +151,84 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
         "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
         "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
-        "Bill Zebub", "Sean Baker", "Paul Thomas Anderson", "Andy Warhol", "Leos Carax",
+        "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol", "Leos Carax",
         "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
         "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
 
-    // AŽURIRANO: Fiksni stabilni linkovi za najpoznatije, kako bi slika učitala trenutačno i sigurno (bez 403 HTTP blokada)
-    private val authorImages = mapOf(
-        "Alfred Hitchcock" to "https://image.tmdb.org/t/p/w500/z626G4tQEnYJ2xGqU0iL08mBum2.jpg",
-        "Francis Ford Coppola" to "https://image.tmdb.org/t/p/w500/mXbPNhNq99aY76qSAvf7Z2tSbfx.jpg",
-        "Brian De Palma" to "https://image.tmdb.org/t/p/w500/n5V4Uo0YqM4eJ9mB7oNn8hXw5yC.jpg",
-        "Sergio Leone" to "https://image.tmdb.org/t/p/w500/w7Y1E8n2C8K1L9fE9L9N0U7Q9Fz.jpg",
-        "Lars von Trier" to "https://image.tmdb.org/t/p/w500/9kC0I9qG7gC3o8z6V5U4G5X9R2D.jpg",
-        "Paul Verhoeven" to "https://image.tmdb.org/t/p/w500/4n7X1o0YqM4eJ9mB7oNn8hXw5yC.jpg",
-        "Roman Polanski" to "https://image.tmdb.org/t/p/w500/vG6w5G2Y3l3N9mE4C3mN9U6F4K2.jpg",
-        "Werner Herzog" to "https://image.tmdb.org/t/p/w500/8g3w3V2Y3l3N9mE4C3mN9U6F4K2.jpg",
-        "Jean-Luc Godard" to "https://image.tmdb.org/t/p/w500/1X6G4tQEnYJ2xGqU0iL08mBum2.jpg",
-        "David Cronenberg" to "https://image.tmdb.org/t/p/w500/m8Z4V5C3X3N9mE4C3mN9U6F4K2.jpg",
-        "Elvis Presley" to "https://image.tmdb.org/t/p/w500/t0f1K7a7R9s6Y9t6G2j0O4s8F2k.jpg",
-        "Akira Kurosawa" to "https://image.tmdb.org/t/p/w500/2L2w9Y7l5L4s6Z0q9P5r7K2v1B9.jpg",
-        "Paul Thomas Anderson" to "https://image.tmdb.org/t/p/w500/v2F5X2C1Z4V6G7N5P9Q8R4s7V2K.jpg",
-        "Orson Welles" to "https://image.tmdb.org/t/p/w500/q2R7T9qG7gC3o8z6V5U4G5X9R2D.jpg",
-        "Andy Warhol" to "https://image.tmdb.org/t/p/w500/n3F2K9l7R5t8Y4q6G2j0O4s8F2k.jpg"
+    // AŽURIRANO: Ovdje su učitani svi točni ID-evi iz tvoje tablice
+    private val authorArchiveIds = mapOf(
+        "Alfred Hitchcock" to "filmography-alfred-hitchcock",
+        "Francis Ford Coppola" to "filmography-francis-ford-coppola",
+        "Brian De Palma" to "brian-de-palma-complete-filmography",
+        "Sergio Leone" to "filmography-sergio-leone",
+        "Lars von Trier" to "lars-von-trier-filmography",
+        "Paul Verhoeven" to "filmography-paul-verhoeven",
+        "Roman Polanski" to "roman-polanski-filmography",
+        "Werner Herzog" to "filmography-werner-herzog",
+        "Jean-Luc Godard" to "jean-luc-godard-the-complete-filmography",
+        "David Cronenberg" to "filmography-david-cronenberg",
+        "John Cassavetes" to "filmography-john-cassavetes",
+        "Mira Nair" to "filmography-mira-nair",
+        "Takeshi Kitano" to "filmography-takeshi-kitano",
+        "Freddie Francis" to "1987.-dark-tower",
+        "Elvis Presley" to "filmography-elvis-presley",
+        "David Lean" to "lawrence.of.-arabia.-1962.1080p.-remastered.-blu-ray.-hevc.-eac-3-sartre",
+        "Ingmar Bergman" to "filmography-ingmar-bergman",
+        "Roger Corman" to "filmography-roger-corman",
+        "David DeCoteau" to "filmography-david-decoteau",
+        "François Truffaut" to "filmography-francois-truffaut",
+        "Pier Paolo Pasolini" to "filmography-pier-paolo-pasolini",
+        "Budd Boetticher" to "filmography-budd-boetticher",
+        "Wim Wenders" to "filmography-wim-wenders",
+        "Nicholas Roeg" to "walkabout-1971-remastered-1080p-blu-ray-hevc-h-265-bone",
+        "John Ford" to "3-bad-men-1926_202607",
+        "Mario Bava" to "filmography-mario-bava",
+        "Akira Kurosawa" to "filmography-akira-kurosawa",
+        "Jacques Rivette" to "jacques-rivette-the-complete-filmography",
+        "Costa-Gavras" to "filmography-costa-gavras",
+        "Louis Malle" to "filmography-louis-malle",
+        "Federico Fellini" to "filmography-federico-fellini",
+        "George A. Romero" to "filmography-george-a-romero",
+        "Otto Preminger" to "filmography-otto-preminger",
+        "Herschell Gordon Lewis" to "filmography-herschell-gordon-lewis",
+        "Harmony Korine" to "filmography-harmony-korine",
+        "Orson Welles" to "filmography-orson-welles",
+        "Norman Jewison" to "filmography-norman-jewison",
+        "Curtis Harrington" to "filmography-curtis-harrington",
+        "Bernardo Bertolucci" to "1987.-the-last-emperor",
+        "Ken Russell" to "filmography-ken-russell-no-features",
+        "Krzysztof Kieślowski" to "filmography-krzysztof-kieslowski",
+        "Alejandro Jodorowsky" to "filmography-alejandro-jodorowsky",
+        "Ruggero Deodato" to "filmography-ruggero-deodato",
+        "Andy Milligan" to "filmography-andy-milligan",
+        "Ted V. Mikels" to "filmography-ted-v-mikels",
+        "Lina Wertmüller" to "filmography-lina-wertmuller",
+        "Carl Theodor Dreyer" to "filmography-carl-theodor-dreyer",
+        "Greydon Clark" to "filmography-greydon-clark",
+        "Bill Zebub" to "filmography-bill-zebub",
+        "Sean Baker" to "the.-florida.-project.-2017.2160p.-webrip.-3500-mb.-ddp-5.1.x-264-galaxy-rg",
+        "PTA Filmography" to "boogie-nights-1997_202604",
+        "Andy Warhol" to "andy-warhol-complete-films-collection",
+        "Leos Carax" to "filmography-leos-carax",
+        "Volker Schlöndorff" to "filmography-volker-schlondorff",
+        "Albert Pyun" to "nemesis.-1992.1080p.-blu-ray.-ddp-2.0.x-265.10bit-galaxy-rg-265",
+        "Giuseppe Tornatore" to "filmography-giuseppe-tornatore",
+        "Bo Widerberg" to "filmography-bo-widerberg",
+        "Jackie Collins" to "filmography-jackie-collins",
+        "Rick Sloane" to "filmography-rick-sloane",
+        "Errol Morris" to "filmography-errol-morris",
+        "Gordon Hessler" to "filmography-gordon-hessler",
+        "Russ Meyer" to "filmography-russ-meyer",
+        "Gaspar Noé" to "filmography-gaspar-noe"
     )
 
-    fun getAuthorImage(authorName: String): String {
-        return authorImages[authorName] ?: ""
+    fun getAuthorArchiveId(authorName: String): String {
+        return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // AŽURIRANO: Pomoćna funkcija koja izvlači ključnu riječ (najčešće prezime) za sigurnu Archive pretragu
-    fun getAuthorSearchQuery(authorName: String): String {
-        val lastName = authorName.split(" ").last()
-        return "collection:opensource_movies AND title:(*$lastName*) AND (title:filmography OR title:\"films of\" OR title:collection)"
-    }
+    private val _authorImages = MutableStateFlow>(emptyMap())
+    val authorImages: StateFlow> = _authorImages
 
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
@@ -306,6 +356,43 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         loadFavorites()
         loadCacheAndFetchNew()
+        fetchAuthorImagesInBackground()
+    }
+
+    private fun fetchAuthorImagesInBackground() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val map = mutableMapOf<String, String>()
+            val deferreds = exactAuthorOrder.map { author ->
+                async {
+                    try {
+                        val searchName = if (author == "PTA Filmography") "Paul Thomas Anderson" else author
+                        val encoded = URLEncoder.encode(searchName, "UTF-8")
+                        val url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=pageimages&pithumbsize=400&format=json&redirects=1")
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                        val response = conn.inputStream.bufferedReader().use { it.readText() }
+                        val json = JSONObject(response)
+                        val pages = json.getJSONObject("query").getJSONObject("pages")
+                        val pageId = pages.keys().next()
+                        if (pageId != "-1") {
+                            val page = pages.getJSONObject(pageId)
+                            if (page.has("thumbnail")) {
+                                return@async author to page.getJSONObject("thumbnail").getString("source")
+                            }
+                        }
+                    } catch (e: Exception) {}
+                    return@async author to ""
+                }
+            }
+            
+            deferreds.forEach {
+                val (author, url) = it.await()
+                if (url.isNotEmpty()) {
+                    map[author] = url
+                    _authorImages.value = map.toMap()
+                }
+            }
+        }
     }
 
     private fun loadFavorites() {
