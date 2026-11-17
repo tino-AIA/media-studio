@@ -156,7 +156,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
     )
 
-    // Ensure this property is INSIDE the class
     private val authorArchiveIds = mapOf(
         "Alfred Hitchcock" to "filmography-alfred-hitchcock",
         "Francis Ford Coppola" to "filmography-francis-ford-coppola",
@@ -227,8 +226,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // THE FIX: Explicitly specify type AND use emptyMap() initialization
-    private val _authorImages = MutableStateFlow>(emptyMap())
+    private val _authorImages: MutableStateFlow> = MutableStateFlow(emptyMap())
     val authorImages: StateFlow> = _authorImages
 
     private val legendaryTitles = listOf(
