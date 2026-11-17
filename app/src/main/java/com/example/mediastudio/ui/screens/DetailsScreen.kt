@@ -1,521 +1,950 @@
-package com.example.mediastudio.ui.screens
+package com.example.mediastudio.ui.viewmodel
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import coil.compose.rememberAsyncImagePainter
-import com.example.mediastudio.data.api.ArchiveMetadataModule
-import com.example.mediastudio.data.api.MovieFullInfo
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.mediastudio.data.model.ArchiveMovie
-import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import com.squareup.moshi.Json
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLDecoder
 import java.net.URLEncoder
+import kotlin.math.ceil
+import kotlin.math.ln
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DetailsScreen(
-    movie: ArchiveMovie,
-    viewModel: HomeViewModel,
-    onPlayClick: (String) -> Unit,
-    onBackClick: () -> Unit
-) {
-    var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
-    var translatedDescription by remember { mutableStateOf("") }
-    var imageUrl by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(true) }
+enum class ContentTab {
+    MOVIES, SERIES, CONCERTS, FAVORITES
+}
 
-    val playButtonFocusRequester = remember { FocusRequester() }
-    val firstEpisodeFocusRequester = remember { FocusRequester() }
+data class GenreOption(
+    val title: String,
+    val query: String,
+    val defaultSort: String = "downloads desc",
+    val isAdultCategory: Boolean = false,
+    val isAnimationCategory: Boolean = false,
+    val isSeriesCategory: Boolean = false,
+    val isConcertCategory: Boolean = false,
+    val isAuthorCollection: Boolean = false 
+)
+
+data class RatedMovie(
+    val movie: ArchiveMovie,
+    val rating: String,
+    val relevanceScore: Double = 0.0
+)
+
+data class CachedCategory(val genreTitle: String, val movies: List<ArchiveMovie>)
+data class CachedHero(val movie: ArchiveMovie, val isSeries: Boolean)
+data class AppCache(
+    val movieCategories: List<CachedCategory>,
+    val seriesCategories: List<CachedCategory>,
+    val concertCategories: List<CachedCategory>,
+    val heroMovies: List<CachedHero>
+)
+
+private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
+private data class ArchiveResponseBody(
+    val numFound: Int?,
+    val docs: List<RawArchiveDoc>?
+)
+private data class RawArchiveDoc(
+    val identifier: String?,
+    val title: Any?,
+    val creator: Any?,
+    val description: Any?,
+    val collection: Any?,
+    val runtime: Any?,
+    @Json(name = "item_size") val itemSize: Any?,
+    @Json(name = "avg_rating") val avgRating: Any?,
+    @Json(name = "num_reviews") val numReviews: Any?,
+    val language: Any?
+)
+
+private interface ArchiveSearchApi {
+    @GET("advancedsearch.php")
+    suspend fun searchMovies(
+        @Query("q") query: String,
+        @Query("fl[]") fields: List<String> = listOf(
+            "identifier", "title", "creator", "description", "collection",
+            "runtime", "item_size", "avg_rating", "num_reviews", "language"
+        ),
+        @Query("sort[]") sort: String = "downloads desc",
+        @Query("rows") rows: Int = 150,
+        @Query("page") page: Int = 1,
+        @Query("output") output: String = "json"
+    ): ArchiveSearchResponse
+}
+
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
     
-    val playInteractionSource = remember { MutableInteractionSource() }
-    val isPlayFocused by playInteractionSource.collectIsFocusedAsState()
+    private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
+    
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
 
-    val favInteractionSource = remember { MutableInteractionSource() }
-    val isFavFocused by favInteractionSource.collectIsFocusedAsState()
+    private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
+        Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
+    )
+    
+    private val cacheAdapter = moshi.adapter(AppCache::class.java)
 
-    val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
-    val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
+    private val api: ArchiveSearchApi = Retrofit.Builder()
+        .baseUrl("https://archive.org/")
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(ArchiveSearchApi::class.java)
 
-    // Dohvati onu popravljenu mapu iz ViewModela bez problema
-    val authorImages by viewModel.authorImages.collectAsState()
+    private val blockedAdultKeywords = listOf(
+        "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
+        "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
+        "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france",
+        "nsfw", "nude", "naked", "masturbating", "vintage porn", "erotik film",
+        "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
+    )
 
-    BackHandler {
-        onBackClick()
+    private val blockedSpecificAdultKeywords = listOf(
+        "hentai", "yaoi", "gay", "boy love", "bl", "gay porn", "homosexual"
+    )
+
+    private val junkNonMovieKeywords = listOf(
+        "speedrun", "gameplay", "walkthrough", "playthrough", "podcast", "tutorial",
+        "news broadcast", "entertainment tonight", "news report", "breaking news", "newscast",
+        "islam", "quran", "khutba", "dourous", "muslim", "allah", "sheikh",
+        "bollywood", "tollywood", "hindi", "telugu", "tamil", "urdu", "punjabi", "desi",
+        "bengali", "malayalam", "marathi", "gujarati", "arab", "arabic",
+        "amateur", "vlog", "raw footage", "home movie", "home video", "commercials",
+        "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
+    )
+
+    private val notableCinemaKeywords = listOf(
+        "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
+        "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
+        "bbc", "channel 4", "film noir", "cult classic", "masterpiece", "hollywood",
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
+    )
+
+    val exactAuthorOrder = listOf(
+        "Alfred Hitchcock", "Francis Ford Coppola", "Brian De Palma", "Sergio Leone", "Lars von Trier",
+        "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard", "David Cronenberg",
+        "John Cassavetes", "Mira Nair", "Takeshi Kitano", "Freddie Francis", "Elvis Presley",
+        "David Lean", "Ingmar Bergman", "Roger Corman", "David DeCoteau", "François Truffaut",
+        "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders", "Nicholas Roeg", "John Ford",
+        "Mario Bava", "Akira Kurosawa", "Jacques Rivette", "Costa-Gavras", "Louis Malle",
+        "Federico Fellini", "George A. Romero", "Otto Preminger", "Herschell Gordon Lewis",
+        "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
+        "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
+        "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
+        "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol", "Leos Carax",
+        "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
+        "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
+    )
+
+    private val authorArchiveIds = mapOf(
+        "Alfred Hitchcock" to "filmography-alfred-hitchcock",
+        "Francis Ford Coppola" to "filmography-francis-ford-coppola",
+        "Brian De Palma" to "brian-de-palma-complete-filmography",
+        "Sergio Leone" to "filmography-sergio-leone",
+        "Lars von Trier" to "lars-von-trier-filmography",
+        "Paul Verhoeven" to "filmography-paul-verhoeven",
+        "Roman Polanski" to "roman-polanski-filmography",
+        "Werner Herzog" to "filmography-werner-herzog",
+        "Jean-Luc Godard" to "jean-luc-godard-the-complete-filmography",
+        "David Cronenberg" to "filmography-david-cronenberg",
+        "John Cassavetes" to "filmography-john-cassavetes",
+        "Mira Nair" to "filmography-mira-nair",
+        "Takeshi Kitano" to "filmography-takeshi-kitano",
+        "Freddie Francis" to "1987.-dark-tower",
+        "Elvis Presley" to "filmography-elvis-presley",
+        "David Lean" to "lawrence.of.-arabia.-1962.1080p.-remastered.-blu-ray.-hevc.-eac-3-sartre",
+        "Ingmar Bergman" to "filmography-ingmar-bergman",
+        "Roger Corman" to "filmography-roger-corman",
+        "David DeCoteau" to "filmography-david-decoteau",
+        "François Truffaut" to "filmography-francois-truffaut",
+        "Pier Paolo Pasolini" to "filmography-pier-paolo-pasolini",
+        "Budd Boetticher" to "filmography-budd-boetticher",
+        "Wim Wenders" to "filmography-wim-wenders",
+        "Nicholas Roeg" to "walkabout-1971-remastered-1080p-blu-ray-hevc-h-265-bone",
+        "John Ford" to "3-bad-men-1926_202607",
+        "Mario Bava" to "filmography-mario-bava",
+        "Akira Kurosawa" to "filmography-akira-kurosawa",
+        "Jacques Rivette" to "jacques-rivette-the-complete-filmography",
+        "Costa-Gavras" to "filmography-costa-gavras",
+        "Louis Malle" to "filmography-louis-malle",
+        "Federico Fellini" to "filmography-federico-fellini",
+        "George A. Romero" to "filmography-george-a-romero",
+        "Otto Preminger" to "filmography-otto-preminger",
+        "Herschell Gordon Lewis" to "filmography-herschell-gordon-lewis",
+        "Harmony Korine" to "filmography-harmony-korine",
+        "Orson Welles" to "filmography-orson-welles",
+        "Norman Jewison" to "filmography-norman-jewison",
+        "Curtis Harrington" to "filmography-curtis-harrington",
+        "Bernardo Bertolucci" to "1987.-the-last-emperor",
+        "Ken Russell" to "filmography-ken-russell-no-features",
+        "Krzysztof Kieślowski" to "filmography-krzysztof-kieslowski",
+        "Alejandro Jodorowsky" to "filmography-alejandro-jodorowsky",
+        "Ruggero Deodato" to "filmography-ruggero-deodato",
+        "Andy Milligan" to "filmography-andy-milligan",
+        "Ted V. Mikels" to "filmography-ted-v-mikels",
+        "Lina Wertmüller" to "filmography-lina-wertmuller",
+        "Carl Theodor Dreyer" to "filmography-carl-theodor-dreyer",
+        "Greydon Clark" to "filmography-greydon-clark",
+        "Bill Zebub" to "filmography-bill-zebub",
+        "Sean Baker" to "the.-florida.-project.-2017.2160p.-webrip.-3500-mb.-ddp-5.1.x-264-galaxy-rg",
+        "PTA Filmography" to "boogie-nights-1997_202604",
+        "Andy Warhol" to "andy-warhol-complete-films-collection",
+        "Leos Carax" to "filmography-leos-carax",
+        "Volker Schlöndorff" to "filmography-volker-schlondorff",
+        "Albert Pyun" to "nemesis.-1992.1080p.-blu-ray.-ddp-2.0.x-265.10bit-galaxy-rg-265",
+        "Giuseppe Tornatore" to "filmography-giuseppe-tornatore",
+        "Bo Widerberg" to "filmography-bo-widerberg",
+        "Jackie Collins" to "filmography-jackie-collins",
+        "Rick Sloane" to "filmography-rick-sloane",
+        "Errol Morris" to "filmography-errol-morris",
+        "Gordon Hessler" to "filmography-gordon-hessler",
+        "Russ Meyer" to "filmography-russ-meyer",
+        "Gaspar Noé" to "filmography-gaspar-noe"
+    )
+
+    fun getAuthorArchiveId(authorName: String): String {
+        return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    LaunchedEffect(movie.identifier) {
-        isLoading = true
-        if (isAuthorMode) {
-            val authorName = movie.identifier.substringAfter("AUTHOR|")
-            val archiveId = viewModel.getAuthorArchiveId(authorName)
-            
-            // Ovdje se ispravno povlači slika redatelja s Wikipedije
-            val mappedImage = authorImages[authorName] ?: ""
-            imageUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
-            
-            val wikiData = fetchWikiInfo(authorName)
-            translatedDescription = wikiData
-            
-            movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
-            
+    // SLIKE SU SADA OBIČNA KOTLIN MAPA - COMPILER OVO NE MOŽE SRUŠITI
+    val staticAuthorImages = mapOf(
+        "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
+        "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
+        "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
+        "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
+        "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg",
+        "Paul Verhoeven" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Paul_Verhoeven_%282016%29.jpg/400px-Paul_Verhoeven_%282016%29.jpg",
+        "Roman Polanski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Roman_Polanski_at_Cannes_2013.jpg/400px-Roman_Polanski_at_Cannes_2013.jpg",
+        "Werner Herzog" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Werner_Herzog_%282018%29.jpg/400px-Werner_Herzog_%282018%29.jpg",
+        "Jean-Luc Godard" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Jean-Luc_Godard_1968.jpg/400px-Jean-Luc_Godard_1968.jpg",
+        "David Cronenberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/David_Cronenberg_at_Cannes_2014.jpg/400px-David_Cronenberg_at_Cannes_2014.jpg",
+        "John Cassavetes" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/John_Cassavetes_%281969%29.jpg/400px-John_Cassavetes_%281969%29.jpg",
+        "Mira Nair" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Mira_Nair.jpg/400px-Mira_Nair.jpg",
+        "Takeshi Kitano" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Takeshi_Kitano.jpg/400px-Takeshi_Kitano.jpg",
+        "Freddie Francis" to "https://upload.wikimedia.org/wikipedia/en/3/3f/Freddie_Francis.jpg",
+        "Elvis Presley" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Elvis_Presley_promoting_Jailhouse_Rock.jpg/400px-Elvis_Presley_promoting_Jailhouse_Rock.jpg",
+        "David Lean" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/David_Lean.jpg/400px-David_Lean.jpg",
+        "Ingmar Bergman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Ingmar_Bergman_1960.jpg/400px-Ingmar_Bergman_1960.jpg",
+        "Roger Corman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/Roger_Corman_2010.jpg/400px-Roger_Corman_2010.jpg",
+        "François Truffaut" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Fran%C3%A7ois_Truffaut_%281980%29.jpg/400px-Fran%C3%A7ois_Truffaut_%281980%29.jpg",
+        "Pier Paolo Pasolini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Pier_Paolo_Pasolini_1960s.jpg/400px-Pier_Paolo_Pasolini_1960s.jpg",
+        "Budd Boetticher" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Budd_Boetticher.jpg/400px-Budd_Boetticher.jpg",
+        "Wim Wenders" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Wim_Wenders_-_Berlinale_2015.jpg/400px-Wim_Wenders_-_Berlinale_2015.jpg",
+        "Nicholas Roeg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Nicolas_Roeg.jpg/400px-Nicolas_Roeg.jpg",
+        "John Ford" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/22/John_Ford_1946.jpg/400px-John_Ford_1946.jpg",
+        "Mario Bava" to "https://upload.wikimedia.org/wikipedia/en/c/c8/Mario_Bava_photo.jpg",
+        "Akira Kurosawa" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Akira_Kurosawa_in_1953.jpg/400px-Akira_Kurosawa_in_1953.jpg",
+        "Jacques Rivette" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Jacques_Rivette_1968.jpg/400px-Jacques_Rivette_1968.jpg",
+        "Costa-Gavras" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Costa-Gavras_Cannes_2015.jpg/400px-Costa-Gavras_Cannes_2015.jpg",
+        "Louis Malle" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/86/Louis_Malle_%281989%29.jpg/400px-Louis_Malle_%281989%29.jpg",
+        "Federico Fellini" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Fellini.jpg/400px-Fellini.jpg",
+        "George A. Romero" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/George_A_Romero.jpg/400px-George_A_Romero.jpg",
+        "Otto Preminger" to "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Otto_Preminger_1955.jpg/400px-Otto_Preminger_1955.jpg",
+        "Herschell Gordon Lewis" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Herschell_Gordon_Lewis_-_Cinedelphia.jpg/400px-Herschell_Gordon_Lewis_-_Cinedelphia.jpg",
+        "Harmony Korine" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Harmony_Korine_in_2013_%28cropped%29.jpg/400px-Harmony_Korine_in_2013_%28cropped%29.jpg",
+        "Orson Welles" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Orson_Welles_1937.jpg/400px-Orson_Welles_1937.jpg",
+        "Norman Jewison" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Norman_Jewison_%281973%29.jpg/400px-Norman_Jewison_%281973%29.jpg",
+        "Curtis Harrington" to "https://upload.wikimedia.org/wikipedia/en/9/9f/Curtis_Harrington.jpg",
+        "Bernardo Bertolucci" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Bernardo_Bertolucci_1975.jpg/400px-Bernardo_Bertolucci_1975.jpg",
+        "Ken Russell" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Ken_Russell_2008.jpg/400px-Ken_Russell_2008.jpg",
+        "Krzysztof Kieślowski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Krzysztof_Kieslowski.jpg/400px-Krzysztof_Kieslowski.jpg",
+        "Alejandro Jodorowsky" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Alejandro_Jodorowsky_at_Cannes.jpg/400px-Alejandro_Jodorowsky_at_Cannes.jpg",
+        "Ruggero Deodato" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Ruggero_Deodato_%282009%29.jpg/400px-Ruggero_Deodato_%282009%29.jpg",
+        "Andy Milligan" to "https://upload.wikimedia.org/wikipedia/en/3/37/Andy_Milligan.jpg",
+        "Ted V. Mikels" to "https://upload.wikimedia.org/wikipedia/en/9/90/Ted_V_Mikels_photo.jpg",
+        "Lina Wertmüller" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Lina_Wertm%C3%BCller_2015.jpg/400px-Lina_Wertm%C3%BCller_2015.jpg",
+        "Carl Theodor Dreyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Carl_Theodor_Dreyer_1965.jpg/400px-Carl_Theodor_Dreyer_1965.jpg",
+        "Greydon Clark" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Greydon_Clark.jpg/400px-Greydon_Clark.jpg",
+        "Bill Zebub" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/Bill_Zebub.jpg/400px-Bill_Zebub.jpg",
+        "Sean Baker" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sean_Baker_2017.jpg/400px-Sean_Baker_2017.jpg",
+        "PTA Filmography" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Paul_Thomas_Anderson_2018.jpg/400px-Paul_Thomas_Anderson_2018.jpg",
+        "Andy Warhol" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Andy_Warhol_by_Jack_Mitchell.jpg/400px-Andy_Warhol_by_Jack_Mitchell.jpg",
+        "Leos Carax" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Leos_Carax_2012.jpg/400px-Leos_Carax_2012.jpg",
+        "Volker Schlöndorff" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Volker_Schl%C3%B6ndorff_2012.jpg/400px-Volker_Schl%C3%B6ndorff_2012.jpg",
+        "Albert Pyun" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/Albert_Pyun.jpg/400px-Albert_Pyun.jpg",
+        "Giuseppe Tornatore" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Giuseppe_Tornatore.jpg/400px-Giuseppe_Tornatore.jpg",
+        "Bo Widerberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Bo_Widerberg_1968.jpg/400px-Bo_Widerberg_1968.jpg",
+        "Jackie Collins" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Jackie_Collins_2012.jpg/400px-Jackie_Collins_2012.jpg",
+        "Rick Sloane" to "https://upload.wikimedia.org/wikipedia/en/8/87/Rick_Sloane.jpg",
+        "Errol Morris" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Errol_Morris_by_Gage_Skidmore.jpg/400px-Errol_Morris_by_Gage_Skidmore.jpg",
+        "Gordon Hessler" to "https://upload.wikimedia.org/wikipedia/en/c/c9/Gordon_Hessler.jpg",
+        "Russ Meyer" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Russ_Meyer_1973.jpg/400px-Russ_Meyer_1973.jpg",
+        "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg"
+    )
+
+    private val legendaryTitles = listOf(
+        "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
+        "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
+        "star trek", "everybody loves raymond", "3rd rock from the sun", "third rock from the sun",
+        "seinfeld", "friends", "the simpsons", "x-files", "sopranos", "the wire", "breaking bad",
+        "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter",
+        "alf", "roots", "monty python", "aeon flux", "hitchhiker's guide", "shogun", "galactica",
+        "v the series", "alien nation", "buck rogers", "one step beyond", "quark", "creepy crawlers",
+        "chocky"
+    )
+    
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
+
+    val movieGenreDefinitions = listOf(
+        GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
+        GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
+        
+        GenreOption(
+            title = "Filmografije i Kolekcije Autora",
+            query = "", 
+            defaultSort = "",
+            isAuthorCollection = true 
+        ),
+        
+        GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
+        GenreOption("Akcija i avantura", "$movieBaseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
+        GenreOption("Triler i misterija", "$movieBaseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
+        GenreOption("Komedija", "$movieBaseQuery AND (subject:comedy OR collection:comedy_films)"),
+        GenreOption("Horor", "$movieBaseQuery AND (subject:horror OR subject:vampire OR subject:zombie)"),
+        GenreOption("Drama", "$movieBaseQuery AND (subject:drama OR subject:melodrama)"),
+        GenreOption("Krimi", "$movieBaseQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
+        GenreOption("Romantični", "$movieBaseQuery AND (subject:romance OR subject:romantic)"),
+        GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
+        GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
+        GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
+        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
+        
+        GenreOption(
+            title = "18+ / Erotski",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
+            defaultSort = "downloads desc",
+            isAdultCategory = true
+        )
+    )
+
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
+
+    val seriesGenreDefinitions = listOf(
+        GenreOption("Top 10 serija danas", seriesBaseQuery, "week desc", isSeriesCategory = true),
+        GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
+    )
+
+    private val concertBaseQuery = "mediatype:movies AND collection:vhsconcerts_music"
+
+    val concertGenreDefinitions = listOf(
+        GenreOption("Top 10 Koncerti", concertBaseQuery, "week desc", isConcertCategory = true),
+        GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk OR grunge OR \"hard rock\")", "downloads desc", isConcertCategory = true),
+        GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
+        GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
+    )
+
+    private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
+    val selectedTab: StateFlow<ContentTab> = _selectedTab
+
+    private val _movieCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val movieCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _movieCategories
+
+    private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
+
+    private val _concertCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val concertCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _concertCategories
+
+    private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
+    val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
+
+    private val _activeHeroIndex = MutableStateFlow(0)
+    val activeHeroIndex: StateFlow<Int> = _activeHeroIndex
+
+    private var carouselJob: Job? = null
+
+    private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _globalSearchResults = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val globalSearchResults: StateFlow<List<RatedMovie>> = _globalSearchResults
+
+    private val _isSearchingGlobal = MutableStateFlow(false)
+    val isSearchingGlobal: StateFlow<Boolean> = _isSearchingGlobal
+
+    private val _currentSearchQuery = MutableStateFlow("")
+    val currentSearchQuery: StateFlow<String> = _currentSearchQuery
+
+    private var searchJob: Job? = null
+
+    private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
+    val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
+
+    private val _genreMovies = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val genreMovies: StateFlow<List<RatedMovie>> = _genreMovies
+
+    private val _isGenreLoading = MutableStateFlow(false)
+    val isGenreLoading: StateFlow<Boolean> = _isGenreLoading
+
+    private val _currentGenrePage = MutableStateFlow(1)
+    val currentGenrePage: StateFlow<Int> = _currentGenrePage
+
+    private val _totalGenrePages = MutableStateFlow(1)
+    val totalGenrePages: StateFlow<Int> = _totalGenrePages
+
+    private val _totalGenreMoviesCount = MutableStateFlow(0)
+    val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
+
+    val pageSize = 60
+    
+    private var lastLoadedCache: AppCache? = null
+
+    init {
+        loadFavorites()
+        loadCacheAndFetchNew()
+    }
+
+    private fun loadFavorites() {
+        val json = prefs.getString("favorites", "[]")
+        if (json != null) {
+            try {
+                val list = favoritesAdapter.fromJson(json) ?: emptyList()
+                _favoriteMovies.value = list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun loadCacheAndFetchNew() {
+        val cachedJson = prefs.getString("app_content_cache", null)
+        if (cachedJson != null) {
+            try {
+                val cache = cacheAdapter.fromJson(cachedJson)
+                if (cache != null) {
+                    lastLoadedCache = cache 
+                    
+                    val mMovies = cache.movieCategories.mapNotNull { c -> 
+                        movieGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    val mSeries = cache.seriesCategories.mapNotNull { c -> 
+                        seriesGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    val mConcerts = cache.concertCategories.mapNotNull { c -> 
+                        concertGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    }
+                    
+                    if (mMovies.isNotEmpty()) _movieCategories.value = mMovies
+                    if (mSeries.isNotEmpty()) _seriesCategories.value = mSeries
+                    if (mConcerts.isNotEmpty()) _concertCategories.value = mConcerts
+                    
+                    if (cache.heroMovies.isNotEmpty()) {
+                        _heroMovies.value = cache.heroMovies.map { it.movie to it.isSeries }
+                        startHeroCarousel()
+                    }
+                    _isLoading.value = false 
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        loadAllContent()
+    }
+
+    fun isFavorite(identifier: String): Boolean {
+        return _favoriteMovies.value.any { it.identifier == identifier }
+    }
+
+    fun toggleFavorite(movie: ArchiveMovie) {
+        val currentList = _favoriteMovies.value.toMutableList()
+        val exists = currentList.any { it.identifier == movie.identifier }
+        
+        if (exists) {
+            currentList.removeAll { it.identifier == movie.identifier }
         } else {
-            imageUrl = "https://archive.org/services/img/${movie.identifier}"
-            val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
-            movieInfo = info
-            translatedDescription = translateToCroatian(info.description)
+            currentList.add(movie)
         }
         
-        isLoading = false
-        try {
-            if (movieInfo?.qualities?.size ?: 0 > 1) {
-                firstEpisodeFocusRequester.requestFocus()
-            } else {
-                playButtonFocusRequester.requestFocus()
-            }
-        } catch (_: Exception) {}
+        _favoriteMovies.value = currentList
+        prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
+        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (isAuthorMode || movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija Autora" else "Detalji filma", color = Color.White) },
-                navigationIcon = {
-                    TvHighlightIconButton(
-                        onClick = onBackClick,
-                        contentDescription = "Povratak"
-                    ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        containerColor = Color.Black
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            if (imageUrl.isNotEmpty()) {
-                Image(
-                    painter = rememberAsyncImagePainter(imageUrl),
-                    contentDescription = movie.title,
-                    modifier = Modifier
-                        .width(180.dp)
-                        .height(255.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
-                    contentScale = ContentScale.Crop
+    fun selectTab(tab: ContentTab) {
+        _selectedTab.value = tab
+    }
+    
+    fun updateSearchQuery(query: String) {
+        _currentSearchQuery.value = query
+        performGlobalSearch(query)
+    }
+
+    fun performGlobalSearch(query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        _currentSearchQuery.value = trimmed
+
+        if (trimmed.length < 3) {
+            _globalSearchResults.value = emptyList()
+            _isSearchingGlobal.value = false
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(450L)
+            _isSearchingGlobal.value = true
+            try {
+                val words = trimmed.split(Regex("\\s+")).filter { it.length >= 2 }
+                val tokenClause = if (words.isNotEmpty()) {
+                    words.joinToString(" AND ") { w -> "(title:$w* OR creator:$w* OR description:$w*)" }
+                } else {
+                    "(title:\"$trimmed\" OR creator:\"$trimmed\")"
+                }
+
+                val archiveQuery = "mediatype:movies AND ($tokenClause)"
+                val (results, _) = fetchAndRankByRelevance(
+                    query = archiveQuery,
+                    apiSort = "downloads desc",
+                    rows = 150,
+                    page = 1,
+                    excludeAdult = false,
+                    isAdultCategory = false,
+                    isAnimationCategory = true,
+                    isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
+                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS
                 )
-            } else {
-                Box(modifier = Modifier.width(180.dp).height(255.dp).background(Color.DarkGray))
+                _globalSearchResults.value = results
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isSearchingGlobal.value = false
             }
+        }
+    }
 
-            Spacer(modifier = Modifier.height(16.dp))
+    private fun isAdultContent(id: String, title: String): Boolean {
+        val combined = "${id.lowercase()}${title.lowercase()}"
+        return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
+    }
 
-            Text(
-                text = if (isAuthorMode) movie.identifier.substringAfter("AUTHOR|") else movie.title,
-                color = Color.White,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+    private fun isBannedSpecificAdultContent(id: String, title: String, desc: String): Boolean {
+        val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()}"
+        return blockedSpecificAdultKeywords.any { keyword -> combined.contains(keyword) }
+    }
 
-            if (isLoading) {
-                Spacer(modifier = Modifier.height(20.dp))
-                CircularProgressIndicator(color = Color.Red)
-            } else {
-                val currentInfo = movieInfo
-                
-                if (!isAuthorMode && currentInfo != null) {
-                    val metaParts = buildList {
-                        if (currentInfo.year.isNotEmpty()) add("Godina: ${currentInfo.year}")
-                        if (currentInfo.director.isNotEmpty()) add("Redatelj: ${currentInfo.director}")
+    private fun loadAllContent() {
+        viewModelScope.launch {
+            if (_movieCategories.value.isEmpty()) {
+                _isLoading.value = true
+            }
+            
+            try {
+                val movieDeferred = movieGenreDefinitions.map { genre ->
+                    async {
+                        if (genre.isAuthorCollection) {
+                            val authorMovies = exactAuthorOrder.map { authorName ->
+                                ArchiveMovie(
+                                    identifier = "AUTHOR|$authorName",
+                                    title = authorName
+                                )
+                            }
+                            genre to authorMovies
+                        } else {
+                            val isWeeklyTop = genre.title.startsWith("Top 10")
+                            val fetchRows = if (isWeeklyTop) 300 else 150
+                            val (results, _) = fetchAndRankByRelevance(
+                                query = genre.query,
+                                apiSort = genre.defaultSort,
+                                rows = fetchRows, 
+                                page = 1,
+                                excludeAdult = !genre.isAdultCategory,
+                                isAdultCategory = genre.isAdultCategory,
+                                isAnimationCategory = genre.isAnimationCategory,
+                                isSeriesCategory = false,
+                                isConcertCategory = false
+                            )
+                            genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                        }
                     }
-                    if (metaParts.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = metaParts.joinToString("  •  "),
-                            color = Color.LightGray,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center
+                }
+
+                val seriesDeferred = seriesGenreDefinitions.map { genre ->
+                    async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = if (isWeeklyTop) 300 else 150,
+                            page = 1,
+                            excludeAdult = true,
+                            isAdultCategory = false,
+                            isAnimationCategory = genre.isAnimationCategory,
+                            isSeriesCategory = true,
+                            isConcertCategory = false
+                        )
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                    }
+                }
+
+                val concertDeferred = concertGenreDefinitions.map { genre ->
+                    async {
+                        val isWeeklyTop = genre.title.startsWith("Top 10")
+                        val (results, _) = fetchAndRankByRelevance(
+                            query = genre.query,
+                            apiSort = genre.defaultSort,
+                            rows = if (isWeeklyTop) 300 else 150,
+                            page = 1,
+                            excludeAdult = true,
+                            isAdultCategory = false,
+                            isAnimationCategory = false,
+                            isSeriesCategory = false,
+                            isConcertCategory = true
+                        )
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                    }
+                }
+
+                val loadedMovies = movieDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedSeries = seriesDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+                val loadedConcerts = concertDeferred.map { it.await() }.filter { it.second.isNotEmpty() }
+
+                _movieCategories.value = loadedMovies
+                _seriesCategories.value = loadedSeries
+                _concertCategories.value = loadedConcerts
+
+                refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries, loadedConcerts)
+                
+                val newCache = AppCache(
+                    movieCategories = loadedMovies.map { CachedCategory(it.first.title, it.second) },
+                    seriesCategories = loadedSeries.map { CachedCategory(it.first.title, it.second) },
+                    concertCategories = loadedConcerts.map { CachedCategory(it.first.title, it.second) },
+                    heroMovies = _heroMovies.value.map { CachedHero(it.first, it.second) }
+                )
+                lastLoadedCache = newCache 
+                prefs.edit().putString("app_content_cache", cacheAdapter.toJson(newCache)).apply()
+                
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    private fun refreshHeroItems(
+        favs: List<ArchiveMovie>,
+        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
+    ) {
+        val topFavs = favs.take(4).map { it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode")) }
+        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
+        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to true }
+        val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
+
+        val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
+        _heroMovies.value = combined
+        
+        startHeroCarousel()
+    }
+
+    private fun startHeroCarousel() {
+        carouselJob?.cancel()
+        _activeHeroIndex.value = 0
+        carouselJob = viewModelScope.launch {
+            while (isActive && _heroMovies.value.isNotEmpty()) {
+                delay(8000) 
+                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
+            }
+        }
+    }
+
+    fun setActiveHeroIndex(index: Int) {
+        if (index in _heroMovies.value.indices) {
+            _activeHeroIndex.value = index
+            startHeroCarousel() 
+        }
+    }
+
+    fun openGenre(genre: GenreOption) {
+        _selectedGenre.value = genre
+        
+        val cachedContent = when {
+            genre.isConcertCategory -> _concertCategories.value.find { it.first.title == genre.title }?.second
+            genre.isSeriesCategory -> _seriesCategories.value.find { it.first.title == genre.title }?.second
+            else -> _movieCategories.value.find { it.first.title == genre.title }?.second
+        }
+
+        if (cachedContent != null && cachedContent.isNotEmpty()) {
+            _genreMovies.value = cachedContent.map { RatedMovie(it, "", 0.0) }
+            _totalGenreMoviesCount.value = cachedContent.size
+            _totalGenrePages.value = 1
+        } else {
+            _genreMovies.value = emptyList()
+        }
+        
+        loadGenrePage(1)
+    }
+
+    fun loadGenrePage(page: Int) {
+        val genre = _selectedGenre.value ?: return
+        if (page < 1) return
+
+        viewModelScope.launch {
+            if (_genreMovies.value.isEmpty()) {
+                _isGenreLoading.value = true
+            }
+            
+            _currentGenrePage.value = page
+            try {
+                if (genre.isAuthorCollection) {
+                    val authorMovies = exactAuthorOrder.map { authorName ->
+                        RatedMovie(
+                            movie = ArchiveMovie(identifier = "AUTHOR|$authorName", title = authorName),
+                            rating = "",
+                            relevanceScore = 0.0
                         )
                     }
+                    _genreMovies.value = authorMovies
+                    _totalGenreMoviesCount.value = exactAuthorOrder.size
+                    _totalGenrePages.value = 1
+                } else {
+                    val isWeeklyTop = genre.title.startsWith("Top 10")
+                    val fetchRows = if (isWeeklyTop) 300 else 150
+                    val targetLimit = if (isWeeklyTop) 10 else pageSize
+
+                    val (results, totalFound) = fetchAndRankByRelevance(
+                        query = genre.query,
+                        apiSort = if (isWeeklyTop) "week desc" else "downloads desc",
+                        rows = fetchRows,
+                        page = page,
+                        excludeAdult = !genre.isAdultCategory,
+                        isAdultCategory = genre.isAdultCategory,
+                        isAnimationCategory = genre.isAnimationCategory,
+                        isSeriesCategory = genre.isSeriesCategory,
+                        isConcertCategory = genre.isConcertCategory
+                    )
+
+                    _genreMovies.value = results.take(targetLimit)
+
+                    if (isWeeklyTop) {
+                        _totalGenreMoviesCount.value = 10
+                        _totalGenrePages.value = 1
+                    } else {
+                        _totalGenreMoviesCount.value = totalFound
+                        val calculatedPages = ceil(totalFound.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
+                        _totalGenrePages.value = calculatedPages.coerceAtMost(100)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isGenreLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun fetchAndRankByRelevance(
+        query: String,
+        apiSort: String,
+        rows: Int,
+        page: Int,
+        excludeAdult: Boolean,
+        isAdultCategory: Boolean,
+        isAnimationCategory: Boolean,
+        isSeriesCategory: Boolean,
+        isConcertCategory: Boolean,
+        searchQueryForRanking: String? = null
+    ): Pair<List<RatedMovie>, Int> {
+        return try {
+            val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
+            val docs = responseBody?.docs ?: emptyList()
+            val numFound = responseBody?.numFound ?: docs.size
+
+            val scoredList = docs.mapNotNull { doc ->
+                val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val rawTitle = extractText(doc.title)
+                var finalTitle = rawTitle.ifBlank {
+                    id.replace("_", " ").replace("-", " ").replaceFirstChar { it.uppercase() }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                val creatorText = extractText(doc.creator)
+                val descText = extractText(doc.description)
+                val collectionText = extractText(doc.collection)
+                val titleLower = finalTitle.lowercase()
+                val fullMetaLower = "$id $finalTitle$creatorText $descText$collectionText".lowercase()
 
-                Text(
-                    text = translatedDescription.ifEmpty { currentInfo?.description ?: "Nema dostupnog opisa." },
-                    color = Color(0xFFDDDDDD),
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
+                
+                if (isBannedSpecificAdultContent(id, finalTitle, descText)) return@mapNotNull null
+                if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
+                if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
+
+                val isTrailerOrClip = titleLower.contains("trailer") || titleLower.contains("teaser") || titleLower.contains("tv spot")
+                if (isTrailerOrClip) return@mapNotNull null
+
+                var score = 0.0
+
+                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
+                
+                if (isAdultCategory) {
+                    if (runtimeMinutes in 1..10) return@mapNotNull null 
+                } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
+                    return@mapNotNull null
+                }
+                
+                if (isConcertCategory) {
+                    if (runtimeMinutes in 1..29) return@mapNotNull null 
+                    if (titleLower.contains("season ") || titleLower.contains("episode ")) return@mapNotNull null
+                }
+
+                if (!isSeriesCategory && (titleLower.contains("season ") || titleLower.contains("episode "))) return@mapNotNull null
+
+                if (searchQueryForRanking != null && searchQueryForRanking.isNotBlank()) {
+                    if (titleLower.contains(searchQueryForRanking.lowercase())) {
+                        score += 10000.0 
+                    }
+                }
+
+                val legendaryMatches = legendaryTitles.count { titleLower.contains(it) }
+                score += legendaryMatches * 5000.0 
+
+                val ratingVal = when (val r = doc.avgRating) {
+                    is Number -> r.toDouble()
+                    is String -> r.toDoubleOrNull() ?: 0.0
+                    else -> 0.0
+                }
+                val reviewsVal = when (val rev = doc.numReviews) {
+                    is Number -> rev.toInt()
+                    is String -> rev.toIntOrNull() ?: 0
+                    else -> 0
+                }
+                val itemSizeMb = parseSizeMb(doc.itemSize)
+
+                if (ratingVal > 0.0) {
+                    score += ratingVal * 1500.0 
+                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 400.0 
+                } else {
+                    score += 500.0
+                }
+
+                val premiumHits = notableCinemaKeywords.count { fullMetaLower.contains(it) }
+                score += premiumHits * 2500.0 
+
+                if (collectionText.lowercase().contains("laserdiscarchive")) score += 3000.0
+                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 3000.0
+                if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
+                if (collectionText.lowercase().contains("feature_films")) score += 1500.0
+                if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
+                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
+                
+                if (runtimeMinutes >= 75) score += 1000.0
+                if (runtimeMinutes >= 100) score += 1500.0 
+                
+                if (itemSizeMb >= 800) score += 1000.0
+                if (itemSizeMb >= 2000) score += 1500.0 
+
+                val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
+
+                RatedMovie(
+                    movie = ArchiveMovie(identifier = id, title = finalTitle),
+                    rating = ratingStr,
+                    relevanceScore = score
                 )
+            }
 
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Ako imamo više datoteka (bilo koja kolekcija ili serija)
-                if (currentInfo != null && currentInfo.qualities.size > 1) {
-                    
-                    // Gumb za Favorite 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            .height(50.dp)
-                            .padding(bottom = 12.dp)
-                            .background(
-                                color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = if (isFavFocused) 3.5.dp else 1.dp,
-                                color = if (isFavFocused) Color.White else Color.DarkGray,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable(interactionSource = favInteractionSource, indication = null) {
-                                viewModel.toggleFavorite(movie)
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                contentDescription = null,
-                                tint = if (isFavorite) Color.Red else Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-                    }
-                    
-                    // Glavni Gumb "POKRENI" za Kolekcije - sada pušta PRVI FILM u listi, a ne prazan ID redatelja
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            .height(54.dp)
-                            .padding(bottom = 24.dp)
-                            .focusRequester(playButtonFocusRequester)
-                            .background(
-                                color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .border(
-                                width = if (isPlayFocused) 3.5.dp else 1.dp,
-                                color = if (isPlayFocused) Color.White else Color.Transparent,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable(interactionSource = playInteractionSource, indication = null) {
-                                // OVO JE POPRAVAK: Uzimamo URL PRVOG .mp4 filma iz kolekcije!
-                                val firstMovieUrl = currentInfo.qualities.firstOrNull()?.url
-                                if (firstMovieUrl != null) {
-                                    onPlayClick(firstMovieUrl)
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "POKRENI PRVI FILM",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-                    }
-
-                    val formattedQualities = currentInfo.qualities.map { quality ->
-                        val decodedUrl = try {
-                            URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
-                        } catch (e: Exception) {
-                            quality.label
-                        }
-                        
-                        val originalName = decodedUrl.substringBeforeLast(".")
-                        
-                        val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
-                        val extractedYear = yearMatch?.value ?: ""
-
-                        var cleanTitle = originalName.replace(Regex("(?i)(_|-|\\.)"), " ")
-                        cleanTitle = cleanTitle.replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip|web|dl|hd|sd)\\b"), "")
-                        
-                        if (extractedYear.isNotEmpty()) {
-                            cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
-                        }
-                        
-                        cleanTitle = cleanTitle.replace(Regex("^\\s*[0-9]+[\\.\\-]?\\s*"), "")
-                        cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
-
-                        val finalFormattedTitle = if (extractedYear.isNotEmpty() && cleanTitle.isNotEmpty()) {
-                            "$cleanTitle ($extractedYear)"
-                        } else if (cleanTitle.isNotEmpty()) {
-                            cleanTitle
-                        } else {
-                            quality.label
-                        }
-                        
-                        Triple(quality, finalFormattedTitle, extractedYear.toIntOrNull() ?: 0)
-                        
-                    }.sortedByDescending { it.third }
-
-                    // Lista pojedinačnih filmova
-                    formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
-                        val epInteractionSource = remember { MutableInteractionSource() }
-                        val isEpFocused by epInteractionSource.collectIsFocusedAsState()
-                        val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
-
-                        Box(
-                            modifier = mod
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                                .background(
-                                    color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .border(
-                                    width = if (isEpFocused) 3.dp else 1.dp,
-                                    color = if (isEpFocused) Color.White else Color.DarkGray,
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                                .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // Klikom na pojedinačni film prosljeđujemo točan URL
-                                    onPlayClick(quality.url)
-                                }
-                                .padding(16.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "${index + 1}.",
-                                    color = Color.Red,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    modifier = Modifier.width(36.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                                    Text(
-                                        text = finalFormattedTitle,
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                }
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
-                            }
-                        }
-                    }
-                } else if (currentInfo != null) {
-                    // Za obične pojedinačne filmove koji nisu kolekcija
-                    Row(
-                        modifier = Modifier.fillMaxWidth(0.9f),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(54.dp)
-                                .focusRequester(playButtonFocusRequester)
-                                .background(
-                                    color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .border(
-                                    width = if (isPlayFocused) 3.5.dp else 1.dp,
-                                    color = if (isPlayFocused) Color.White else Color.Transparent,
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    onPlayClick(movie.identifier)
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "POKRENI",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(54.dp)
-                                .background(
-                                    color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .border(
-                                    width = if (isFavFocused) 3.5.dp else 1.dp,
-                                    color = if (isFavFocused) Color.White else Color.DarkGray,
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .clickable(interactionSource = favInteractionSource, indication = null) {
-                                    viewModel.toggleFavorite(movie)
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                    contentDescription = null,
-                                    tint = if (isFavorite) Color.Red else Color.White,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                } else if (isAuthorMode) {
-                    Text(
-                        text = "Nažalost, nismo uspjeli pronaći filmove za ovog autora u arhivi.",
-                        color = Color.Gray,
-                        modifier = Modifier.padding(top = 20.dp)
+            val finalSorted = if (isSeriesCategory) {
+                val grouped = scoredList.groupBy { cleanSeriesTitleForGrouping(it.movie.title) }
+                val mergedList = grouped.map { (baseTitle, group) ->
+                    val mergedIds = group.joinToString(",") { it.movie.identifier }
+                    val bestItem = group.maxByOrNull { it.relevanceScore } ?: group.first()
+                    RatedMovie(
+                        movie = ArchiveMovie(identifier = mergedIds, title = baseTitle),
+                        rating = bestItem.rating,
+                        relevanceScore = bestItem.relevanceScore
                     )
                 }
-                Spacer(modifier = Modifier.height(30.dp))
+                mergedList.sortedByDescending { it.relevanceScore }
+            } else {
+                scoredList.sortedByDescending { it.relevanceScore }
             }
+            
+            finalSorted to numFound
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList<RatedMovie>() to 0
         }
     }
-}
 
-private suspend fun fetchWikiInfo(authorName: String): String = withContext(Dispatchers.IO) {
-    try {
-        val searchName = if (authorName == "PTA Filmography") "Paul Thomas Anderson" else authorName
-        val encodedName = URLEncoder.encode(searchName, "UTF-8")
+    private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
+        var clean = rawTitle
+        clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
+        clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
+        clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
         
-        var url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
-        var conn = url.openConnection() as HttpURLConnection
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        var response = conn.inputStream.bufferedReader().use { it.readText() }
-        
-        var jsonObject = JSONObject(response)
-        var pages = jsonObject.getJSONObject("query").getJSONObject("pages")
-        var pageId = pages.keys().next()
-        
-        if (pageId != "-1") {
-            val page = pages.getJSONObject(pageId)
-            if (page.has("extract")) {
-                val extract = page.getString("extract").trim()
-                if (extract.isNotEmpty()) return@withContext extract
+        val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
+        for (series in knownSeries) {
+            if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
+                clean = series
+                break
             }
         }
         
-        url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
-        conn = url.openConnection() as HttpURLConnection
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        response = conn.inputStream.bufferedReader().use { it.readText() }
+        clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
+        clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
+        clean = clean.replace(Regex("\\s*-\\s*$"), "")
+        clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+        clean = clean.replace(Regex("\\s+"), " ").trim()
         
-        jsonObject = JSONObject(response)
-        pages = jsonObject.getJSONObject("query").getJSONObject("pages")
-        pageId = pages.keys().next()
-        
-        if (pageId != "-1") {
-            val page = pages.getJSONObject(pageId)
-            if (page.has("extract")) {
-                val englishExtract = page.getString("extract").trim()
-                return@withContext translateToCroatian(englishExtract)
-            }
-        }
-        return@withContext "Biografija nije pronađena na Wikipediji."
-    } catch (e: Exception) {
-        return@withContext "Greška prilikom preuzimanja biografije."
+        return clean.ifBlank { rawTitle }
     }
-}
 
-private suspend fun translateToCroatian(text: String): String = withContext(Dispatchers.IO) {
-    if (text.isBlank() || text.startsWith("Opis za ovaj naslov")) return@withContext text
-    try {
-        val limitedText = text.take(1500)
-        val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
-        val translatedBuilder = StringBuilder()
-
-        for (sentence in sentences) {
-            val trimmed = sentence.trim()
-            if (trimmed.isEmpty()) continue
-            val encoded = URLEncoder.encode(trimmed, "UTF-8")
-            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
-            val conn = URL(urlStr).openConnection() as HttpURLConnection
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            val jsonArray = JSONArray(response)
-            val parts = jsonArray.getJSONArray(0)
-            for (i in 0 until parts.length()) {
-                translatedBuilder.append(parts.getJSONArray(i).getString(0))
+    private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
+        val raw = extractText(runtimeValue).trim()
+        if (raw.isEmpty()) return 0
+        if (raw.contains(":")) {
+            val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
+            return when (parts.size) {
+                3 -> parts[0] * 60 + parts[1]
+                2 -> parts[0]
+                else -> 0
             }
-            translatedBuilder.append(" ")
         }
-        translatedBuilder.toString().trim().ifBlank { text }
-    } catch (e: Exception) {
-        e.printStackTrace()
-        text
+        val numeric = raw.toDoubleOrNull() ?: return 0
+        return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
+    }
+
+    private fun parseSizeMb(sizeValue: Any?): Long {
+        val bytes = when (sizeValue) {
+            is Number -> sizeValue.toLong()
+            is String -> sizeValue.trim().toLongOrNull() ?: 0L
+            else -> 0L
+        }
+        return bytes / (1024L * 1024L)
+    }
+
+    private fun extractText(value: Any?): String {
+        return when (value) {
+            is String -> value.trim()
+            is List<*> -> value.filterNotNull().joinToString(" ").trim()
+            else -> ""
+        }
     }
 }
