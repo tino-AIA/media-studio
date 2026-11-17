@@ -78,7 +78,8 @@ fun HomeScreen(
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
-    val authorImages by viewModel.authorImages.collectAsState()
+    // Ovdje ispravljamo čitanje authorImages iz statične varijable u HomeViewModelu
+    val authorImages = viewModel.staticAuthorImages
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -861,12 +862,12 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
     var posterUrl by remember { mutableStateOf("") }
 
-    LaunchedEffect(movie.title, authorImages) {
+    LaunchedEffect(movie.title) {
         if (isAuthor) {
             val authorName = movie.title
             val archiveId = viewModel.getAuthorArchiveId(authorName)
-            val mappedImage = authorImages[authorName] ?: ""
-            // Ovdje povlači sliku, i ako je nema pokušat će povući sa archive.org za taj ID
+            val mappedImage = viewModel.staticAuthorImages[authorName] ?: ""
+            // Ovdje povlači sliku iz HomeViewModel statične liste
             posterUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
