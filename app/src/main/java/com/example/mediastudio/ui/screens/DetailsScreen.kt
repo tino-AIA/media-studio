@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLDecoder
 import java.net.URLEncoder
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -87,7 +88,7 @@ fun DetailsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija / Serija" else "Detalji filma", color = Color.White) },
+                title = { Text(if (movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija Autora / Serija" else "Detalji filma", color = Color.White) },
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
@@ -113,8 +114,8 @@ fun DetailsScreen(
                 painter = rememberAsyncImagePainter("https://archive.org/services/img/${movie.identifier}"),
                 contentDescription = movie.title,
                 modifier = Modifier
-                    .width(165.dp)
-                    .height(235.dp)
+                    .width(180.dp)
+                    .height(255.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
                 contentScale = ContentScale.Crop
@@ -125,7 +126,7 @@ fun DetailsScreen(
             Text(
                 text = movie.title,
                 color = Color.White,
-                fontSize = 24.sp,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
@@ -156,28 +157,17 @@ fun DetailsScreen(
                         color = Color(0xFFDDDDDD),
                         fontSize = 15.sp,
                         lineHeight = 22.sp,
-                        textAlign = TextAlign.Start,
-                        modifier = Modifier.fillMaxWidth()
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
                     )
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // AŽURIRANO: Ako ima više videa (serija ili filmografija), ispisujemo listu umjesto gumba za rezolucije
                     if (info.qualities.size > 1) {
-                        Text(
-                            text = "Odaberi naslov iz kolekcije (${info.qualities.size}):",
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                            textAlign = TextAlign.Start
-                        )
-                        
-                        // Favoriti Gumb
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
+                                .fillMaxWidth(0.8f)
+                                .height(50.dp)
                                 .padding(bottom = 12.dp)
                                 .background(
                                     color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
@@ -210,17 +200,21 @@ fun DetailsScreen(
                             }
                         }
 
-                        // Lista Filmova/Epizoda
                         info.qualities.forEachIndexed { index, quality ->
                             val epInteractionSource = remember { MutableInteractionSource() }
                             val isEpFocused by epInteractionSource.collectIsFocusedAsState()
                             val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
 
-                            // AŽURIRANO: Čišćenje naziva datoteke kako bi izgledalo kao naslov filma
-                            val cleanTitle = quality.label
-                                .substringBeforeLast(".") // Uklanja .mp4 ili .mkv
-                                .replace(Regex("(?i)(_|-|\\.)"), " ") // Pretvara podvlake i crtice u razmak
-                                .replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip)\\b"), "") // Briše tehničke podatke
+                            val decodedUrl = try {
+                                URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
+                            } catch (e: Exception) {
+                                quality.label
+                            }
+                            
+                            val cleanTitle = decodedUrl
+                                .substringBeforeLast(".") 
+                                .replace(Regex("(?i)(_|-|\\.)"), " ") 
+                                .replace(Regex("(?i)\\b(1080p|720p|480p|360p|240p|hevc|h264|x264|mp4|mkv|aac|webrip|bluray|dvdrip|xvid|divx|brrip)\\b"), "")
                                 .replace(Regex("\\s+"), " ")
                                 .trim()
 
@@ -252,7 +246,7 @@ fun DetailsScreen(
                                     )
                                     Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
                                         Text(
-                                            text = cleanTitle.ifEmpty { "Naslov ${index + 1}" },
+                                            text = cleanTitle.ifEmpty { "Film / Naslov ${index + 1}" },
                                             color = Color.White,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 16.sp
@@ -263,9 +257,8 @@ fun DetailsScreen(
                             }
                         }
                     } else {
-                        // Klasični prikaz za 1 film (samo gumb POKRENI i FAVORITI u jednom redu)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth(0.9f),
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
