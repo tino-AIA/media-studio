@@ -226,6 +226,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
+    // FINALNO ISPRAVLJENO: Prazna mapa se proslijeđuje pravilno
     private val _authorImages = MutableStateFlow>(emptyMap())
     val authorImages: StateFlow> = _authorImages
 
