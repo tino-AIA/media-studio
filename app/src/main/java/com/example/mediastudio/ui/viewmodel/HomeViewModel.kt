@@ -15,7 +15,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -227,10 +226,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return authorArchiveIds[authorName] ?: ("filmography-" + authorName.lowercase().replace(" ", "-"))
     }
 
-    // SAVRŠENO ISPRAVNA SINTAKSA ZA SLIKE S WIKIPEDIJE
-    private val _authorImages = MutableStateFlow>(emptyMap())
-    val authorImages: StateFlow> = _authorImages.asStateFlow()
-
     private val legendaryTitles = listOf(
         "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
         "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
@@ -294,6 +289,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
         GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues OR orchestra OR symphony)", "downloads desc", isConcertCategory = true)
     )
+
+    // OVDJE SU SVI STATE FLOW OBJEKTI NA JEDNOM MJESTU KAKO PARSER NE BI BACAO GREŠKU
+    private val _authorImages = MutableStateFlow>(emptyMap())
+    val authorImages: StateFlow> = _authorImages
 
     private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
     val selectedTab: StateFlow<ContentTab> = _selectedTab
@@ -390,9 +389,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val (author, url) = it.await()
                 if (url.isNotEmpty()) {
                     map[author] = url
-                    _authorImages.value = map
                 }
             }
+            // Sigurna dodjela na kraju procesa bez tipskih nesuglasica
+            _authorImages.value = map.toMap()
         }
     }
 
