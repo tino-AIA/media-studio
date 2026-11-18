@@ -79,7 +79,7 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Ne prikazujemo sliku za autora u detaljima
+            // Ne prikazujemo sliku za autora u detaljima (uklonjen sivi okvir)
             imageUrl = ""
             
             val wikiData = fetchWikiInfo(authorName)
@@ -192,6 +192,7 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // Za kolekcije (Autori ili Serije s više datoteka)
                 if (currentInfo != null && currentInfo.qualities.size > 1) {
                     Box(
                         modifier = Modifier
@@ -228,6 +229,8 @@ fun DetailsScreen(
                             )
                         }
                     }
+
+                    // NAPOMENA: Gumb "POKRENI PRVI FILM" je potpuno i zauvijek obrisan.
 
                     val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
@@ -282,18 +285,20 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // POPRAVAK ZA PLAYANJE IZ LISTE (KOLEKCIJE AUTORA)
-                                    // Kada proslijedimo objekt "specificMovieToPlay", moramo osigurati da on prosljeđuje
-                                    // i URL datoteke kao Identifier kako bi ga player uspješno pokrenuo,
-                                    // a kao Title prosljeđujemo 'finalFormattedTitle' kako bi u playeru pisao točan naziv filma.
+                                    // KLJUČNI POPRAVAK:
+                                    // Moramo pretvoriti /details/ link u direktan /download/ link za player!
+                                    val directDownloadUrl = quality.url.replace("/details/", "/download/")
+                                    
                                     if (onPlayMovieFromList != null) {
                                         val specificMovieToPlay = ArchiveMovie(
-                                            identifier = quality.url,
+                                            // Šaljemo direktan stream URL
+                                            identifier = directDownloadUrl, 
+                                            // Šaljemo točno ime filma
                                             title = finalFormattedTitle
                                         )
                                         onPlayMovieFromList(specificMovieToPlay)
                                     } else {
-                                        onPlayClick(quality.url)
+                                        onPlayClick(directDownloadUrl)
                                     }
                                 }
                                 .padding(16.dp)
@@ -319,6 +324,7 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
+                    // Za obične pojedinačne filmove
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
