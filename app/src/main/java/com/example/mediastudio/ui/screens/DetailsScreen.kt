@@ -49,7 +49,8 @@ fun DetailsScreen(
     movie: ArchiveMovie,
     viewModel: HomeViewModel,
     onPlayClick: (String) -> Unit,
-    onPlayMovieFromList: ((ArchiveMovie) -> Unit)? = null, 
+    // PROMJENA: Umjesto pokretanja filma, klik sada bira film za prikaz njegovih vlastitih detalja
+    onMovieSelectFromList: ((ArchiveMovie) -> Unit)? = null, 
     onBackClick: () -> Unit
 ) {
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
@@ -69,6 +70,9 @@ fun DetailsScreen(
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
 
+    // Zastavica da provjerimo da li je proslijeđeni "film" zapravo direktan link (kliknut s liste)
+    val isDirectLinkMode = movie.identifier.contains("/download/") || movie.identifier.endsWith(".mp4") || movie.identifier.endsWith(".mkv")
+
     BackHandler {
         onBackClick()
     }
@@ -79,14 +83,18 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Ne prikazujemo sliku za autora u detaljima (uklonjen sivi okvir)
             imageUrl = ""
-            
             val wikiData = fetchWikiInfo(authorName)
             translatedDescription = wikiData
             
             movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
             
+        } else if (isDirectLinkMode) {
+            // Ako otvaramo pojedinačni film s liste (npr. Mission Impossible iz De Palme)
+            // Želimo da nema nikakvog učitavanja novih lista ispod, ovo je samo finalni ekran.
+            imageUrl = "" 
+            translatedDescription = "Opis za ovaj naslov trenutno nije dostupan."
+            movieInfo = null
         } else {
             imageUrl = "https://archive.org/services/img/${movie.identifier}"
             val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
@@ -192,8 +200,8 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Za kolekcije (Autori ili Serije s više datoteka)
-                if (currentInfo != null && currentInfo.qualities.size > 1) {
+                // Za kolekcije (Autori ili Serije s više datoteka) gdje prikazujemo listu
+                if (currentInfo != null && currentInfo.qualities.size > 1 && !isDirectLinkMode) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
@@ -229,8 +237,6 @@ fun DetailsScreen(
                             )
                         }
                     }
-
-                    // NAPOMENA: Gumb "POKRENI PRVI FILM" je potpuno i zauvijek obrisan.
 
                     val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
@@ -285,20 +291,16 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // KLJUČNI POPRAVAK:
-                                    // Moramo pretvoriti /details/ link u direktan /download/ link za player!
+                                    // Tvoja ideja: Klikom na listu ne puštamo odmah film, 
+                                    // već prebacujemo korisnika u novi DetailsScreen baš za taj film!
                                     val directDownloadUrl = quality.url.replace("/details/", "/download/")
                                     
-                                    if (onPlayMovieFromList != null) {
-                                        val specificMovieToPlay = ArchiveMovie(
-                                            // Šaljemo direktan stream URL
+                                    if (onMovieSelectFromList != null) {
+                                        val specificMovieForDetails = ArchiveMovie(
                                             identifier = directDownloadUrl, 
-                                            // Šaljemo točno ime filma
                                             title = finalFormattedTitle
                                         )
-                                        onPlayMovieFromList(specificMovieToPlay)
-                                    } else {
-                                        onPlayClick(directDownloadUrl)
+                                        onMovieSelectFromList(specificMovieForDetails)
                                     }
                                 }
                                 .padding(16.dp)
@@ -319,12 +321,12 @@ fun DetailsScreen(
                                         fontSize = 16.sp
                                     )
                                 }
-                                Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White)
+                                Icon(Icons.Default.ChevronRight, contentDescription = "Otvori detalje", tint = Color.White)
                             }
                         }
                     }
-                } else if (currentInfo != null) {
-                    // Za obične pojedinačne filmove
+                } else if (currentInfo != null || isDirectLinkMode) {
+                    // Ovo je standardni Details ekran (za onaj film koji si kliknuo na početnom izborniku ili na listi u kolekciji)
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
