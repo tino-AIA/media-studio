@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
@@ -49,8 +50,7 @@ fun DetailsScreen(
     movie: ArchiveMovie,
     viewModel: HomeViewModel,
     onPlayClick: (String) -> Unit,
-    // PROMJENA: Umjesto pokretanja filma, klik sada bira film za prikaz njegovih vlastitih detalja
-    onMovieSelectFromList: ((ArchiveMovie) -> Unit)? = null, 
+    onMovieSelectFromList: ((ArchiveMovie) -> Unit)? = null,
     onBackClick: () -> Unit
 ) {
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
@@ -69,9 +69,7 @@ fun DetailsScreen(
 
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == movie.identifier }
     val isAuthorMode = movie.identifier.startsWith("AUTHOR|")
-
-    // Zastavica da provjerimo da li je proslijeđeni "film" zapravo direktan link (kliknut s liste)
-    val isDirectLinkMode = movie.identifier.contains("/download/") || movie.identifier.endsWith(".mp4") || movie.identifier.endsWith(".mkv")
+    val isDirectLinkMode = movie.identifier.startsWith("http")
 
     BackHandler {
         onBackClick()
@@ -84,16 +82,11 @@ fun DetailsScreen(
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
             imageUrl = ""
-            val wikiData = fetchWikiInfo(authorName)
-            translatedDescription = wikiData
-            
+            translatedDescription = fetchWikiInfo(authorName)
             movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
-            
         } else if (isDirectLinkMode) {
-            // Ako otvaramo pojedinačni film s liste (npr. Mission Impossible iz De Palme)
-            // Želimo da nema nikakvog učitavanja novih lista ispod, ovo je samo finalni ekran.
-            imageUrl = "" 
-            translatedDescription = "Opis za ovaj naslov trenutno nije dostupan."
+            imageUrl = ""
+            translatedDescription = "Odabrani naslov iz kolekcije autora spreman je za reprodukciju."
             movieInfo = null
         } else {
             imageUrl = "https://archive.org/services/img/${movie.identifier}"
@@ -104,7 +97,7 @@ fun DetailsScreen(
         
         isLoading = false
         try {
-            if (movieInfo?.qualities?.size ?: 0 > 1) {
+            if (movieInfo?.qualities?.size ?: 0 > 1 && !isDirectLinkMode) {
                 firstEpisodeFocusRequester.requestFocus()
             } else {
                 playButtonFocusRequester.requestFocus()
@@ -115,7 +108,12 @@ fun DetailsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isAuthorMode || movieInfo?.qualities?.size ?: 0 > 1) "Kolekcija Autora" else "Detalji filma", color = Color.White) },
+                title = {
+                    Text(
+                        text = if (isAuthorMode || (movieInfo?.qualities?.size ?: 0 > 1 && !isDirectLinkMode)) "Kolekcija Autora" else "Detalji filma",
+                        color = Color.White
+                    )
+                },
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
@@ -137,7 +135,7 @@ fun DetailsScreen(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (!isAuthorMode) {
+            if (!isAuthorMode && !isDirectLinkMode) {
                 if (imageUrl.isNotEmpty()) {
                     Image(
                         painter = rememberAsyncImagePainter(imageUrl),
@@ -171,7 +169,7 @@ fun DetailsScreen(
             } else {
                 val currentInfo = movieInfo
                 
-                if (!isAuthorMode && currentInfo != null) {
+                if (!isAuthorMode && !isDirectLinkMode && currentInfo != null) {
                     val metaParts = buildList {
                         if (currentInfo.year.isNotEmpty()) add("Godina: ${currentInfo.year}")
                         if (currentInfo.director.isNotEmpty()) add("Redatelj: ${currentInfo.director}")
@@ -200,7 +198,6 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Za kolekcije (Autori ili Serije s više datoteka) gdje prikazujemo listu
                 if (currentInfo != null && currentInfo.qualities.size > 1 && !isDirectLinkMode) {
                     Box(
                         modifier = Modifier
@@ -246,7 +243,6 @@ fun DetailsScreen(
                         }
                         
                         val originalName = decodedUrl.substringBeforeLast(".")
-                        
                         val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(originalName)
                         val extractedYear = yearMatch?.value ?: ""
 
@@ -257,6 +253,7 @@ fun DetailsScreen(
                             cleanTitle = cleanTitle.replace(Regex("\\b$extractedYear\\b"), "")
                         }
                         
+                        cleanTitle = cleanTitle.replace(Regex("\\(\\s*\\)|\\[\\s*\\]"), "")
                         cleanTitle = cleanTitle.replace(Regex("^\\s*[0-9]+[\\.\\-]?\\s*"), "")
                         cleanTitle = cleanTitle.replace(Regex("\\s+"), " ").trim()
 
@@ -269,7 +266,6 @@ fun DetailsScreen(
                         }
                         
                         Triple(quality, finalFormattedTitle, extractedYear.toIntOrNull() ?: 0)
-                        
                     }.sortedByDescending { it.third }
 
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
@@ -291,16 +287,14 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // Tvoja ideja: Klikom na listu ne puštamo odmah film, 
-                                    // već prebacujemo korisnika u novi DetailsScreen baš za taj film!
                                     val directDownloadUrl = quality.url.replace("/details/", "/download/")
-                                    
                                     if (onMovieSelectFromList != null) {
-                                        val specificMovieForDetails = ArchiveMovie(
-                                            identifier = directDownloadUrl, 
-                                            title = finalFormattedTitle
+                                        onMovieSelectFromList(
+                                            ArchiveMovie(
+                                                identifier = directDownloadUrl,
+                                                title = finalFormattedTitle
+                                            )
                                         )
-                                        onMovieSelectFromList(specificMovieForDetails)
                                     }
                                 }
                                 .padding(16.dp)
@@ -321,12 +315,11 @@ fun DetailsScreen(
                                         fontSize = 16.sp
                                     )
                                 }
-                                Icon(Icons.Default.ChevronRight, contentDescription = "Otvori detalje", tint = Color.White)
+                                Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Otvori detalje", tint = Color.White)
                             }
                         }
                     }
                 } else if (currentInfo != null || isDirectLinkMode) {
-                    // Ovo je standardni Details ekran (za onaj film koji si kliknuo na početnom izborniku ili na listi u kolekciji)
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -347,7 +340,11 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    onPlayClick(movie.identifier)
+                                    if (isDirectLinkMode) {
+                                        onPlayClick(movie.identifier)
+                                    } else {
+                                        onPlayClick(currentInfo?.year ?: "")
+                                    }
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -491,6 +488,7 @@ private suspend fun translateToCroatian(text: String): String = withContext(Disp
         text
     }
 }
+
 @Composable
 private fun TvHighlightIconButton(
     onClick: () -> Unit,
