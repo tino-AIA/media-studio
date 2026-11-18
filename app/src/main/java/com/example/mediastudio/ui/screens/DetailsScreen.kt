@@ -49,7 +49,6 @@ fun DetailsScreen(
     movie: ArchiveMovie,
     viewModel: HomeViewModel,
     onPlayClick: (String) -> Unit,
-    // Dodali smo novu varijablu u navigaciji kako bismo mogli proslijediti točan film kliknut na listi
     onPlayMovieFromList: ((ArchiveMovie) -> Unit)? = null, 
     onBackClick: () -> Unit
 ) {
@@ -80,7 +79,7 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Nema slike za autora u detaljima (samo na listi)
+            // Ne prikazujemo sliku za autora u detaljima
             imageUrl = ""
             
             val wikiData = fetchWikiInfo(authorName)
@@ -193,7 +192,6 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Za kolekcije (Autori ili Serije s više datoteka)
                 if (currentInfo != null && currentInfo.qualities.size > 1) {
                     Box(
                         modifier = Modifier
@@ -284,17 +282,17 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // POPRAVAK ZA PLAYANJE IZ LISTE: 
-                                    // Umjesto da MainActivity-u šaljemo čisti String URL (što ga zbunjuje),
-                                    // šaljemo pravi ArchiveMovie objekt, gdje je identifier = URL, a title = točno ime tog filma.
+                                    // POPRAVAK ZA PLAYANJE IZ LISTE (KOLEKCIJE AUTORA)
+                                    // Kada proslijedimo objekt "specificMovieToPlay", moramo osigurati da on prosljeđuje
+                                    // i URL datoteke kao Identifier kako bi ga player uspješno pokrenuo,
+                                    // a kao Title prosljeđujemo 'finalFormattedTitle' kako bi u playeru pisao točan naziv filma.
                                     if (onPlayMovieFromList != null) {
                                         val specificMovieToPlay = ArchiveMovie(
-                                            identifier = quality.url, 
+                                            identifier = quality.url,
                                             title = finalFormattedTitle
                                         )
                                         onPlayMovieFromList(specificMovieToPlay)
                                     } else {
-                                        // Fallback ako onPlayMovieFromList iz nekog razloga nije vezan
                                         onPlayClick(quality.url)
                                     }
                                 }
@@ -321,7 +319,6 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
-                    // Pojedinačni film (ne kolekcija) ostaje kao i prije
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
