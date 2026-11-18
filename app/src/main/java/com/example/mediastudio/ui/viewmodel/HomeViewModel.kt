@@ -9,22 +9,18 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import kotlin.math.ceil
 import kotlin.math.ln
 
@@ -40,7 +36,7 @@ data class GenreOption(
     val isAnimationCategory: Boolean = false,
     val isSeriesCategory: Boolean = false,
     val isConcertCategory: Boolean = false,
-    val isAuthorCollection: Boolean = false 
+    val isAuthorCollection: Boolean = false
 )
 
 data class RatedMovie(
@@ -70,6 +66,8 @@ private data class RawArchiveDoc(
     val description: Any?,
     val collection: Any?,
     val runtime: Any?,
+    val year: Any? = null,
+    val date: Any? = null,
     @Json(name = "item_size") val itemSize: Any?,
     @Json(name = "avg_rating") val avgRating: Any?,
     @Json(name = "num_reviews") val numReviews: Any?,
@@ -82,7 +80,7 @@ private interface ArchiveSearchApi {
         @Query("q") query: String,
         @Query("fl[]") fields: List<String> = listOf(
             "identifier", "title", "creator", "description", "collection",
-            "runtime", "item_size", "avg_rating", "num_reviews", "language"
+            "runtime", "year", "date", "item_size", "avg_rating", "num_reviews", "language"
         ),
         @Query("sort[]") sort: String = "downloads desc",
         @Query("rows") rows: Int = 150,
@@ -92,9 +90,10 @@ private interface ArchiveSearchApi {
 }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
-    
+
     private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
-    
+    private val cachePrefsKey = "app_content_cache_v2"
+
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
@@ -102,7 +101,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
         Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
     )
-    
+
     private val cacheAdapter = moshi.adapter(AppCache::class.java)
 
     private val api: ArchiveSearchApi = Retrofit.Builder()
@@ -130,14 +129,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "bollywood", "tollywood", "hindi", "telugu", "tamil", "urdu", "punjabi", "desi",
         "bengali", "malayalam", "marathi", "gujarati", "arab", "arabic",
         "amateur", "vlog", "raw footage", "home movie", "home video", "commercials",
-        "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "dvd transfer", "vhv transfer"
+        "mtv raps", "mtv hits", "mtv trl", "compilation", "mixtape", "vhs transfer"
     )
 
     private val notableCinemaKeywords = listOf(
         "universal", "warner", "paramount", "mgm", "20th century", "disney", "columbia",
         "hbo", "showtime", "cinemax", "lucasfilm", "marvel", "dc comics", "criterion",
         "bbc", "channel 4", "film noir", "cult classic", "masterpiece", "hollywood",
-        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award"
+        "imdb", "oscar", "bafta", "cannes", "blockbuster", "academy award", "tri-star",
+        "tristar", "orion pictures", "miramax", "new line cinema", "touchstone", "carolco"
+    )
+
+    private val hdReleaseKeywords = listOf(
+        "1080p", "2160p", "4k", "720p", "bluray", "blu-ray", "bdrip", "brrip",
+        "webrip", "web-dl", "webdl", "dvdrip", "hdrip", "x264", "x265", "h264",
+        "h265", "hevc", "remastered", "director's cut", "directors cut", "extended", "unrated"
+    )
+
+    private val acclaimedDirectors = listOf(
+        "david lynch", "james cameron", "paul verhoeven", "john carpenter", "ridley scott",
+        "steven spielberg", "george lucas", "quentin tarantino", "christopher nolan",
+        "martin scorsese", "stanley kubrick", "francis ford coppola", "alfred hitchcock",
+        "brian de palma", "sergio leone", "david fincher", "denis villeneuve",
+        "robert rodriguez", "tony scott", "clint eastwood", "akira kurosawa",
+        "david cronenberg", "roman polanski", "werner herzog", "federico fellini",
+        "ingmar bergman", "orson welles", "john ford", "george a. romero",
+        "alejandro jodorowsky", "gaspar noe", "sean baker", "paul thomas anderson",
+        "joel coen", "ethan coen", "tim burton", "terry gilliam", "sam raimi",
+        "guillermo del toro", "peter jackson", "hayao miyazaki", "mamoru oshii"
     )
 
     val exactAuthorOrder = listOf(
@@ -291,43 +310,99 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg"
     )
 
+    // Prošireni popis kultnih i poznatih filmova/serija (koristi se sigurno podudaranje cijelih riječi)
     private val legendaryTitles = listOf(
-        "godfather", "matrix", "avatar", "star wars", "lord of the rings", "jurassic park",
-        "terminator", "alien", "back to the future", "indiana jones", "die hard", "rocky",
-        "star trek", "everybody loves raymond", "3rd rock from the sun", "third rock from the sun",
-        "seinfeld", "friends", "the simpsons", "x-files", "sopranos", "the wire", "breaking bad",
-        "doctor who", "twilight zone", "batman", "superman", "spider-man", "james bond", "harry potter",
-        "alf", "roots", "monty python", "aeon flux", "hitchhiker's guide", "shogun", "galactica",
-        "v the series", "alien nation", "buck rogers", "one step beyond", "quark", "creepy crawlers",
-        "chocky"
+        "dune", "terminator", "total recall", "borat", "big trouble in little china",
+        "demolition man", "red", "sin city", "enemy of the state", "letters from iwo jima",
+        "guns of navarone", "empire strikes back", "star wars", "return of the jedi",
+        "alien", "aliens", "planet of the apes", "beneath the planet of the apes",
+        "escape from the planet of the apes", "conquest of the planet of the apes",
+        "battle for the planet of the apes", "blade runner", "pulp fiction", "godfather",
+        "goodfellas", "scarface", "reservoir dogs", "kill bill", "django unchained",
+        "inglourious basterds", "fight club", "matrix", "inception", "interstellar",
+        "dark knight", "batman", "superman", "spider-man", "jurassic park", "indiana jones",
+        "raiders of the lost ark", "back to the future", "die hard", "lethal weapon",
+        "predator", "robocop", "mad max", "rambo", "first blood", "rocky", "fifth element",
+        "twelve monkeys", "12 monkeys", "akira", "ghost in the shell", "shawshank redemption",
+        "forrest gump", "silence of the lambs", "se7en", "gladiator", "braveheart",
+        "saving private ryan", "schindler's list", "apocalypse now", "platoon",
+        "full metal jacket", "taxi driver", "clockwork orange", "shining",
+        "2001 a space odyssey", "space odyssey", "good the bad and the ugly",
+        "once upon a time in the west", "lawrence of arabia", "bridge on the river kwai",
+        "great escape", "dirty dozen", "heat", "casino", "departed", "no country for old men",
+        "there will be blood", "fargo", "big lebowski", "groundhog day", "ghostbusters",
+        "beetlejuice", "edward scissorhands", "princess bride", "monty python",
+        "life of brian", "holy grail", "airplane", "naked gun", "hot shots", "spaceballs",
+        "blazing saddles", "young frankenstein", "jaws", "close encounters", "poltergeist",
+        "exorcist", "halloween", "nightmare on elm street", "friday the 13th", "evil dead",
+        "the thing", "the fly", "escape from new york", "they live", "highlander",
+        "conan the barbarian", "labyrinth", "neverending story", "willow", "goonies",
+        "gremlins", "tron", "wargames", "spirited away", "princess mononoke", "totoro",
+        "leon the professional", "la femme nikita", "ronin", "mission impossible",
+        "bourne identity", "bourne supremacy", "bourne ultimatum", "james bond",
+        "goldeneye", "goldfinger", "casino royale", "avatar", "lord of the rings",
+        "harry potter", "star trek", "everybody loves raymond", "3rd rock from the sun",
+        "third rock from the sun", "seinfeld", "friends", "the simpsons", "x-files",
+        "sopranos", "the wire", "breaking bad", "doctor who", "twilight zone", "alf",
+        "roots", "aeon flux", "hitchhiker's guide", "shogun", "galactica", "v the series",
+        "alien nation", "buck rogers", "one step beyond", "quark", "creepy crawlers", "chocky"
     )
-    
-    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -subject:news"
+
+    private val legendaryTitleRegexes = legendaryTitles.map { title ->
+        Regex("\\b${Regex.escape(title)}\\b", RegexOption.IGNORE_CASE)
+    }
+
+    // Uključuje community_media kako bi se pronašli i svi noviji/poznati filmovi (Terminator, Dune, Total Recall, Borat, Sin City, Alien itd.)
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:community_media OR collection:SciFi_Films OR collection:colorized-and-upscaled-movies OR collection:laserdiscarchive OR collection:vhsvault OR collection:vhs_movies OR collection:miscellaneous_feature_films OR collection:popcornproject OR collection:vimeo-video OR collection:comedy_films OR collection:film_noir) AND -collection:television AND -collection:tvarchive AND -subject:news AND -subject:podcast AND -subject:gameplay"
 
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
-        
+
         GenreOption(
             title = "Filmografije i Kolekcije Autora",
-            query = "", 
+            query = "",
             defaultSort = "",
-            isAuthorCollection = true 
+            isAuthorCollection = true
         ),
-        
-        GenreOption("Sci-Fi klasici", "$movieBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR collection:sci_fi_horror)"),
-        GenreOption("Akcija i avantura", "$movieBaseQuery AND (subject:action OR subject:adventure OR subject:martial)"),
-        GenreOption("Triler i misterija", "$movieBaseQuery AND (subject:thriller OR subject:mystery OR subject:noir OR subject:suspense)"),
-        GenreOption("Komedija", "$movieBaseQuery AND (subject:comedy OR collection:comedy_films)"),
-        GenreOption("Horor", "$movieBaseQuery AND (subject:horror OR subject:vampire OR subject:zombie)"),
-        GenreOption("Drama", "$movieBaseQuery AND (subject:drama OR subject:melodrama)"),
-        GenreOption("Krimi", "$movieBaseQuery AND (subject:crime OR subject:gangster OR subject:detective)"),
+
+        GenreOption(
+            "Sci-Fi klasici",
+            "$movieBaseQuery AND (subject:(sci-fi OR \"science fiction\" OR cyberpunk OR dystopia) OR collection:sci_fi_horror OR description:(\"science fiction\" OR \"sci-fi\" OR terminator OR dune OR \"total recall\" OR \"empire strikes back\" OR \"star wars\" OR alien OR \"planet of the apes\" OR \"blade runner\" OR matrix OR robocop OR predator))"
+        ),
+        GenreOption(
+            "Akcija i avantura",
+            "$movieBaseQuery AND (subject:(action OR adventure OR martial) OR description:(action OR adventure OR \"martial arts\" OR terminator OR \"big trouble\" OR \"demolition man\" OR \"enemy of the state\" OR \"guns of navarone\" OR \"die hard\" OR \"indiana jones\" OR rambo OR \"mission impossible\" OR \"mad max\"))"
+        ),
+        GenreOption(
+            "Triler i misterija",
+            "$movieBaseQuery AND (subject:(thriller OR mystery OR noir OR suspense) OR description:(thriller OR mystery OR suspense OR \"sin city\" OR \"enemy of the state\" OR \"silence of the lambs\" OR hitchcock OR \"de palma\"))"
+        ),
+        GenreOption(
+            "Komedija",
+            "$movieBaseQuery AND (subject:comedy OR collection:comedy_films OR description:(comedy OR borat OR \"big trouble in little china\" OR ghostbusters OR \"monty python\" OR \"naked gun\" OR airplane))"
+        ),
+        GenreOption(
+            "Horor",
+            "$movieBaseQuery AND (subject:(horror OR vampire OR zombie) OR description:(horror OR alien OR \"the thing\" OR \"evil dead\" OR halloween OR shining OR exorcist OR romero OR cronenberg))"
+        ),
+        GenreOption(
+            "Drama",
+            "$movieBaseQuery AND (subject:(drama OR melodrama) OR description:(drama OR \"letters from iwo jima\" OR godfather OR goodfellas OR shawshank OR \"forrest gump\" OR scarface))"
+        ),
+        GenreOption(
+            "Krimi",
+            "$movieBaseQuery AND (subject:(crime OR gangster OR detective) OR description:(crime OR gangster OR mafia OR \"sin city\" OR \"pulp fiction\" OR goodfellas OR scarface OR heat OR untouchables))"
+        ),
         GenreOption("Romantični", "$movieBaseQuery AND (subject:romance OR subject:romantic)"),
-        GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
-        GenreOption("Ratni", "$movieBaseQuery AND (subject:war OR subject:military)"),
+        GenreOption("Vestern", "$movieBaseQuery AND (subject:western OR description:(western OR \"sergio leone\" OR \"clint eastwood\" OR \"john ford\"))"),
+        GenreOption(
+            "Ratni",
+            "$movieBaseQuery AND (subject:(war OR military) OR description:(\"world war\" OR \"letters from iwo jima\" OR \"guns of navarone\" OR \"saving private ryan\" OR platoon OR \"apocalypse now\" OR \"full metal jacket\"))"
+        ),
         GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons)", isAnimationCategory = true),
         GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR merrie OR popeye OR mickey OR \"bugs bunny\"))", "downloads desc", isAnimationCategory = true),
-        
+
         GenreOption(
             title = "18+ / Erotski",
             query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
@@ -336,14 +411,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
 
-    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\")"
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR collection:television_inbox OR collection:televisionmovies OR subject:\"tv series\" OR subject:\"television series\" OR title:(\"tv series\" OR \"complete series\" OR \"season 1\")) AND -collection:television AND -collection:tvarchive AND -subject:news"
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija danas", seriesBaseQuery, "week desc", isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND (subject:crime OR subject:detective OR subject:mystery OR subject:thriller)", "downloads desc", isSeriesCategory = true),
-        GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND (subject:sci-fi OR subject:\"science fiction\" OR subject:fantasy OR title:(\"planet of the apes\" OR \"star trek\" OR \"twilight zone\" OR \"doctor who\" OR \"x-files\"))", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND (subject:comedy OR subject:sitcom)", "downloads desc", isSeriesCategory = true),
-        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
+        GenreOption("Avanturističke serije", "$seriesBaseQuery AND (subject:adventure OR title:(\"planet of the apes\" OR \"buck rogers\"))", "downloads desc", isSeriesCategory = true)
     )
 
     private val concertBaseQuery = "mediatype:movies AND collection:vhsconcerts_music"
@@ -411,7 +486,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
 
     val pageSize = 60
-    
+
     private var lastLoadedCache: AppCache? = null
 
     init {
@@ -432,32 +507,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadCacheAndFetchNew() {
-        val cachedJson = prefs.getString("app_content_cache", null)
+        val cachedJson = prefs.getString(cachePrefsKey, null)
         if (cachedJson != null) {
             try {
                 val cache = cacheAdapter.fromJson(cachedJson)
                 if (cache != null) {
-                    lastLoadedCache = cache 
-                    
-                    val mMovies = cache.movieCategories.mapNotNull { c -> 
-                        movieGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    lastLoadedCache = cache
+
+                    val mMovies = cache.movieCategories.mapNotNull { c ->
+                        movieGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies }
                     }
-                    val mSeries = cache.seriesCategories.mapNotNull { c -> 
-                        seriesGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    val mSeries = cache.seriesCategories.mapNotNull { c ->
+                        seriesGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies }
                     }
-                    val mConcerts = cache.concertCategories.mapNotNull { c -> 
-                        concertGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies } 
+                    val mConcerts = cache.concertCategories.mapNotNull { c ->
+                        concertGenreDefinitions.find { it.title == c.genreTitle }?.let { it to c.movies }
                     }
-                    
+
                     if (mMovies.isNotEmpty()) _movieCategories.value = mMovies
                     if (mSeries.isNotEmpty()) _seriesCategories.value = mSeries
                     if (mConcerts.isNotEmpty()) _concertCategories.value = mConcerts
-                    
+
                     if (cache.heroMovies.isNotEmpty()) {
                         _heroMovies.value = cache.heroMovies.map { it.movie to it.isSeries }
                         startHeroCarousel()
                     }
-                    _isLoading.value = false 
+                    _isLoading.value = false
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -474,13 +549,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleFavorite(movie: ArchiveMovie) {
         val currentList = _favoriteMovies.value.toMutableList()
         val exists = currentList.any { it.identifier == movie.identifier }
-        
+
         if (exists) {
             currentList.removeAll { it.identifier == movie.identifier }
         } else {
             currentList.add(movie)
         }
-        
+
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
         refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
@@ -489,7 +564,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTab(tab: ContentTab) {
         _selectedTab.value = tab
     }
-    
+
     fun updateSearchQuery(query: String) {
         _currentSearchQuery.value = query
         performGlobalSearch(query)
@@ -527,7 +602,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     isAdultCategory = false,
                     isAnimationCategory = true,
                     isSeriesCategory = _selectedTab.value == ContentTab.SERIES,
-                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS
+                    isConcertCategory = _selectedTab.value == ContentTab.CONCERTS,
+                    searchQueryForRanking = trimmed
                 )
                 _globalSearchResults.value = results
             } catch (e: Exception) {
@@ -539,7 +615,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isAdultContent(id: String, title: String): Boolean {
-        val combined = "${id.lowercase()}${title.lowercase()}"
+        val combined = "${id.lowercase()} ${title.lowercase()}"
         return blockedAdultKeywords.any { keyword -> combined.contains(keyword) }
     }
 
@@ -553,7 +629,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             if (_movieCategories.value.isEmpty()) {
                 _isLoading.value = true
             }
-            
+
             try {
                 val movieDeferred = movieGenreDefinitions.map { genre ->
                     async {
@@ -567,11 +643,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             genre to authorMovies
                         } else {
                             val isWeeklyTop = genre.title.startsWith("Top 10")
-                            val fetchRows = if (isWeeklyTop) 300 else 150
+                            val fetchRows = if (isWeeklyTop) 250 else 150
                             val (results, _) = fetchAndRankByRelevance(
                                 query = genre.query,
                                 apiSort = genre.defaultSort,
-                                rows = fetchRows, 
+                                rows = fetchRows,
                                 page = 1,
                                 excludeAdult = !genre.isAdultCategory,
                                 isAdultCategory = genre.isAdultCategory,
@@ -579,7 +655,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                                 isSeriesCategory = false,
                                 isConcertCategory = false
                             )
-                            genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                            genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 25)
                         }
                     }
                 }
@@ -590,7 +666,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = if (isWeeklyTop) 300 else 150,
+                            rows = if (isWeeklyTop) 250 else 150,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -598,7 +674,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isSeriesCategory = true,
                             isConcertCategory = false
                         )
-                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 25)
                     }
                 }
 
@@ -608,7 +684,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         val (results, _) = fetchAndRankByRelevance(
                             query = genre.query,
                             apiSort = genre.defaultSort,
-                            rows = if (isWeeklyTop) 300 else 150,
+                            rows = if (isWeeklyTop) 250 else 150,
                             page = 1,
                             excludeAdult = true,
                             isAdultCategory = false,
@@ -616,7 +692,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             isSeriesCategory = false,
                             isConcertCategory = true
                         )
-                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 20)
+                        genre to results.map { it.movie }.take(if (isWeeklyTop) 10 else 25)
                     }
                 }
 
@@ -629,16 +705,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _concertCategories.value = loadedConcerts
 
                 refreshHeroItems(_favoriteMovies.value, loadedMovies, loadedSeries, loadedConcerts)
-                
+
                 val newCache = AppCache(
                     movieCategories = loadedMovies.map { CachedCategory(it.first.title, it.second) },
                     seriesCategories = loadedSeries.map { CachedCategory(it.first.title, it.second) },
                     concertCategories = loadedConcerts.map { CachedCategory(it.first.title, it.second) },
                     heroMovies = _heroMovies.value.map { CachedHero(it.first, it.second) }
                 )
-                lastLoadedCache = newCache 
-                prefs.edit().putString("app_content_cache", cacheAdapter.toJson(newCache)).apply()
-                
+                lastLoadedCache = newCache
+                prefs.edit().putString(cachePrefsKey, cacheAdapter.toJson(newCache)).apply()
+
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -660,7 +736,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         val combined = (topFavs + topM + topS + topC).distinctBy { it.first.identifier }
         _heroMovies.value = combined
-        
+
         startHeroCarousel()
     }
 
@@ -669,7 +745,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _activeHeroIndex.value = 0
         carouselJob = viewModelScope.launch {
             while (isActive && _heroMovies.value.isNotEmpty()) {
-                delay(8000) 
+                delay(8000)
                 _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
             }
         }
@@ -678,13 +754,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun setActiveHeroIndex(index: Int) {
         if (index in _heroMovies.value.indices) {
             _activeHeroIndex.value = index
-            startHeroCarousel() 
+            startHeroCarousel()
         }
     }
 
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
-        
+
         val cachedContent = when {
             genre.isConcertCategory -> _concertCategories.value.find { it.first.title == genre.title }?.second
             genre.isSeriesCategory -> _seriesCategories.value.find { it.first.title == genre.title }?.second
@@ -698,7 +774,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _genreMovies.value = emptyList()
         }
-        
+
         loadGenrePage(1)
     }
 
@@ -710,7 +786,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             if (_genreMovies.value.isEmpty()) {
                 _isGenreLoading.value = true
             }
-            
+
             _currentGenrePage.value = page
             try {
                 if (genre.isAuthorCollection) {
@@ -726,7 +802,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     _totalGenrePages.value = 1
                 } else {
                     val isWeeklyTop = genre.title.startsWith("Top 10")
-                    val fetchRows = if (isWeeklyTop) 300 else 150
+                    val fetchRows = if (isWeeklyTop) 250 else 150
                     val targetLimit = if (isWeeklyTop) 10 else pageSize
 
                     val (results, totalFound) = fetchAndRankByRelevance(
@@ -771,27 +847,49 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         isSeriesCategory: Boolean,
         isConcertCategory: Boolean,
         searchQueryForRanking: String? = null
-    ): Pair<List<RatedMovie>, Int> {
-        return try {
-            val responseBody = api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
-            val docs = responseBody?.docs ?: emptyList()
-            val numFound = responseBody?.numFound ?: docs.size
+    ): Pair<List<RatedMovie>, Int> = coroutineScope {
+        try {
+            val classicDeferred = async {
+                api.searchMovies(query = query, sort = apiSort, rows = rows, page = page).response
+            }
+
+            // Drugi paralelni upit cilja novije (1970-2026) i HD/BluRay/WEBRip naslove koje stariji klasici inače potisnu
+            val modernDeferred = if (searchQueryForRanking == null && !isAdultCategory && !isConcertCategory) {
+                async {
+                    try {
+                        val modernBoostClause = "(title:(1080p OR 720p OR bluray OR \"blu-ray\" OR webrip OR dvdrip OR remastered OR x264 OR x265) OR identifier:(1080p OR 720p OR bluray OR webrip OR dvdrip OR x264 OR x265) OR year:[1970 TO 2026])"
+                        val modernQuery = "($query) AND $modernBoostClause"
+                        api.searchMovies(query = modernQuery, sort = "downloads desc", rows = rows, page = page).response
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            } else {
+                null
+            }
+
+            val classicBody = classicDeferred.await()
+            val modernBody = modernDeferred?.await()
+
+            val classicDocs = classicBody?.docs ?: emptyList()
+            val modernDocs = modernBody?.docs ?: emptyList()
+            val docs = (modernDocs + classicDocs).distinctBy { it.identifier }
+            val numFound = maxOf(classicBody?.numFound ?: 0, modernBody?.numFound ?: 0, docs.size)
 
             val scoredList = docs.mapNotNull { doc ->
                 val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val rawTitle = extractText(doc.title)
-                var finalTitle = rawTitle.ifBlank {
-                    id.replace("_", " ").replace("-", " ").replaceFirstChar { it.uppercase() }
-                }
+                val finalTitle = cleanMovieDisplayTitle(rawTitle, id)
 
                 val creatorText = extractText(doc.creator)
                 val descText = extractText(doc.description)
                 val collectionText = extractText(doc.collection)
                 val titleLower = finalTitle.lowercase()
-                val fullMetaLower = "$id $finalTitle$creatorText $descText$collectionText".lowercase()
+                val titleWithoutYear = titleLower.replace(Regex("\\(\\d{4}\\)"), "").trim()
+                val fullMetaLower = "$id $rawTitle $finalTitle $creatorText $descText $collectionText".lowercase()
 
                 if (junkNonMovieKeywords.any { kw -> fullMetaLower.contains(kw) }) return@mapNotNull null
-                
+
                 if (isBannedSpecificAdultContent(id, finalTitle, descText)) return@mapNotNull null
                 if (excludeAdult && isAdultContent(id, finalTitle)) return@mapNotNull null
                 if (isAdultCategory && titleLower.contains("adult swim")) return@mapNotNull null
@@ -802,15 +900,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 var score = 0.0
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                
+
                 if (isAdultCategory) {
-                    if (runtimeMinutes in 1..10) return@mapNotNull null 
+                    if (runtimeMinutes in 1..10) return@mapNotNull null
                 } else if (runtimeMinutes in 1..29 && !isAnimationCategory && !isSeriesCategory) {
                     return@mapNotNull null
                 }
-                
+
                 if (isConcertCategory) {
-                    if (runtimeMinutes in 1..29) return@mapNotNull null 
+                    if (runtimeMinutes in 1..29) return@mapNotNull null
                     if (titleLower.contains("season ") || titleLower.contains("episode ")) return@mapNotNull null
                 }
 
@@ -818,12 +916,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (searchQueryForRanking != null && searchQueryForRanking.isNotBlank()) {
                     if (titleLower.contains(searchQueryForRanking.lowercase())) {
-                        score += 10000.0 
+                        score += 12000.0
                     }
                 }
 
-                val legendaryMatches = legendaryTitles.count { titleLower.contains(it) }
-                score += legendaryMatches * 5000.0 
+                // 1. Snažan prioritet za poznate i kultne filmove/serije
+                val legendaryMatches = legendaryTitleRegexes.count { regex ->
+                    regex.containsMatchIn(titleWithoutYear)
+                }
+                score += legendaryMatches * 7000.0
+
+                // 2. Prioritet za novije filmove (1970-2026)
+                val releaseYear = extractReleaseYear(doc.year, doc.date, rawTitle, id)
+                when {
+                    releaseYear >= 2000 -> score += 4500.0
+                    releaseYear in 1980..1999 -> score += 4000.0
+                    releaseYear in 1970..1979 -> score += 3200.0
+                    releaseYear in 1960..1969 -> score += 2000.0
+                }
+
+                // 3. Prioritet za moderna HD / BluRay / WEBRip / Remastered izdanja
+                val hdHits = hdReleaseKeywords.count { fullMetaLower.contains(it) }
+                if (hdHits > 0) {
+                    score += 3800.0 + (hdHits.coerceAtMost(3) * 400.0)
+                }
+
+                // 4. Prioritet za filmove vrhunskih redatelja
+                val directorHits = acclaimedDirectors.count { fullMetaLower.contains(it) }
+                score += directorHits * 3500.0
 
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
@@ -838,27 +958,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val itemSizeMb = parseSizeMb(doc.itemSize)
 
                 if (ratingVal > 0.0) {
-                    score += ratingVal * 1500.0 
-                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 400.0 
+                    score += ratingVal * 1200.0
+                    if (reviewsVal > 0) score += ln(reviewsVal.toDouble() + 1.0) * 350.0
                 } else {
-                    score += 500.0
+                    score += 400.0
                 }
 
                 val premiumHits = notableCinemaKeywords.count { fullMetaLower.contains(it) }
-                score += premiumHits * 2500.0 
+                score += premiumHits * 2000.0
 
-                if (collectionText.lowercase().contains("laserdiscarchive")) score += 3000.0
-                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 3000.0
-                if (collectionText.lowercase().contains("vhsvault")) score += 2000.0
-                if (collectionText.lowercase().contains("feature_films")) score += 1500.0
-                if (collectionText.lowercase().contains("televisionmovies")) score += 1500.0
-                if (collectionText.lowercase().contains("classic_tv")) score += 1500.0
-                
-                if (runtimeMinutes >= 75) score += 1000.0
-                if (runtimeMinutes >= 100) score += 1500.0 
-                
-                if (itemSizeMb >= 800) score += 1000.0
-                if (itemSizeMb >= 2000) score += 1500.0 
+                if (collectionText.lowercase().contains("laserdiscarchive")) score += 2500.0
+                if (collectionText.lowercase().contains("colorized-and-upscaled-movies")) score += 2500.0
+                if (collectionText.lowercase().contains("vhsvault")) score += 1800.0
+                if (collectionText.lowercase().contains("feature_films")) score += 1200.0
+                if (collectionText.lowercase().contains("televisionmovies")) score += 1200.0
+                if (collectionText.lowercase().contains("classic_tv")) score += 1200.0
+
+                if (runtimeMinutes >= 75) score += 800.0
+                if (runtimeMinutes >= 100) score += 1200.0
+
+                if (itemSizeMb >= 800) score += 800.0
+                if (itemSizeMb >= 2000) score += 1400.0
 
                 val ratingStr = if (ratingVal > 0.0 && reviewsVal >= 1) String.format("%.1f", ratingVal) else ""
 
@@ -884,7 +1004,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 scoredList.sortedByDescending { it.relevanceScore }
             }
-            
+
             finalSorted to numFound
         } catch (e: Exception) {
             e.printStackTrace()
@@ -892,26 +1012,73 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun cleanMovieDisplayTitle(rawTitle: String, identifier: String): String {
+        val base = rawTitle.ifBlank {
+            identifier.replace("_", " ").replace("-", " ")
+        }
+        val looksLikeSceneFilename = base.count { it == '.' } >= 2 ||
+            hdReleaseKeywords.any { base.lowercase().contains(it) }
+
+        if (!looksLikeSceneFilename) {
+            return base.trim().replaceFirstChar { it.uppercase() }
+        }
+
+        val yearMatch = Regex("\\b(19\\d{2}|20\\d{2})\\b").find(base)
+        val extractedYear = yearMatch?.value ?: ""
+
+        var clean = base.replace(Regex("[._]+"), " ")
+        clean = clean.replace(
+            Regex("(?i)\\b(1080p|2160p|4k|720p|480p|360p|bluray|blu-ray|bdrip|brrip|webrip|web-dl|webdl|dvdrip|hdrip|x264|x265|h264|h265|hevc|aac|ac3|dts|ddp5\\s*1|ddp2\\s*0|10bit|yify|rarbg|galaxyrg|galaxy-rg|sartre|bone|remastered|unrated|extended|director's cut|directors cut|mp4|mkv)\\b"),
+            ""
+        )
+        if (extractedYear.isNotEmpty()) {
+            clean = clean.replace(Regex("\\(?\\b$extractedYear\\b\\)?"), "")
+        }
+        clean = clean.replace(Regex("\\(\\s*\\)|\\[\\s*\\]"), "")
+        clean = clean.replace(Regex("\\s+-\\s*$"), "")
+        clean = clean.replace(Regex("\\s+"), " ").trim()
+
+        if (clean.isBlank()) return base.trim()
+        return if (extractedYear.isNotEmpty() && !clean.contains(extractedYear)) {
+            "$clean ($extractedYear)"
+        } else {
+            clean
+        }
+    }
+
+    private fun extractReleaseYear(yearField: Any?, dateField: Any?, rawTitle: String, identifier: String): Int {
+        val yearText = extractText(yearField)
+        Regex("\\b(19\\d{2}|20\\d{2})\\b").find(yearText)?.value?.toIntOrNull()?.let { return it }
+
+        val dateText = extractText(dateField)
+        Regex("\\b(19\\d{2}|20\\d{2})\\b").find(dateText)?.value?.toIntOrNull()?.let { return it }
+
+        Regex("\\b(19\\d{2}|20\\d{2})\\b").find(rawTitle)?.value?.toIntOrNull()?.let { return it }
+        Regex("\\b(19\\d{2}|20\\d{2})\\b").find(identifier)?.value?.toIntOrNull()?.let { return it }
+
+        return 0
+    }
+
     private fun cleanSeriesTitleForGrouping(rawTitle: String): String {
         var clean = rawTitle
         clean = clean.replace(Regex("(?i)(\\(\\d{4}\\)|\\[\\d{4}\\]|\\b19\\d{2}\\s*8\\d{1}\\b|\\b\\d{4}\\b)"), "")
         clean = clean.replace(Regex("(?i)\\b(s\\d{1,2}\\s*e\\d{1,3}|s\\d{1,2}\\s*ep?\\d{1,3}|season\\s*\\d+|episode[s]?\\s*\\d+|ep\\s*\\d+|part\\s*\\d+|vol\\.?\\s*\\d+|chapter\\s*\\d+|disc\\s*\\d+)\\b.*"), "")
         clean = clean.replace(Regex("(?i)\\b\\d{1,2}x\\d{1,2}\\b.*"), "")
-        
-        val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation")
+
+        val knownSeries = listOf("One Step Beyond", "Doctor Who", "Buck Rogers", "Quark", "Creepy Crawlers", "Chocky", "V The Series", "Star Trek New Generation", "StarTrek New Generation", "Planet of the Apes")
         for (series in knownSeries) {
             if (clean.contains(series, ignoreCase = true) || clean.replace(" ", "").contains(series.replace(" ", ""), ignoreCase = true)) {
                 clean = series
                 break
             }
         }
-        
+
         clean = clean.replace(Regex("(?i)(complete series|full series|uncensored|collection|colorized|tv vhs copy|tv vhs)"), "")
         clean = clean.replace(Regex("\\s*-\\s*\\d{1,3}$"), "")
         clean = clean.replace(Regex("\\s*-\\s*$"), "")
         clean = clean.replace(Regex("[^a-zA-Z0-9\\s']"), " ")
         clean = clean.replace(Regex("\\s+"), " ").trim()
-        
+
         return clean.ifBlank { rawTitle }
     }
 
