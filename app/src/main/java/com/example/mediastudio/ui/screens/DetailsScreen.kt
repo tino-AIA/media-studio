@@ -49,6 +49,8 @@ fun DetailsScreen(
     movie: ArchiveMovie,
     viewModel: HomeViewModel,
     onPlayClick: (String) -> Unit,
+    // Dodali smo novu varijablu u navigaciji kako bismo mogli proslijediti točan film kliknut na listi
+    onPlayMovieFromList: ((ArchiveMovie) -> Unit)? = null, 
     onBackClick: () -> Unit
 ) {
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
@@ -78,7 +80,7 @@ fun DetailsScreen(
             val authorName = movie.identifier.substringAfter("AUTHOR|")
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             
-            // Za autore ne koristimo imageUrl jer ne prikazujemo sliku u detaljima prema tvojoj želji.
+            // Nema slike za autora u detaljima (samo na listi)
             imageUrl = ""
             
             val wikiData = fetchWikiInfo(authorName)
@@ -128,7 +130,6 @@ fun DetailsScreen(
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Prikazuje sliku samo ako NIJE autor (odnosno običan pojedinačni film)
             if (!isAuthorMode) {
                 if (imageUrl.isNotEmpty()) {
                     Image(
@@ -146,7 +147,6 @@ fun DetailsScreen(
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             } else {
-                // Dodani razmak ako preskočimo sliku da ime ne bude skroz na vrhu ekrana
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
@@ -193,7 +193,7 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Za kolekcije (Autori ili Serije s više epizoda)
+                // Za kolekcije (Autori ili Serije s više datoteka)
                 if (currentInfo != null && currentInfo.qualities.size > 1) {
                     Box(
                         modifier = Modifier
@@ -231,8 +231,6 @@ fun DetailsScreen(
                         }
                     }
 
-                    // NAPOMENA: Potpuno uklonjen gumb "POKRENI PRVI FILM" prema zahtjevu
-
                     val formattedQualities = currentInfo.qualities.map { quality ->
                         val decodedUrl = try {
                             URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
@@ -267,7 +265,6 @@ fun DetailsScreen(
                         
                     }.sortedByDescending { it.third }
 
-                    // Lista filmova - klik prosljeđuje točan i spreman URL
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
@@ -287,8 +284,19 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    // Klikom na jedan film iz liste ovdje šaljemo link, a PlayerActivity će ga otvoriti
-                                    onPlayClick(quality.url)
+                                    // POPRAVAK ZA PLAYANJE IZ LISTE: 
+                                    // Umjesto da MainActivity-u šaljemo čisti String URL (što ga zbunjuje),
+                                    // šaljemo pravi ArchiveMovie objekt, gdje je identifier = URL, a title = točno ime tog filma.
+                                    if (onPlayMovieFromList != null) {
+                                        val specificMovieToPlay = ArchiveMovie(
+                                            identifier = quality.url, 
+                                            title = finalFormattedTitle
+                                        )
+                                        onPlayMovieFromList(specificMovieToPlay)
+                                    } else {
+                                        // Fallback ako onPlayMovieFromList iz nekog razloga nije vezan
+                                        onPlayClick(quality.url)
+                                    }
                                 }
                                 .padding(16.dp)
                         ) {
@@ -313,7 +321,7 @@ fun DetailsScreen(
                         }
                     }
                 } else if (currentInfo != null) {
-                    // Za obične pojedinačne filmove (koji nemaju kolekciju) ostaje glavno crveno dugme POKRENI
+                    // Pojedinačni film (ne kolekcija) ostaje kao i prije
                     Row(
                         modifier = Modifier.fillMaxWidth(0.9f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
