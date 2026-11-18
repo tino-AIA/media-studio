@@ -69,9 +69,18 @@ class MainActivity : ComponentActivity() {
                     1 -> selectedMovie?.let { movie ->
                         DetailsScreen(
                             movie = movie,
-                            viewModel = homeViewModel, // POPRAVLJENO: Proslijeđen viewModel
-                            onPlayClick = { year ->
-                                selectedMovieYear = year
+                            viewModel = homeViewModel,
+                            onPlayClick = { id ->
+                                // Ovo se poziva za običan film
+                                selectedMovieYear = ""
+                                selectedEpisodeUrl = ""
+                                currentScreen = 2
+                            },
+                            onPlayMovieFromList = { specificMovie -> 
+                                // Ovo se poziva kad klikneš film u kolekciji autora (Specific Movie)
+                                // Premošćujemo originalnog autora i stavljamo specifičan film u Player
+                                selectedMovie = specificMovie 
+                                selectedMovieYear = ""
                                 selectedEpisodeUrl = ""
                                 currentScreen = 2
                             },
@@ -107,7 +116,7 @@ class MainActivity : ComponentActivity() {
                     4 -> selectedMovie?.let { series ->
                         SeriesScreen(
                             series = series,
-                            viewModel = homeViewModel, // POPRAVLJENO: Proslijeđen viewModel
+                            viewModel = homeViewModel,
                             onEpisodeClick = { episode ->
                                 selectedEpisodeTitle = episode.subtitleSearchQuery.ifBlank { "${series.title} - ${episode.title}" }
                                 selectedEpisodeUrl = episode.fileUrl
