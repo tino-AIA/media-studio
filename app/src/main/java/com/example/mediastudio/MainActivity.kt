@@ -30,14 +30,26 @@ class MainActivity : ComponentActivity() {
                 var currentScreen by remember { mutableIntStateOf(0) }
                 var previousScreen by remember { mutableIntStateOf(0) }
                 var selectedMovie by remember { mutableStateOf<ArchiveMovie?>(null) }
+                
+                // Varijabla za pamćenje prethodnog autora da se možemo vratiti nazad kad pogledamo film
+                var previousAuthor by remember { mutableStateOf<ArchiveMovie?>(null) }
+                
                 var selectedMovieYear by remember { mutableStateOf("") }
                 var selectedEpisodeTitle by remember { mutableStateOf("") }
                 var selectedEpisodeUrl by remember { mutableStateOf("") }
 
-                // LOGIKA 2. KORAKA: Kad si u Detaljima (1) ili Sezonama (4), Back te vraća u točan katalog (previousScreen)
+                // BACK logiku prilagođavamo
                 BackHandler(enabled = currentScreen != 0 && currentScreen != 2) {
                     when (currentScreen) {
-                        1 -> currentScreen = previousScreen
+                        1 -> {
+                            // Ako smo u "Direct" filmu i vraćamo se, vrati se autoru ako postoji
+                            if (previousAuthor != null && selectedMovie?.identifier != previousAuthor?.identifier) {
+                                selectedMovie = previousAuthor
+                            } else {
+                                currentScreen = previousScreen
+                                previousAuthor = null
+                            }
+                        }
                         3 -> currentScreen = 0
                         4 -> currentScreen = previousScreen
                         5 -> currentScreen = 0
@@ -49,6 +61,7 @@ class MainActivity : ComponentActivity() {
                         viewModel = homeViewModel,
                         onMovieClick = { movie -> 
                             selectedMovie = movie
+                            previousAuthor = null
                             selectedEpisodeUrl = ""
                             previousScreen = 0
                             currentScreen = 1
@@ -70,21 +83,28 @@ class MainActivity : ComponentActivity() {
                         DetailsScreen(
                             movie = movie,
                             viewModel = homeViewModel,
-                            onPlayClick = { id ->
-                                // Ovo se poziva za običan film
+                            onPlayClick = { playId ->
+                                // Kada smo na odvojenom Details screenu za Mission Impossible i kliknemo POKRENI
                                 selectedMovieYear = ""
                                 selectedEpisodeUrl = ""
-                                currentScreen = 2
+                                openPlayer(this@MainActivity, movie, playId)
                             },
-                            onPlayMovieFromList = { specificMovie -> 
-                                // Ovo se poziva kad klikneš film u kolekciji autora (Specific Movie)
-                                // Premošćujemo originalnog autora i stavljamo specifičan film u Player
+                            onMovieSelectFromList = { specificMovie -> 
+                                // OVO JE TVOJ ZAHTJEV: 
+                                // Kad u Kolekciji (npr. Brian De Palma) klikneš na film (Mission Impossible), 
+                                // to te NE vodi u player, nego otvara DetailsScreen SAMO za taj film.
+                                previousAuthor = selectedMovie // Zapamti autora da te "BACK" može vratiti njemu
                                 selectedMovie = specificMovie 
-                                selectedMovieYear = ""
-                                selectedEpisodeUrl = ""
-                                currentScreen = 2
+                                currentScreen = 1 // Osvježavamo DetailsScreen
                             },
-                            onBackClick = { currentScreen = previousScreen }
+                            onBackClick = { 
+                                if (previousAuthor != null && selectedMovie?.identifier != previousAuthor?.identifier) {
+                                    selectedMovie = previousAuthor
+                                } else {
+                                    currentScreen = previousScreen
+                                    previousAuthor = null
+                                }
+                            }
                         )
                     }
                     2 -> selectedMovie?.let { movie ->
@@ -94,7 +114,7 @@ class MainActivity : ComponentActivity() {
                             movieYear = selectedMovieYear,
                             directVideoUrl = selectedEpisodeUrl,
                             onNavigateBack = {
-                                // LOGIKA 1. KORAKA: Izlaskom iz playera vraćaš se u Detalje (1) ili Sezone (4)
+                                // Izlaskom iz playera vraćaš se u Detalje (1) ili Sezone (4)
                                 currentScreen = if (selectedEpisodeUrl.isNotEmpty()) 4 else 1
                             }
                         )
@@ -120,7 +140,7 @@ class MainActivity : ComponentActivity() {
                             onEpisodeClick = { episode ->
                                 selectedEpisodeTitle = episode.subtitleSearchQuery.ifBlank { "${series.title} - ${episode.title}" }
                                 selectedEpisodeUrl = episode.fileUrl
-                                currentScreen = 2
+                                openPlayer(this@MainActivity, series, episode.fileUrl)
                             },
                             onBackClick = { currentScreen = previousScreen }
                         )
