@@ -238,28 +238,38 @@ object ArchiveMetadataModule {
     }
 
     suspend fun fetchSeriesFullInfo(identifiersStr: String, seriesTitleHint: String = ""): SeriesFullInfo = withContext(Dispatchers.IO) {
-        // 1. Provjeri Supabase bazu za gotove epizode serije
+        // 1. Provjeri Supabase bazu za gotove sezone i epizode serije
         SupabaseRepository.getCatalogItem(identifiersStr)?.let { sbSeries ->
             if (sbSeries.episodes.isNotEmpty()) {
-                val mappedEpisodes = sbSeries.episodes.mapIndexed { idx, ep ->
-                    SeriesEpisode(
-                        seasonNumber = 1,
-                        episodeNumber = idx + 1,
-                        title = ep.title,
-                        subtitleSearchQuery = "${sbSeries.title} ${ep.title}".trim(),
-                        fileUrl = ep.url,
-                        itemIdentifier = sbSeries.archiveId
+                val distinctSeasons = sbSeries.episodes.map { it.season }.distinct().sorted()
+                val seasonsList = distinctSeasons.map { seasonNum ->
+                    val epsInSeason = sbSeries.episodes
+                        .filter { it.season == seasonNum }
+                        .sortedBy { if (it.episode > 0) it.episode else Int.MAX_VALUE }
+                        .mapIndexed { idx, ep ->
+                            val epNum = if (ep.episode > 0) ep.episode else idx + 1
+                            SeriesEpisode(
+                                seasonNumber = seasonNum,
+                                episodeNumber = epNum,
+                                title = ep.title,
+                                subtitleSearchQuery = "${sbSeries.title} S${String.format("%02d", seasonNum)}E${String.format("%02d", epNum)}",
+                                fileUrl = ep.url,
+                                itemIdentifier = sbSeries.archiveId,
+                                durationText = ep.duration
+                            )
+                        }
+                    val label = if (distinctSeasons.size == 1 && seasonNum == 1) "Epizode" else "Sezona $seasonNum"
+                    SeriesSeason(
+                        seasonNumber = seasonNum,
+                        seasonTitle = label,
+                        episodes = epsInSeason
                     )
                 }
-                val season = SeriesSeason(
-                    seasonNumber = 1,
-                    seasonTitle = "Epizode",
-                    episodes = mappedEpisodes
-                )
+                val flatEpisodes = seasonsList.flatMap { it.episodes }
                 return@withContext SeriesFullInfo(
                     description = sbSeries.descriptionHr.ifBlank { "Opis nije dostupan." },
-                    seasons = listOf(season),
-                    episodes = mappedEpisodes
+                    seasons = seasonsList,
+                    episodes = flatEpisodes
                 )
             }
         }
