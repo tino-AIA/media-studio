@@ -96,16 +96,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .build()
         .create(ArchiveSearchApi::class.java)
 
-    private val blockedAdultKeywords = listOf(
-        "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
-        "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
-        "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france",
-        "nsfw", "nude", "naked", "masturbating", "vintage porn", "erotik film",
-        "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
+    private val adultEroticKeywords = listOf(
+        "18+", "erotski", "erotic", "erotica", "erotsk", "erotik", "xxx", "porn", "porno",
+        "pornography", "pornograf", "adult film", "adult movie", "adultvhs",
+        "softcore", "hardcore", "playboy", "penthouse", "orgy", "orgij", "fetish", "fetiš",
+        "nc-17", "alpha france", "nsfw", "nude", "naked", "golotinj", "striptiz",
+        "masturbating", "vintage porn", "baise moi", "baise-moi", "fick mich",
+        "schulmädchen", "sexfilm", "nimfoman", "nymphomaniac", "senzualn", "sensual",
+        "bordel", "brothel", "voyeur", "tinto brass", "jess franco", "zalman king",
+        "just jaeckin", "radley metzger", "walerian borowczyk",
+        "emmanuelle", "caligula", "kaligula", "sanjari", "the dreamers", "lolita",
+        "last tango in paris", "posljednji tango u parizu", "9½ weeks", "9 1/2 weeks",
+        "nine 1/2 weeks", "devet i pol tjedana", "showgirls", "basic instinct",
+        "sirove strasti", "eyes wide shut", "širom zatvorenih očiju",
+        "blue is the warmest", "plava je najtoplija boja", "fifty shades",
+        "pedeset nijansi", "365 days", "365 dana", "secretary 2002", "bitter moon",
+        "gorki mjesec", "malèna", "malena", "salò", "belle de jour", "ljepotica dana",
+        "henry & june", "henry i june", "unfaithful", "nevjerna", "body of evidence",
+        "sliver", "wild things", "the handmaiden", "sluškinja", "realm of the senses",
+        "empire des sens", "carstvo čula", "romance x", "anatomy of hell",
+        "anatomija pakla", "lie with me", "jeune & jolie", "young & beautiful",
+        "mlada i lijepa", "below her mouth", "room in rome", "soba u rimu",
+        "habitación en roma", "shortbus", "the brown bunny", "shame 2011",
+        "q desire", "love 2015", "histoire d'o", "story of o", "lady chatterley",
+        "ai no corrida", "good girl bad girl"
     )
 
     private val blockedSpecificAdultKeywords = listOf(
-        "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay", "boy love", "bl", "gay porn", "homosexual"
+        "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay porn", "boy love"
     )
 
     private val blockedSearchNoiseKeywords = listOf(
@@ -416,10 +434,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun isBlockedHentaiOrAdult(item: SupabaseCatalogItem): Boolean {
+    private fun isBlockedSpecificAdult(item: SupabaseCatalogItem): Boolean {
         val blob = "${item.title} ${item.descriptionHr} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
-        return blockedSpecificAdultKeywords.any { blob.contains(it) } ||
-            blockedAdultKeywords.any { blob.contains(it) }
+        return blockedSpecificAdultKeywords.any { blob.contains(it) }
+    }
+
+    private fun isAdultOrEroticItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { g ->
+                val gl = g.lowercase()
+                gl.contains("18+") || gl.contains("erotsk") || gl.contains("erotic")
+            }
+        ) {
+            return true
+        }
+        val titleAndId = "${item.title} ${item.archiveId}".lowercase()
+        val fullBlob = "$titleAndId ${item.descriptionHr}".lowercase()
+        return adultEroticKeywords.any { kw ->
+            if (kw.length <= 5) {
+                Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(titleAndId)
+            } else {
+                fullBlob.contains(kw)
+            }
+        }
     }
 
     private fun isAnimatedItem(item: SupabaseCatalogItem): Boolean {
@@ -461,7 +497,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun rebuildCategoriesFromSupabase() {
         val allItems = SupabaseRepository.getCatalogItems()
-            .filter { !isBlockedHentaiOrAdult(it) }
+            .filter { !isBlockedSpecificAdult(it) }
         val sbAuthors = SupabaseRepository.getAuthors()
 
         val mergedAuthorPhotos = fallbackAuthorImages.toMutableMap()
@@ -472,9 +508,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         staticAuthorImages = mergedAuthorPhotos
 
-        val liveActionMovies = allItems.filter { it.mediaType == "movie" && !isAnimatedItem(it) }
+        // 18+ / erotski filmovi iz baze idu isključivo u 18+ kategoriju
+        val supabaseAdultMovies = allItems.filter { it.mediaType == "movie" && isAdultOrEroticItem(it) }
+        // Čisti igrani filmovi (bez animiranih filmova, crtića i bez 18+ filmova)
+        val liveActionMovies = allItems.filter { it.mediaType == "movie" && !isAnimatedItem(it) && !isAdultOrEroticItem(it) }
+        // Animirani filmovi i kratki crtići
         val animatedMoviesAndShorts = allItems.filter { it.mediaType == "movie" && isAnimatedItem(it) }
-        val liveActionSeries = allItems.filter { it.mediaType == "series" && !isAnimatedItem(it) }
+        // Čiste igrane serije (bez animiranih serija i 18+)
+        val liveActionSeries = allItems.filter { it.mediaType == "series" && !isAnimatedItem(it) && !isAdultOrEroticItem(it) }
+        // Animirane serije
         val animatedSeries = allItems.filter { it.mediaType == "series" && isAnimatedItem(it) }
         val concerts = allItems.filter { it.mediaType == "concert" }
 
@@ -488,8 +530,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             when {
                 genre.isAuthorCollection -> genre to authorList
                 genre.isAdultCategory -> {
-                    if (isAdultCategoryUnlocked && unlockedAdultMovies.isNotEmpty()) {
-                        genre to unlockedAdultMovies
+                    if (isAdultCategoryUnlocked) {
+                        val combinedAdult = (supabaseAdultMovies.map { it.toArchiveMovie() } + unlockedAdultMovies)
+                            .distinctBy { it.identifier }
+                        if (combinedAdult.isNotEmpty()) genre to combinedAdult else null
                     } else {
                         null
                     }
@@ -588,7 +632,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
     ) {
         val featuredFromDb = SupabaseRepository.getCatalogItems()
-            .filter { it.isFeatured && it.posterUrl.isNotBlank() && !isBlockedHentaiOrAdult(it) && !isAnimatedItem(it) }
+            .filter {
+                it.isFeatured &&
+                    it.posterUrl.isNotBlank() &&
+                    !isBlockedSpecificAdult(it) &&
+                    !isAdultOrEroticItem(it) &&
+                    !isAnimatedItem(it)
+            }
             .take(5)
             .map { it.toArchiveMovie() to (it.mediaType == "series") }
 
@@ -687,12 +737,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val sbMatches = SupabaseRepository.getCatalogItems()
                     .filter { item ->
-                        !isBlockedHentaiOrAdult(item) && (
+                        !isBlockedSpecificAdult(item) &&
+                            (isAdultCategoryUnlocked || !isAdultOrEroticItem(item)) && (
                             item.title.lowercase().contains(qLower) ||
                                 item.descriptionHr.lowercase().contains(qLower) ||
                                 item.archiveId.lowercase().contains(qLower) ||
                                 (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
-                        )
+                            )
                     }
                     .map { item ->
                         val rel = computeSearchRelevance(
@@ -722,7 +773,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         query = archiveQuery,
                         rows = 80,
                         page = 1,
-                        excludeAdult = true,
+                        excludeAdult = !isAdultCategoryUnlocked,
                         searchQueryHint = trimmed,
                         enforceFullLength = true
                     )
@@ -775,7 +826,43 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val sbMatches = if (genre.isAdultCategory) emptyList() else findSupabaseItemsForGenre(genre)
+                if (genre.isAdultCategory) {
+                    val sbAdultRated = SupabaseRepository.getCatalogItems()
+                        .filter { it.mediaType == "movie" && !isBlockedSpecificAdult(it) && isAdultOrEroticItem(it) }
+                        .sortedByDescending { it.popularityScore }
+                        .map { item ->
+                            RatedMovie(
+                                movie = item.toArchiveMovie(),
+                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                relevanceScore = item.popularityScore + 2000.0
+                            )
+                        }
+
+                    val archiveAdult = fetchFromArchiveFallback(
+                        query = genre.query,
+                        rows = 150,
+                        page = page,
+                        excludeAdult = false,
+                        isAdultCategory = true
+                    )
+
+                    val combinedAdult = (if (page == 1) sbAdultRated + archiveAdult else archiveAdult)
+                        .distinctBy { it.movie.identifier }
+                        .distinctBy { it.movie.title.lowercase().replace(Regex("\\(\\d{4}\\)"), "").trim() }
+
+                    _genreMovies.value = combinedAdult.take(pageSize)
+                    _totalGenreMoviesCount.value = combinedAdult.size
+                    _totalGenrePages.value = if (archiveAdult.size >= pageSize) page + 1 else page
+
+                    if (combinedAdult.isNotEmpty()) {
+                        unlockedAdultMovies = combinedAdult.map { it.movie }.take(25)
+                        val currentWithoutAdult = _movieCategories.value.filterNot { it.first.isAdultCategory }
+                        _movieCategories.value = currentWithoutAdult + (genre to unlockedAdultMovies)
+                    }
+                    return@launch
+                }
+
+                val sbMatches = findSupabaseItemsForGenre(genre)
                 if (sbMatches.isNotEmpty()) {
                     val isTop10 = genre.title.startsWith("Top 10")
                     val allRated = sbMatches.map { item ->
@@ -805,18 +892,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         query = genre.query,
                         rows = 150,
                         page = page,
-                        excludeAdult = !genre.isAdultCategory,
-                        isAdultCategory = genre.isAdultCategory
+                        excludeAdult = true,
+                        isAdultCategory = false
                     )
                     _genreMovies.value = results.take(pageSize)
                     _totalGenreMoviesCount.value = results.size
                     _totalGenrePages.value = if (results.size >= pageSize) page + 1 else page
-
-                    if (genre.isAdultCategory && results.isNotEmpty()) {
-                        unlockedAdultMovies = results.map { it.movie }.take(25)
-                        val currentWithoutAdult = _movieCategories.value.filterNot { it.first.isAdultCategory }
-                        _movieCategories.value = currentWithoutAdult + (genre to unlockedAdultMovies)
-                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -827,7 +908,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun findSupabaseItemsForGenre(genre: GenreOption): List<SupabaseCatalogItem> {
-        val all = SupabaseRepository.getCatalogItems().filter { !isBlockedHentaiOrAdult(it) }
+        val all = SupabaseRepository.getCatalogItems().filter { !isBlockedSpecificAdult(it) }
 
         if (genre.isAnimationCategory) {
             val animMovies = all.filter { it.mediaType == "movie" && isAnimatedItem(it) }
@@ -851,7 +932,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             else -> "movie"
         }
         val typedItems = all.filter {
-            it.mediaType == targetType && (targetType == "concert" || !isAnimatedItem(it))
+            it.mediaType == targetType &&
+                (targetType == "concert" || (!isAnimatedItem(it) && !isAdultOrEroticItem(it)))
         }
 
         return when {
@@ -897,7 +979,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()} ${subjectStr.lowercase()} ${collectionStr.lowercase()}"
 
                 if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
-                if (excludeAdult && blockedAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
+                if (excludeAdult && adultEroticKeywords.any { kw ->
+                        if (kw.length <= 5) Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(combined)
+                        else combined.contains(kw)
+                    }
+                ) return@mapNotNull null
                 if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
                 if (!isAdultCategory && blockedSearchNoiseKeywords.any { combined.contains(it) }) return@mapNotNull null
 
