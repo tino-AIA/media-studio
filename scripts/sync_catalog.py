@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,8 @@ session = requests.Session()
 session.headers.update({
     "User-Agent": "MediaStudioCatalogSync/1.6 (AndroidTV App; contact@mediastudio.local)"
 })
+
+state_lock = threading.Lock()
 
 SB_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -73,7 +76,6 @@ TMDB_MOVIE_GENRE_MAP = {
     36: "Drama"
 }
 
-# Specifični žanrovi imaju prednost nad širokim krovovima (Drama, Akcija i avantura)
 SPECIFIC_GENRES = {
     "Vestern", "Horor", "Ratni", "Sci-Fi klasici",
     "Krimi", "Triler i misterija", "Komedija", "Romantični"
@@ -279,12 +281,9 @@ def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overvie
     if not mapped_ordered:
         return [hint_genre] if hint_genre else ["Drama"]
 
-    # Ako postoji specifičan žanr (npr. Vestern, Horor, Ratni, Sci-Fi, Krimi, Komedija, Triler, Romantični),
-    # ukloni generičnu "Drama" oznaku koju TMDB stavlja na gotovo svaki film
     specific_present = [g for g in mapped_ordered if g in SPECIFIC_GENRES]
     if specific_present:
         filtered = [g for g in mapped_ordered if g != "Drama"]
-        # Ukloni i generičnu "Akcija i avantura" ako postoji snažniji žanr (Vestern, Ratni, Sci-Fi, Horor, Krimi, Komedija)
         stronger = [g for g in filtered if g in {"Vestern", "Ratni", "Sci-Fi klasici", "Horor", "Krimi", "Komedija"}]
         if stronger:
             filtered = [g for g in filtered if g != "Akcija i avantura"]
@@ -691,7 +690,6 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
     print("2/7 Ciljana TMDB pretraga po svakom pojedinačnom žanru...", flush=True)
     candidates = {}
 
-    # 1. Opći popularni i top rated filmovi
     for endpoint in ["movie/popular", "movie/top_rated"]:
         for page in range(1, 10):
             data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
@@ -700,7 +698,6 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                 if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     candidates[mid] = (m, None)
 
-    # 2. Ciljani discover po svakom žanru (Vestern, Horor, Ratni, Sci-Fi, Krimi, Triler, Komedija, Romantični, Akcija, Drama)
     for tmdb_genre_id, hr_genre_label in TMDB_DISCOVER_GENRE_SEEDS:
         for sort_by in ["popularity.desc", "vote_count.desc"]:
             for page in range(1, 6):
@@ -722,7 +719,6 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                         candidates[mid] = (m, hr_genre_label)
 
-    # 3. Animirani filmovi (genre 16)
     for page in range(1, 7):
         data = safe_get(
             f"{TMDB_BASE}/discover/movie",
@@ -755,6 +751,11 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
         if not arch_id:
             return None
 
+        with state_lock:
+            if mid in seen_tmdb_movies:
+                return None
+            seen_tmdb_movies.add(mid)
+
         genre_ids = details["genre_ids"] or m.get("genre_ids", [])
         genres = determine_primary_genres(
             genre_ids, details["companies"], details["orig_title"], details["hr_title"], details["overview_hr"], hint_genre
@@ -778,11 +779,10 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
             "archive_runtime": arch_mins
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        seen_tmdb_movies.add(mid)
         return f"  + TMDB->Archive: {row['title']} ({year}) -> {genres[0]}"
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(process_movie, item) for item in candidates.items()]
+        futures = [pool.submit(process_movie, item) for item in candidates.values()]
         for fut in as_completed(futures):
             msg = fut.result()
             if msg:
@@ -832,7 +832,6 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
         if not clean_t or len(clean_t) < 2:
             return None
 
-        # Pretraži TMDB za očišćeni naslov
         params = {"api_key": TMDB_API_KEY, "query": clean_t, "language": "hr-HR", "include_adult": "false"}
         if parsed_y > 0:
             params["year"] = parsed_y
@@ -847,8 +846,9 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
 
         hit = results[0]
         mid = hit["id"]
-        if mid in seen_tmdb_movies:
-            return None
+        with state_lock:
+            if mid in seen_tmdb_movies:
+                return None
 
         details = get_tmdb_movie_details(mid)
         if not details or not details["poster_path"]:
@@ -874,8 +874,11 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
         if not ok:
             return None
 
-        if mid in seen_tmdb_movies:
-            return None
+        with state_lock:
+            if mid in seen_tmdb_movies:
+                return None
+            seen_tmdb_movies.add(mid)
+            existing_archive_ids.add(ident)
 
         genres = determine_primary_genres(
             details["genre_ids"], details["companies"], details["orig_title"], details["hr_title"], details["overview_hr"]
@@ -902,8 +905,6 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
             "archive_runtime": arch_mins
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        seen_tmdb_movies.add(mid)
-        existing_archive_ids.add(ident)
         return f"  + Archive->TMDB: {row['title']} ({rel_year}) -> {genres[0]}"
 
     with ThreadPoolExecutor(max_workers=6) as pool:
