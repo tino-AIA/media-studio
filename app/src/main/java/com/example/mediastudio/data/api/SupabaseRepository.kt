@@ -106,7 +106,7 @@ object SupabaseRepository {
     suspend fun syncFromSupabase(): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
 
-        val catalogArr = fetchJsonArray("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc&limit=1500")
+        val catalogArr = fetchJsonArray("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc&limit=3000")
         if (catalogArr != null && catalogArr.length() > 0) {
             prefs?.edit()?.putString("catalog_json", catalogArr.toString())?.apply()
             updateCatalogMemory(parseCatalogArray(catalogArr))
