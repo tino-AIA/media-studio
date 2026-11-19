@@ -28,7 +28,10 @@ data class SupabaseCatalogItem(
     val backdropUrl: String,
     val streamUrl: String,
     val episodes: List<SupabaseEpisodeItem>,
-    val isFeatured: Boolean
+    val isFeatured: Boolean,
+    val isValid: Boolean = true,
+    val tmdbRuntime: Int = 0,
+    val archiveRuntime: Int = 0
 )
 
 data class SupabaseAuthor(
@@ -100,7 +103,7 @@ object SupabaseRepository {
     suspend fun syncFromSupabase(): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
 
-        val catalogArr = fetchJsonArray("catalog_items?select=*&order=popularity_score.desc&limit=1500")
+        val catalogArr = fetchJsonArray("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc&limit=1500")
         if (catalogArr != null && catalogArr.length() > 0) {
             prefs?.edit()?.putString("catalog_json", catalogArr.toString())?.apply()
             updateCatalogMemory(parseCatalogArray(catalogArr))
@@ -125,8 +128,13 @@ object SupabaseRepository {
     }
 
     private fun updateCatalogMemory(items: List<SupabaseCatalogItem>) {
-        catalogItems = items
-        for (item in items) {
+        val validItems = items.filter { it.isValid }
+        catalogItems = validItems
+        itemByArchiveId.clear()
+        itemByStreamUrl.clear()
+        posterByArchiveId.clear()
+
+        for (item in validItems) {
             itemByArchiveId[item.archiveId] = item
             if (item.streamUrl.isNotBlank()) {
                 itemByStreamUrl[item.streamUrl] = item
@@ -215,6 +223,9 @@ object SupabaseRepository {
         val list = ArrayList<SupabaseCatalogItem>(arr.length())
         for (i in 0 until arr.length()) {
             val obj = arr.optJSONObject(i) ?: continue
+            val isValid = obj.optBoolean("is_valid", true)
+            if (!isValid) continue
+
             val genresArr = obj.optJSONArray("genres")
             val genres = mutableListOf<String>()
             if (genresArr != null) {
@@ -256,7 +267,10 @@ object SupabaseRepository {
                     backdropUrl = obj.optString("backdrop_url", ""),
                     streamUrl = obj.optString("stream_url", ""),
                     episodes = episodes,
-                    isFeatured = obj.optBoolean("is_featured", false)
+                    isFeatured = obj.optBoolean("is_featured", false),
+                    isValid = isValid,
+                    tmdbRuntime = obj.optInt("tmdb_runtime", 0),
+                    archiveRuntime = obj.optInt("archive_runtime", 0)
                 )
             )
         }
