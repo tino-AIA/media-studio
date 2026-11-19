@@ -9,8 +9,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 data class SupabaseEpisodeItem(
+    val season: Int = 1,
+    val episode: Int = 0,
     val title: String,
-    val url: String
+    val url: String,
+    val duration: String = ""
 )
 
 data class SupabaseCatalogItem(
@@ -243,8 +246,11 @@ object SupabaseRepository {
                     if (epUrl.isNotBlank()) {
                         episodes.add(
                             SupabaseEpisodeItem(
+                                season = epObj.optInt("season", 1).coerceAtLeast(1),
+                                episode = epObj.optInt("episode", e + 1),
                                 title = epObj.optString("title", "Epizoda ${e + 1}"),
-                                url = epUrl
+                                url = epUrl,
+                                duration = epObj.optString("duration", "")
                             )
                         )
                     }
