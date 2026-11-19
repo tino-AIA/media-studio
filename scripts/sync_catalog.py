@@ -18,7 +18,7 @@ TMDB_IMG_BACKDROP = "https://image.tmdb.org/t/p/w1280"
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "MediaStudioCatalogSync/2.1 (AndroidTV App; contact@mediastudio.local)"
+    "User-Agent": "MediaStudioCatalogSync/2.3 (AndroidTV App; contact@mediastudio.local)"
 })
 
 state_lock = threading.Lock()
@@ -72,7 +72,8 @@ RELEASE_TAG_PATTERN = re.compile(
     r"colorized|extended|unrated|theatrical|directors\s*cut|director's\s*cut|uncut|"
     r"full\s*movie|movie|film|subtitles|subbed|dubbed|eng|english|multi|dual\s*audio|"
     r"yify|yts|rarbg|galaxyrg|galaxy-rg|etrg|sparks|fgt|evo|bone|sartre|anoxmous|juggs|"
-    r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series"
+    r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series|"
+    r"the\s*original\s*series|original\s*series|tos"
     r")\b"
 )
 
@@ -129,6 +130,9 @@ ARCHIVE_TV_COLLECTIONS = [
     "classic_tv_1990s",
     "classic_tv_1980s",
     "classic_tv_1970s",
+    "classic_tv_1960s",
+    "television_inbox",
+    "televisionmovies",
     "animationandcartoons"
 ]
 
@@ -141,59 +145,117 @@ TMDB_TV_GENRE_MAP = {
     10765: "Sci-Fi i fantastika serije",
     878: "Sci-Fi i fantastika serije",
     14: "Sci-Fi i fantastika serije",
-    35: "Komedije i sitcomi",
     10759: "Avanturističke serije",
     12: "Avanturističke serije",
     28: "Avanturističke serije",
-    10768: "Avanturističke serije"
+    10768: "Avanturističke serije",
+    35: "Komedije i sitcomi",
+    18: "Dramske i obiteljske serije",
+    10751: "Dramske i obiteljske serije",
+    37: "Dramske i obiteljske serije",
+    10766: "Dramske i obiteljske serije",
+    99: "Dramske i obiteljske serije"
 }
 
-TMDB_TV_DISCOVER_GENRE_IDS = ["80", "9648", "10765", "35", "10759", "16", "10762"]
+TMDB_TV_DISCOVER_GENRE_IDS = ["80", "9648", "10765", "10759", "35", "18", "10751", "37", "16", "10762"]
 
 CLASSIC_SHORT_CARTOON_QUERIES = [
-    "Tom and Jerry",
-    "Looney Tunes",
-    "Merrie Melodies",
-    "Bugs Bunny",
-    "Popeye the Sailor",
-    "Woody Woodpecker",
-    "Pink Panther cartoon",
-    "Mickey Mouse cartoon",
-    "Donald Duck cartoon",
-    "Silly Symphonies",
-    "Droopy cartoon",
-    "Betty Boop",
-    "Felix the Cat",
-    "Casper the Friendly Ghost",
-    "Superman cartoon",
-    "Mighty Mouse",
-    "Road Runner",
-    "Daffy Duck",
-    "Porky Pig",
-    "Tweety",
-    "Goofy cartoon",
-    "Pluto cartoon",
-    "Yogi Bear",
-    "Huckleberry Hound",
-    "Top Cat",
-    "The Flintstones",
-    "The Jetsons",
-    "Scooby-Doo"
+    "Tom and Jerry", "Looney Tunes", "Merrie Melodies", "Bugs Bunny",
+    "Popeye the Sailor", "Woody Woodpecker", "Pink Panther cartoon",
+    "Mickey Mouse cartoon", "Donald Duck cartoon", "Silly Symphonies",
+    "Droopy cartoon", "Betty Boop", "Felix the Cat", "Casper the Friendly Ghost",
+    "Superman cartoon", "Mighty Mouse", "Road Runner", "Daffy Duck",
+    "Porky Pig", "Tweety", "Goofy cartoon", "Pluto cartoon", "Yogi Bear",
+    "Huckleberry Hound", "Top Cat", "The Flintstones", "The Jetsons", "Scooby-Doo"
 ]
 
 CLASSIC_TV_SEED_TITLES = [
-    "The Twilight Zone", "Alfred Hitchcock Presents", "Columbo", "The X-Files",
-    "Star Trek", "Star Trek: The Next Generation", "Star Trek: Deep Space Nine", "Star Trek: Voyager",
-    "Doctor Who", "Twin Peaks", "Mr. Bean", "Only Fools and Horses", "Fawlty Towers", "Sherlock",
-    "The Adventures of Sherlock Holmes", "Agatha Christie's Poirot", "Band of Brothers",
-    "Freaks and Geeks", "The Sopranos", "Seinfeld", "3rd Rock from the Sun",
-    "Everybody Loves Raymond", "ALF", "Battlestar Galactica", "Buck Rogers in the 25th Century",
-    "The Outer Limits", "Tales from the Crypt", "Blackadder", "Monty Python's Flying Circus",
-    "Batman", "The Addams Family", "The Munsters", "I Love Lucy", "The Beverly Hillbillies",
-    "Bonanza", "The Lone Ranger", "Dragnet", "The Saint", "The Prisoner", "Space: 1999",
-    "Red Dwarf", "Babylon 5", "Farscape", "Stargate SG-1", "Buffy the Vampire Slayer", "Firefly",
-    "Lost in Space", "The Time Tunnel", "Voyage to the Bottom of the Sea", "Flash Gordon",
-    "Thunderbirds", "Captain Scarlet and the Mysterons",
+    # Krimi, detektivske i triler serije
+    "Columbo", "Murder, She Wrote", "Agatha Christie's Poirot", "Agatha Christie's Marple",
+    "Sherlock", "The Adventures of Sherlock Holmes", "Inspector Morse", "Midsomer Murders",
+    "Taggart", "Cracker", "Prime Suspect", "A Touch of Frost", "Jonathan Creek",
+    "Father Brown", "Grantchester", "Vera", "Shetland", "Luther", "Line of Duty",
+    "Broadchurch", "The Fall", "Twin Peaks", "The X-Files", "Millennium",
+    "Criminal Minds", "CSI: Crime Scene Investigation", "NCIS", "Bones", "Castle",
+    "The Mentalist", "Monk", "Psych", "White Collar", "Burn Notice", "Person of Interest",
+    "24", "Prison Break", "Dexter", "Hannibal", "True Detective", "Fargo", "Mindhunter",
+    "The Wire", "The Shield", "Justified", "Bosch", "Miami Vice", "Magnum, P.I.",
+    "Kojak", "The Streets of San Francisco", "Hawaii Five-O", "Ironside", "Quincy, M.E.",
+    "Matlock", "Perry Mason", "Diagnosis: Murder", "Hart to Hart", "Remington Steele",
+    "Moonlighting", "Simon & Simon", "Hunter", "Cagney & Lacey", "Hill Street Blues",
+    "NYPD Blue", "Law & Order", "The Rockford Files", "Mannix", "Cannon",
+    "Barnaby Jones", "77 Sunset Strip", "Peter Gunn", "The Untouchables", "Dragnet",
+    "Alfred Hitchcock Presents", "The Alfred Hitchcock Hour", "Tales of the Unexpected",
+    # Sci-Fi i fantastika serije
+    "The Twilight Zone", "The Outer Limits", "Star Trek", "Star Trek: The Next Generation",
+    "Star Trek: Deep Space Nine", "Star Trek: Voyager", "Star Trek: Enterprise",
+    "Doctor Who", "Torchwood", "Battlestar Galactica", "Buck Rogers in the 25th Century",
+    "Babylon 5", "Farscape", "Stargate SG-1", "Stargate Atlantis", "Stargate Universe",
+    "Firefly", "The Expanse", "Westworld", "Black Mirror", "Stranger Things", "Lost",
+    "Fringe", "Heroes", "Supernatural", "Buffy the Vampire Slayer", "Angel", "Charmed",
+    "Smallville", "The Flash", "Arrow", "Gotham", "Lucifer", "The Vampire Diaries",
+    "True Blood", "Grimm", "Once Upon a Time", "Merlin", "Roswell", "Dark Angel",
+    "Dollhouse", "Altered Carbon", "12 Monkeys", "Continuum", "Orphan Black", "Travelers",
+    "Warehouse 13", "Eureka", "Sanctuary", "Andromeda", "Lexx", "Red Dwarf",
+    "Blake's 7", "Space: 1999", "UFO", "The Prisoner", "Land of the Giants",
+    "Lost in Space", "The Time Tunnel", "Voyage to the Bottom of the Sea", "V",
+    "Alien Nation", "Quantum Leap", "Sliders", "The Invaders",
+    "The Six Million Dollar Man", "The Bionic Woman", "The Incredible Hulk", "Wonder Woman",
+    "Tales from the Crypt", "Are You Afraid of the Dark?", "Goosebumps", "Eerie, Indiana",
+    # Avanturističke i akcijske serije
+    "The A-Team", "Knight Rider", "MacGyver", "Airwolf", "Street Hawk", "Starsky & Hutch",
+    "The Dukes of Hazzard", "The Fall Guy", "T.J. Hooker", "CHiPs", "Charlie's Angels",
+    "Mission: Impossible", "The Man from U.N.C.L.E.", "The Avengers", "The Saint",
+    "The Persuaders!", "Robin of Sherwood", "The Adventures of Robin Hood", "Ivanhoe",
+    "Zorro", "Tarzan", "Hercules: The Legendary Journeys", "Xena: Warrior Princess",
+    "Highlander: The Series", "Conan the Adventurer", "Relic Hunter", "The Lost World",
+    "BeastMaster", "Sinbad", "Walker, Texas Ranger", "Renegade", "Baywatch",
+    "SeaQuest DSV", "21 Jump Street", "The Greatest American Hero", "Alias", "Nikita",
+    "La Femme Nikita", "Spartacus", "Vikings", "The Last Kingdom", "Black Sails",
+    "Marco Polo", "Game of Thrones", "The Witcher", "Band of Brothers", "The Pacific",
+    "Combat!", "The Rat Patrol", "Tour of Duty", "Flash Gordon", "Thunderbirds",
+    "Captain Scarlet and the Mysterons", "Stingray", "Fireball XL5", "Joe 90",
+    # Dramske, povijesne, vestern i obiteljske serije
+    "The Sopranos", "Breaking Bad", "Better Call Saul", "Mad Men", "Boardwalk Empire",
+    "Peaky Blinders", "Downton Abbey", "The Crown", "Rome", "Deadwood", "Hell on Wheels",
+    "Bonanza", "Gunsmoke", "Rawhide", "The Virginian", "The High Chaparral",
+    "The Big Valley", "The Lone Ranger", "The Rifleman", "Maverick",
+    "Have Gun - Will Travel", "Wanted: Dead or Alive", "Dr. Quinn, Medicine Woman",
+    "Little House on the Prairie", "The Waltons", "Highway to Heaven",
+    "Touched by an Angel", "7th Heaven", "Dallas", "Dynasty", "Falcon Crest",
+    "Beverly Hills, 90210", "Melrose Place", "Dawson's Creek", "The O.C.",
+    "One Tree Hill", "Gilmore Girls", "Gossip Girl", "Pretty Little Liars",
+    "Desperate Housewives", "ER", "House", "Grey's Anatomy", "The Good Doctor",
+    "The West Wing", "House of Cards", "Suits", "The Good Wife", "Boston Legal",
+    "Ally McBeal", "Six Feet Under", "Friday Night Lights", "Parenthood", "This Is Us",
+    "Roots", "Shogun", "North and South", "The Thorn Birds", "I, Claudius",
+    "Brideshead Revisited", "Pride and Prejudice", "Upstairs, Downstairs", "Poldark",
+    "All Creatures Great and Small", "Lassie", "Flipper", "Freaks and Geeks",
+    # Komedije i sitcomi (70-e, 80-e, 90-e, 2000-e)
+    "'Allo 'Allo!", "Only Fools and Horses", "On the Buses", "You Rang, M'Lord?",
+    "Fawlty Towers", "Blackadder", "Mr. Bean", "Keeping Up Appearances",
+    "Are You Being Served?", "Open All Hours", "Porridge", "Some Mothers Do 'Ave 'Em",
+    "The Benny Hill Show", "Monty Python's Flying Circus", "The Young Ones", "Father Ted",
+    "Men Behaving Badly", "The Vicar of Dibley", "Absolutely Fabulous",
+    "The IT Crowd", "Peep Show", "The Office", "Extras", "Bottom", "Yes Minister",
+    "Yes, Prime Minister", "Mind Your Language", "Last of the Summer Wine",
+    "Rising Damp", "Steptoe and Son", "George and Mildred",
+    "ALF", "3rd Rock from the Sun", "Everybody Loves Raymond", "Seinfeld", "Friends",
+    "Married... with Children", "Cheers", "Frasier", "M*A*S*H", "The Golden Girls",
+    "Roseanne", "The Fresh Prince of Bel-Air", "Home Improvement", "Full House",
+    "Step by Step", "Family Matters", "Saved by the Bell", "Boy Meets World",
+    "The Cosby Show", "Different Strokes", "Who's the Boss?", "Growing Pains",
+    "Night Court", "Taxi", "WKRP in Cincinnati", "Happy Days", "Laverne & Shirley",
+    "Three's Company", "All in the Family", "The Jeffersons", "Sanford and Son",
+    "Good Times", "The Mary Tyler Moore Show", "The Bob Newhart Show",
+    "Bewitched", "I Dream of Jeannie", "I Love Lucy", "The Dick Van Dyke Show",
+    "The Andy Griffith Show", "The Beverly Hillbillies", "Green Acres", "Get Smart",
+    "The Addams Family", "The Munsters", "Gilligan's Island", "Hogan's Heroes",
+    "Benson", "Soap", "Perfect Strangers", "Mork & Mindy", "That '70s Show",
+    "The King of Queens", "Malcolm in the Middle", "Scrubs", "NewsRadio",
+    "Will & Grace", "30 Rock", "Parks and Recreation", "Community", "Brooklyn Nine-Nine",
+    "How I Met Your Mother", "The Big Bang Theory", "Two and a Half Men", "Modern Family",
+    # Animirane i dječje serije
     "Batman: The Animated Series", "Superman: The Animated Series", "Spider-Man",
     "X-Men: The Animated Series", "DuckTales", "Chip 'n Dale: Rescue Rangers", "TaleSpin",
     "Darkwing Duck", "Gargoyles", "Avatar: The Last Airbender", "Teenage Mutant Ninja Turtles",
@@ -286,7 +348,6 @@ def safe_get(url, params=None, timeout=15):
 
 
 def verify_stream_url_playable(url):
-    """Provjerava vraća li video link stvarne video podatke (200/206), a ne 401/403/404."""
     if not url or not url.startswith("http"):
         return False
     try:
@@ -337,7 +398,6 @@ def contains_hentai_or_adult(*texts):
 
 
 def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lang=""):
-    """Prepoznaje jednokanalne strane sinkronizacije (npr. portugalski Dublado) bez engleskog zvuka."""
     parts = [identifier, filename]
     for field in ["title", "description", "subject", "language"]:
         val = archive_md.get(field)
@@ -371,13 +431,12 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
 
 
 def pick_best_video_file(video_files):
-    """Daje prednost izvornim .mp4 i .mkv datotekama (koje čuvaju sve audio trake) ispred .ia.mp4 derivata."""
     def sort_key(f):
         fname_lower = f["filename"].lower()
         is_deriv = f.get("is_derivative", False)
         if not is_deriv and fname_lower.endswith(".mp4"):
             tier = 0
-        elif not is_deriv:
+        elif fname_lower.endswith(".mp4"):
             tier = 1
         else:
             tier = 2
@@ -387,7 +446,6 @@ def pick_best_video_file(video_files):
 
 
 def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overview, hint_genre=None):
-    """Veže svaki film isključivo za njegov 1 temeljni žanr kako se naslovi ne bi ponavljali u 4 kategorije."""
     if 16 in genre_ids:
         company_blob = " ".join(str(c).lower() for c in companies)
         text_blob = f"{orig_title} {hr_title} {overview} {company_blob}".lower()
@@ -436,8 +494,26 @@ def determine_tv_primary_genres(genre_ids, orig_name, hr_name):
     if 16 in genre_ids or 10762 in genre_ids or any(kw in blob for kw in animated_or_kids_keywords):
         return ["Animirane serije"]
 
-    mapped = [TMDB_TV_GENRE_MAP[g] for g in genre_ids if g in TMDB_TV_GENRE_MAP]
-    return [mapped[0]] if mapped else ["Krimi, detektivske i triler serije"]
+    mapped = []
+    for g in genre_ids:
+        label = TMDB_TV_GENRE_MAP.get(g)
+        if label and label not in mapped:
+            mapped.append(label)
+
+    if not mapped:
+        return ["Dramske i obiteljske serije"]
+
+    for priority_genre in [
+        "Sci-Fi i fantastika serije",
+        "Krimi, detektivske i triler serije",
+        "Avanturističke serije",
+        "Komedije i sitcomi",
+        "Dramske i obiteljske serije"
+    ]:
+        if priority_genre in mapped:
+            return [priority_genre]
+
+    return [mapped[0]]
 
 
 def parse_duration_minutes(raw_val):
@@ -492,6 +568,8 @@ def extract_series_core_title(raw_title):
     s = str(raw_title).rsplit("/", 1)[-1]
     s = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", s, flags=re.IGNORECASE)
     s = s.replace("&", " and ")
+    s = re.sub(r"(?i)\bdr\.?\s+", "doctor ", s)
+    s = re.sub(r"(?i)\bm['’]lord\b", "my lord", s)
     s = re.sub(r"[._]+", " ", s)
     s = re.sub(r"(?i)\bS\d{1,2}\s*[-_.]?\s*E\d{1,3}.*$", "", s)
     s = re.sub(r"(?i)\b\d{1,2}x\d{1,3}.*$", "", s)
@@ -505,6 +583,17 @@ def extract_series_core_title(raw_title):
     s = re.sub(r"\s+", " ", s).strip()
     s = re.sub(r"^(the|a|an)\s+", "", s).strip()
     return s
+
+
+def series_core_matches(candidate_core, valid_cores):
+    if not candidate_core:
+        return False
+    if candidate_core in valid_cores:
+        return True
+    for vc in valid_cores:
+        if len(vc) >= 6 and candidate_core.startswith(vc + " "):
+            return True
+    return False
 
 
 def extract_year_from_text(text):
@@ -757,8 +846,8 @@ def validate_movie_match(
 
 
 def audit_and_dedupe_catalog():
-    """Paralelno provjerava rade li svi video linkovi u bazi, uklanja neispravne/401/403 linkove i dopunjuje opise."""
-    print("1/8 Revizija postojećih stavki (provjera dostupnosti video linkova, opisa i duplikata)...", flush=True)
+    """Paralelno provjerava rade li svi video linkovi u bazi, usklađuje žanrove serija i dopunjuje opise."""
+    print("1/8 Revizija postojećih stavki (linkovi, žanrovi serija, opisi i duplikati)...", flush=True)
     r = session.get(
         f"{SUPABASE_URL}/rest/v1/catalog_items?select=id,archive_id,tmdb_id,title,media_type,release_year,genres,description_hr,stream_url,episodes,is_valid&limit=3500",
         headers=SB_HEADERS,
@@ -829,7 +918,7 @@ def audit_and_dedupe_catalog():
         if ",tmdb-" in ident:
             if not verify_stream_url_playable(current_url):
                 supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
-                return False, f"  [FALSE - nedostupan stream (401/403)] {row['title']} ({ident})"
+                return False, f"  [FALSE - nedostupan stream] {row['title']} ({ident})"
 
             patch_payload = {}
             if tmdb_info:
@@ -896,9 +985,17 @@ def audit_and_dedupe_catalog():
 
     for row, tv_id in series_to_verify:
         eps = row.get("episodes") or []
-        if len(eps) >= 2 and verify_stream_url_playable(eps[0].get("url") or ""):
-            continue
         tv_details = safe_get(f"{TMDB_BASE}/tv/{tv_id}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
+        if tv_details:
+            orig_name = tv_details.get("original_name") or tv_details.get("name") or row["title"]
+            hr_name = tv_details.get("name") or orig_name
+            g_ids = [g.get("id") for g in (tv_details.get("genres") or []) if g.get("id")]
+            correct_genres = determine_tv_primary_genres(g_ids, orig_name, hr_name)
+            if len(eps) >= 2 and verify_stream_url_playable(eps[0].get("url") or ""):
+                if correct_genres != (row.get("genres") or []):
+                    supabase_patch_row("catalog_items", row["id"], {"genres": correct_genres})
+                continue
+
         if not tv_details:
             continue
         orig_name = tv_details.get("original_name") or tv_details.get("name") or row["title"]
@@ -966,7 +1063,6 @@ def fetch_wiki_bio(author_name):
 
 
 def sync_authors(existing_archive_ids, seen_tmdb_movies):
-    """Sinkronizira 63 autora te samo provjereno dostupne dugometražne filmove ubacuje u glavne žanrove."""
     print("2/8 Sinkronizacija 63 autora i promocija dostupnih dugometražnih filmova u žanrove...", flush=True)
     promoted_total = 0
 
@@ -1012,7 +1108,8 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies):
             if not clean_t:
                 continue
             key = (clean_t.lower(), year)
-            score = m["size_mb"] + (500.0 if not m["is_derivative"] else 0.0)
+            is_mp4 = m["filename"].lower().endswith(".mp4")
+            score = m["size_mb"] + (1000.0 if is_mp4 else 0.0) + (500.0 if not m["is_derivative"] else 0.0)
             if key not in deduped or score > deduped[key]["score"]:
                 deduped[key] = {
                     "title": clean_t,
@@ -1301,7 +1398,6 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
 
 
 def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
-    """Izravno rudari najpopularnije igrane i animirane filmove iz velikih Archive.org kolekcija."""
     print("4/8 Izravno rudarenje filmova iz Archive.org kolekcija...", flush=True)
     archive_docs = {}
 
@@ -1496,7 +1592,8 @@ def parse_season_and_episode(item_title, filename, total_seasons_hint=0):
         r"(?i)\bS(\d{1,2})\s*[-_.]?\s*E(\d{1,3})\b",
         r"(?i)\b(\d{1,2})x(\d{1,3})\b",
         r"(?i)Season\s*(\d{1,2}).*?(?:Episode|Ep\.?|E)\s*(\d{1,3})\b",
-        r"(?i)Sezona\s*(\d{1,2}).*?(?:Epizoda|Ep\.?|E)\s*(\d{1,3})\b"
+        r"(?i)Sezona\s*(\d{1,2}).*?(?:Epizoda|Ep\.?|E)\s*(\d{1,3})\b",
+        r"(?i)Series\s*(\d{1,2}).*?(?:Episode|Ep\.?|E)\s*(\d{1,3})\b"
     ]:
         m = re.search(pat, combined)
         if m:
@@ -1615,7 +1712,7 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
             "q": query,
             "fl[]": ["identifier", "title", "downloads"],
             "sort[]": "downloads desc",
-            "rows": 45,
+            "rows": 85,
             "output": "json"
         }
     )
@@ -1645,7 +1742,7 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
             continue
 
         doc_core = extract_series_core_title(doc_title)
-        if doc_core not in valid_core_titles:
+        if not series_core_matches(doc_core, valid_core_titles):
             continue
 
         videos, arch_md = get_archive_item_details(ident, min_size_mb=35, allow_mkv=True)
@@ -1657,17 +1754,17 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
             item_title_meta = item_title_meta[0]
 
         meta_core = extract_series_core_title(item_title_meta)
-        if meta_core and meta_core not in valid_core_titles:
+        if meta_core and not series_core_matches(meta_core, valid_core_titles):
             continue
 
         for m in videos:
             fname_prefix_match = re.match(
-                r"(?i)^(.*?)(?:\bS\d{1,2}\s*[-_.]?\s*E\d{1,3}|\b\d{1,2}x\d{1,3}|\bSeason\s*\d{1,2})",
+                r"(?i)^(.*?)(?:\bS\d{1,2}\s*[-_.]?\s*E\d{1,3}|\b\d{1,2}x\d{1,3}|\bSeason\s*\d{1,2}|\bSeries\s*\d{1,2})",
                 m["filename"].rsplit("/", 1)[-1]
             )
             if fname_prefix_match:
                 prefix_core = extract_series_core_title(fname_prefix_match.group(1))
-                if len(prefix_core) >= 3 and prefix_core not in valid_core_titles:
+                if len(prefix_core) >= 3 and not series_core_matches(prefix_core, valid_core_titles):
                     continue
 
             s_num, e_num = parse_season_and_episode(str(item_title_meta), m["filename"], total_seasons_hint)
@@ -1708,7 +1805,8 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
             if expected_rt > 0 and (dur < int(expected_rt * 0.65) or dur > int(expected_rt * 1.75)):
                 continue
 
-        quality_score = cand["size_mb"] + (500.0 if not cand["is_derivative"] else 0.0)
+        is_mp4 = cand["filename"].lower().endswith(".mp4")
+        quality_score = cand["size_mb"] + (1000.0 if is_mp4 else 0.0) + (500.0 if not cand["is_derivative"] else 0.0)
         if key not in best_by_se or quality_score > best_by_se[key]["quality_score"]:
             clean_file_title, _ = clean_filename_to_title(cand["filename"])
             ep_title_clean = official_hr_name if official_hr_name else (clean_file_title or f"Epizoda {cand['episode']}")
@@ -1740,26 +1838,29 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
 
 
 def sync_tmdb_series(seen_tmdb_series):
-    print("6/8 Duboka TMDB pretraga igranih i animiranih serija po svim žanrovima...", flush=True)
+    print("6/8 Duboka TMDB pretraga svih žanrova serija (Krimi, Sci-Fi, Avantura, Komedije, Drama)...", flush=True)
     candidate_shows = {}
 
     for endpoint in ["tv/popular", "tv/top_rated"]:
-        for page in range(1, 16):
+        for page in range(1, 18):
             data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
             for s in (data or {}).get("results", []):
                 if s["id"] not in seen_tmdb_series:
                     candidate_shows[s["id"]] = s
 
+    # 1. Klasične serije 1960. - 1999. po svim žanrovima
     for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
         for sort_by in ["popularity.desc", "vote_count.desc"]:
-            for page in range(1, 8):
+            for page in range(1, 13):
                 data = safe_get(
                     f"{TMDB_BASE}/discover/tv",
                     {
                         "api_key": TMDB_API_KEY,
                         "language": "hr-HR",
                         "with_genres": tv_genre,
-                        "vote_count.gte": 80,
+                        "first_air_date.gte": "1960-01-01",
+                        "first_air_date.lte": "1999-12-31",
+                        "vote_count.gte": 10,
                         "sort_by": sort_by,
                         "page": page
                     }
@@ -1768,6 +1869,27 @@ def sync_tmdb_series(seen_tmdb_series):
                     if s["id"] not in seen_tmdb_series:
                         candidate_shows[s["id"]] = s
 
+    # 2. Novije serije 2000. - danas po svim žanrovima
+    for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
+        for sort_by in ["popularity.desc", "vote_count.desc"]:
+            for page in range(1, 11):
+                data = safe_get(
+                    f"{TMDB_BASE}/discover/tv",
+                    {
+                        "api_key": TMDB_API_KEY,
+                        "language": "hr-HR",
+                        "with_genres": tv_genre,
+                        "first_air_date.gte": "2000-01-01",
+                        "vote_count.gte": 25,
+                        "sort_by": sort_by,
+                        "page": page
+                    }
+                )
+                for s in (data or {}).get("results", []):
+                    if s["id"] not in seen_tmdb_series:
+                        candidate_shows[s["id"]] = s
+
+    # 3. Izravna pretraga 250+ kultnih naslova iz svih žanrova
     for seed_title in CLASSIC_TV_SEED_TITLES:
         res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR"})
         first = ((res or {}).get("results") or [None])[0]
@@ -1831,7 +1953,7 @@ def sync_tmdb_series(seen_tmdb_series):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + TMDB->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(process_series, item) for item in candidate_shows.items()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1840,13 +1962,12 @@ def sync_tmdb_series(seen_tmdb_series):
 
 
 def sync_archive_tv_collections(seen_tmdb_series):
-    """Izravno rudari Archive.org TV kolekcije kako bi pronašao i serije koje nisu u TMDB Top listama."""
     print("7/8 Izravno rudarenje TV kolekcija na Archive.org...", flush=True)
     discovered_cores = {}
 
     for col in ARCHIVE_TV_COLLECTIONS:
         query = f"mediatype:movies AND collection:{col} AND -subject:trailer AND -subject:news"
-        for page in [1, 2]:
+        for page in [1, 2, 3, 4, 5]:
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
@@ -1884,7 +2005,7 @@ def sync_archive_tv_collections(seen_tmdb_series):
         orig_name = hit.get("original_name") or hit.get("name") or ""
         hr_name = hit.get("name") or orig_name
         valid_cores = {extract_series_core_title(orig_name), extract_series_core_title(hr_name)}
-        if core_title not in valid_cores:
+        if not series_core_matches(core_title, valid_cores):
             continue
 
         episodes = aggregate_series_from_archive(tv_id, orig_name, hr_name)
