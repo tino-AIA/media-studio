@@ -106,6 +106,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
 
+    private val blockedSearchNoiseKeywords = listOf(
+        "all 6", "movies 1 -", "movies 1-", "n64", "ps1", "ps2", "snes", "nes",
+        "gameplay", "longplay", "walkthrough", "speedrun", "soundtrack", "audiobook",
+        "radio drama", "fan film", "fan-film", "trailer", "teaser"
+    )
+
     private val animationKeywords = listOf(
         "animirani", "crtani", "crtić", "cartoon", "animation", "anime", "pixar", "disney",
         "looney tunes", "tom and jerry", "bugs bunny", "popeye", "ghibli", "chihiro",
@@ -462,13 +468,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         staticAuthorImages = mergedAuthorPhotos
 
-        // Čisti igrani filmovi (bez animiranih filmova i crtića)
         val liveActionMovies = allItems.filter { it.mediaType == "movie" && !isAnimatedItem(it) }
-        // Animirani filmovi i kratki crtići
         val animatedMoviesAndShorts = allItems.filter { it.mediaType == "movie" && isAnimatedItem(it) }
-        // Čiste igrane serije (bez animiranih serija)
         val liveActionSeries = allItems.filter { it.mediaType == "series" && !isAnimatedItem(it) }
-        // Animirane serije
         val animatedSeries = allItems.filter { it.mediaType == "series" && isAnimatedItem(it) }
         val concerts = allItems.filter { it.mediaType == "concert" }
 
@@ -617,6 +619,50 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         performGlobalSearch(query)
     }
 
+    private fun computeSearchRelevance(
+        title: String,
+        identifier: String,
+        description: String,
+        rawQuery: String,
+        isFromSupabase: Boolean,
+        baseQualityScore: Double
+    ): Double {
+        val qClean = rawQuery.lowercase().replace(Regex("[^a-z0-9čćžšđ\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        val tClean = title.lowercase()
+            .replace(Regex("\\(\\d{4}\\)"), "")
+            .replace(Regex("[^a-z0-9čćžšđ\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val idClean = identifier.lowercase().replace("_", " ").replace("-", " ")
+
+        var score = baseQualityScore
+        if (isFromSupabase) score += 3500.0
+
+        when {
+            tClean == qClean -> score += 20000.0
+            tClean.startsWith("$qClean ") || tClean.startsWith("$qClean:") -> score += 15000.0
+            tClean.startsWith(qClean) -> score += 13000.0
+            tClean.contains(" $qClean ") || tClean.endsWith(" $qClean") || tClean.contains(qClean) -> score += 10500.0
+            else -> {
+                val words = qClean.split(" ").filter { it.length >= 2 }
+                if (words.isNotEmpty() && words.all { tClean.contains(it) }) {
+                    score += 6500.0
+                } else if (idClean.contains(qClean)) {
+                    score += 3000.0
+                } else if (description.lowercase().contains(qClean)) {
+                    score += 1000.0
+                }
+            }
+        }
+
+        val noisePenaltyTerms = listOf("holiday special", "making of", "behind the scenes", "interview", "review", "parody")
+        if (noisePenaltyTerms.any { tClean.contains(it) }) {
+            score -= 6000.0
+        }
+
+        return score
+    }
+
     fun performGlobalSearch(query: String) {
         searchJob?.cancel()
         _currentSearchQuery.value = query
@@ -644,29 +690,44 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                                 (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
                         )
                     }
-                    .sortedByDescending { it.popularityScore }
                     .map { item ->
+                        val rel = computeSearchRelevance(
+                            title = item.title,
+                            identifier = item.archiveId,
+                            description = item.descriptionHr,
+                            rawQuery = trimmed,
+                            isFromSupabase = true,
+                            baseQualityScore = item.popularityScore.coerceAtMost(3000.0)
+                        )
                         RatedMovie(
                             movie = item.toArchiveMovie(),
                             rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
-                            relevanceScore = item.popularityScore + 5000.0
+                            relevanceScore = rel
                         )
                     }
 
-                val archiveMatches = if (sbMatches.size < 15 && trimmed.length >= 3) {
-                    val searchWords = trimmed.split(Regex("\\s+")).filter { it.length >= 2 }
-                    val tokenClause = if (searchWords.isNotEmpty()) {
-                        searchWords.joinToString(" AND ") { w -> "title:$w*" }
+                val archiveMatches = if (sbMatches.size < 20 && trimmed.length >= 3) {
+                    val safePhrase = trimmed.replace("\"", "").trim()
+                    val archiveQuery = if (words.size > 1) {
+                        "mediatype:movies AND title:\"$safePhrase\" AND -subject:trailer AND -subject:gameplay"
                     } else {
-                        "title:\"$trimmed\""
+                        "mediatype:movies AND title:$safePhrase* AND -subject:trailer AND -subject:gameplay"
                     }
-                    fetchFromArchiveFallback("mediatype:movies AND ($tokenClause)", 60, 1, excludeAdult = true)
+                    fetchFromArchiveFallback(
+                        query = archiveQuery,
+                        rows = 60,
+                        page = 1,
+                        excludeAdult = true,
+                        searchQueryHint = trimmed
+                    )
                 } else {
                     emptyList()
                 }
 
                 _globalSearchResults.value = (sbMatches + archiveMatches)
                     .distinctBy { it.movie.identifier }
+                    .distinctBy { it.movie.title.lowercase().replace(Regex("\\(\\d{4}\\)"), "").trim() }
+                    .sortedByDescending { it.relevanceScore }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -803,7 +864,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         rows: Int,
         page: Int,
         excludeAdult: Boolean,
-        isAdultCategory: Boolean = false
+        isAdultCategory: Boolean = false,
+        searchQueryHint: String = ""
     ): List<RatedMovie> {
         return try {
             val docs = api.searchMovies(query = query, rows = rows, page = page).response?.docs ?: emptyList()
@@ -824,7 +886,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (excludeAdult && blockedAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
-                if (title.lowercase().contains("trailer") || title.lowercase().contains("teaser")) return@mapNotNull null
+                if (!isAdultCategory && blockedSearchNoiseKeywords.any { combined.contains(it) }) return@mapNotNull null
 
                 val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
                 if (isAdultCategory && runtimeMinutes in 1..10) return@mapNotNull null
@@ -835,10 +897,24 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     else -> 0.0
                 }
                 val ratingStr = if (ratingVal > 0.0) String.format("%.1f", ratingVal) else ""
+
+                val score = if (searchQueryHint.isNotBlank()) {
+                    computeSearchRelevance(
+                        title = title,
+                        identifier = id,
+                        description = desc,
+                        rawQuery = searchQueryHint,
+                        isFromSupabase = false,
+                        baseQualityScore = ratingVal * 100.0
+                    )
+                } else {
+                    ratingVal * 100.0
+                }
+
                 RatedMovie(
                     movie = ArchiveMovie(identifier = id, title = title),
                     rating = ratingStr,
-                    relevanceScore = ratingVal * 100.0
+                    relevanceScore = score
                 )
             }
         } catch (e: Exception) {
