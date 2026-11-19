@@ -55,7 +55,9 @@ private data class RawArchiveDoc(
     val creator: Any?,
     val description: Any?,
     val collection: Any?,
+    val subject: Any? = null,
     val runtime: Any?,
+    @Json(name = "item_size") val itemSize: Any? = null,
     val year: Any? = null,
     @Json(name = "avg_rating") val avgRating: Any?,
     @Json(name = "num_reviews") val numReviews: Any?
@@ -67,7 +69,7 @@ private interface ArchiveSearchApi {
         @Query("q") query: String,
         @Query("fl[]") fields: List<String> = listOf(
             "identifier", "title", "creator", "description", "collection",
-            "runtime", "year", "avg_rating", "num_reviews"
+            "subject", "runtime", "item_size", "year", "avg_rating", "num_reviews"
         ),
         @Query("sort[]") sort: String = "downloads desc",
         @Query("rows") rows: Int = 150,
@@ -109,7 +111,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val blockedSearchNoiseKeywords = listOf(
         "all 6", "movies 1 -", "movies 1-", "n64", "ps1", "ps2", "snes", "nes",
         "gameplay", "longplay", "walkthrough", "speedrun", "soundtrack", "audiobook",
-        "radio drama", "fan film", "fan-film", "trailer", "teaser"
+        "radio drama", "fan film", "fan-film", "trailer", "teaser", "tv spot",
+        "movie_trailers", "sneak peek", "featurette", "screen test", "test footage",
+        "gag reel", "blooper", "unboxing", "reaction", "commercial", "promo"
     )
 
     private val animationKeywords = listOf(
@@ -708,17 +712,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val archiveMatches = if (sbMatches.size < 20 && trimmed.length >= 3) {
                     val safePhrase = trimmed.replace("\"", "").trim()
+                    val exclusions = "-subject:trailer -subject:teaser -subject:promo -subject:commercial -subject:gameplay -collection:movie_trailers -collection:trailers"
                     val archiveQuery = if (words.size > 1) {
-                        "mediatype:movies AND title:\"$safePhrase\" AND -subject:trailer AND -subject:gameplay"
+                        "mediatype:movies AND title:\"$safePhrase\" AND $exclusions"
                     } else {
-                        "mediatype:movies AND title:$safePhrase* AND -subject:trailer AND -subject:gameplay"
+                        "mediatype:movies AND title:$safePhrase* AND $exclusions"
                     }
                     fetchFromArchiveFallback(
                         query = archiveQuery,
-                        rows = 60,
+                        rows = 80,
                         page = 1,
                         excludeAdult = true,
-                        searchQueryHint = trimmed
+                        searchQueryHint = trimmed,
+                        enforceFullLength = true
                     )
                 } else {
                     emptyList()
@@ -859,13 +865,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun flattenArchiveField(value: Any?): String {
+        return when (value) {
+            is String -> value.trim()
+            is List<*> -> value.joinToString(" ") { it?.toString()?.trim() ?: "" }.trim()
+            else -> value?.toString()?.trim() ?: ""
+        }
+    }
+
     private suspend fun fetchFromArchiveFallback(
         query: String,
         rows: Int,
         page: Int,
         excludeAdult: Boolean,
         isAdultCategory: Boolean = false,
-        searchQueryHint: String = ""
+        searchQueryHint: String = "",
+        enforceFullLength: Boolean = false
     ): List<RatedMovie> {
         return try {
             val docs = api.searchMovies(query = query, rows = rows, page = page).response?.docs ?: emptyList()
@@ -876,20 +891,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     is List<*> -> t.firstOrNull()?.toString()?.trim() ?: id
                     else -> id
                 }
-                val desc = when (val d = doc.description) {
-                    is String -> d.trim()
-                    is List<*> -> d.joinToString(" ").trim()
-                    else -> ""
-                }
-                val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()}"
+                val desc = flattenArchiveField(doc.description)
+                val subjectStr = flattenArchiveField(doc.subject)
+                val collectionStr = flattenArchiveField(doc.collection)
+                val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()} ${subjectStr.lowercase()} ${collectionStr.lowercase()}"
 
                 if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (excludeAdult && blockedAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
                 if (!isAdultCategory && blockedSearchNoiseKeywords.any { combined.contains(it) }) return@mapNotNull null
 
-                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
-                if (isAdultCategory && runtimeMinutes in 1..10) return@mapNotNull null
+                val runtimeSeconds = parseRuntimeSeconds(doc.runtime)
+                val itemSizeBytes = parseItemSizeBytes(doc.itemSize)
+
+                if (isAdultCategory && runtimeSeconds in 1..600) return@mapNotNull null
+
+                if (enforceFullLength) {
+                    val looksLikeSeries = Regex("(?i)\\b(s\\d{1,2}e\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|\\d+x\\d+|tv\\s*series)\\b")
+                        .containsMatchIn(combined)
+                    val minSeconds = if (looksLikeSeries) 18 * 60 else 50 * 60
+
+                    if (runtimeSeconds >= 0) {
+                        if (runtimeSeconds < minSeconds) return@mapNotNull null
+                    } else {
+                        val minSizeBytes = if (looksLikeSeries) 90_000_000L else 250_000_000L
+                        if (itemSizeBytes in 1L until minSizeBytes) return@mapNotNull null
+                    }
+                }
 
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
@@ -922,23 +950,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
+    private fun parseRuntimeSeconds(runtimeValue: Any?): Int {
         val raw = when (runtimeValue) {
             is String -> runtimeValue.trim()
             is List<*> -> runtimeValue.firstOrNull()?.toString()?.trim() ?: ""
+            is Number -> runtimeValue.toString()
             else -> ""
         }
-        if (raw.isEmpty()) return 0
+        if (raw.isEmpty()) return -1
         if (raw.contains(":")) {
             val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
             return when (parts.size) {
-                3 -> parts[0] * 60 + parts[1]
-                2 -> parts[0]
-                else -> 0
+                3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+                2 -> parts[0] * 60 + parts[1]
+                else -> -1
             }
         }
-        val numeric = raw.toDoubleOrNull() ?: return 0
-        return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
+        val numeric = raw.replace(Regex("[^0-9.]"), "").toDoubleOrNull() ?: return -1
+        return if (numeric <= 300.0) (numeric * 60.0).toInt() else numeric.toInt()
+    }
+
+    private fun parseItemSizeBytes(sizeValue: Any?): Long {
+        return when (sizeValue) {
+            is Number -> sizeValue.toLong()
+            is String -> sizeValue.trim().toLongOrNull() ?: 0L
+            is List<*> -> sizeValue.firstOrNull()?.toString()?.trim()?.toLongOrNull() ?: 0L
+            else -> 0L
+        }
     }
 
     private fun SupabaseCatalogItem.toArchiveMovie(): ArchiveMovie {
