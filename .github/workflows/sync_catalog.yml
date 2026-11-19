@@ -1,6 +1,12 @@
 name: Sync Supabase Catalog
 
 on:
+  push:
+    branches:
+      - feature/supabase-backend
+    paths:
+      - 'scripts/sync_catalog.py'
+      - '.github/workflows/sync_catalog.yml'
   schedule:
     - cron: '0 3 * * 0'
   workflow_dispatch:
