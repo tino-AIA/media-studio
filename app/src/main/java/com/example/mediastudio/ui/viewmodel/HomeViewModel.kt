@@ -24,7 +24,7 @@ import retrofit2.http.Query
 import kotlin.math.ceil
 
 enum class ContentTab {
-    MOVIES, SERIES, CONCERTS, FAVORITES
+    MOVIES, ANIMATION, SERIES, CONCERTS, FAVORITES
 }
 
 data class GenreOption(
@@ -95,9 +95,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .create(ArchiveSearchApi::class.java)
 
     private val blockedAdultKeywords = listOf(
-        "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
-        "softcore", "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17",
-        "nsfw", "nude", "naked", "vintage porn", "erotik film", "sexfilm", "adultvhs"
+        "hentai", "ecchi", "yaoi", "yuri", "erotic", "erotica", "xxx", "porn", "porno",
+        "pornography", "adult film", "adult anime", "softcore", "hardcore", "playboy",
+        "penthouse", "orgy", "fetish", "nc-17", "nsfw", "nude", "naked", "vintage porn",
+        "erotik film", "sexfilm", "adultvhs"
+    )
+
+    private val animationKeywords = listOf(
+        "animirani", "crtani", "crtić", "cartoon", "animation", "anime", "pixar", "disney",
+        "looney tunes", "tom and jerry", "bugs bunny", "popeye", "ghibli", "chihiro",
+        "koralina", "coraline", "angry birds", "mačak u čizmama", "puss in boots",
+        "evangelion", "wolfwalkers", "klaus", "bojack", "phineas", "gumball", "dr.stone",
+        "batman: crtana", "animated series", "south park", "simpsons"
     )
 
     val exactAuthorOrder = listOf(
@@ -224,7 +233,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     var staticAuthorImages: Map<String, String> = fallbackAuthorImages
         private set
 
-    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:film_noir) AND -collection:television AND -subject:news"
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:film_noir) AND -collection:television AND -subject:news AND -subject:animation AND -subject:cartoon"
 
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
@@ -239,18 +248,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Krimi", "$movieBaseQuery AND subject:(crime OR gangster)"),
         GenreOption("Romantični", "$movieBaseQuery AND subject:romance"),
         GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
-        GenreOption("Ratni", "$movieBaseQuery AND subject:war"),
-        GenreOption("Animirani klasici", "mediatype:movies AND (subject:animation OR subject:cartoon)", isAnimationCategory = true),
-        GenreOption("Disney, WB i klasični crtići", "mediatype:movies AND (title:(disney OR \"warner bros\" OR looney OR popeye OR mickey))", "downloads desc", isAnimationCategory = true),
-        GenreOption(
-            title = "18+ / Erotski",
-            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR \"vintage porn\"))",
-            defaultSort = "downloads desc",
-            isAdultCategory = true
-        )
+        GenreOption("Ratni", "$movieBaseQuery AND subject:war")
     )
 
-    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR subject:\"tv series\") AND -subject:news"
+    val animationGenreDefinitions = listOf(
+        GenreOption("Top 10 animiranih", "mediatype:movies AND (subject:animation OR subject:cartoon)", "downloads desc", isAnimationCategory = true),
+        GenreOption("Disney i Pixar klasici", "mediatype:movies AND (title:(disney OR pixar OR \"walt disney\" OR mickey))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Animirani filmovi", "mediatype:movies AND (subject:animation OR collection:animationandcartoons)", "downloads desc", isAnimationCategory = true),
+        GenreOption("Klasični crtići", "mediatype:movies AND (title:(\"looney tunes\" OR \"tom and jerry\" OR popeye OR \"bugs bunny\" OR \"pink panther\"))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Animirane serije", "mediatype:movies AND (subject:animation OR subject:cartoon) AND subject:\"tv series\"", "downloads desc", isAnimationCategory = true, isSeriesCategory = true)
+    )
+
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR subject:\"tv series\") AND -subject:news AND -subject:animation AND -subject:cartoon"
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
@@ -274,6 +283,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _movieCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val movieCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _movieCategories
+
+    private val _animationCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val animationCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _animationCategories
 
     private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
     val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
@@ -380,6 +392,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun isBlockedHentaiOrAdult(item: SupabaseCatalogItem): Boolean {
+        val blob = "${item.title} ${item.descriptionHr} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
+        return blockedAdultKeywords.any { blob.contains(it) }
+    }
+
+    private fun isAnimatedItem(item: SupabaseCatalogItem): Boolean {
+        val animGenres = setOf(
+            "animirani klasici",
+            "disney i pixar klasici",
+            "animirani filmovi",
+            "klasični crtići",
+            "animirane serije"
+        )
+        if (item.genres.any { it.lowercase() in animGenres }) return true
+        val blob = "${item.title} ${item.archiveId}".lowercase()
+        return animationKeywords.any { blob.contains(it) }
+    }
+
+    private fun isDisneyOrPixarItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { it.equals("Disney i Pixar klasici", ignoreCase = true) }) return true
+        val blob = "${item.title} ${item.descriptionHr} ${item.archiveId}".lowercase()
+        return listOf("disney", "pixar", "walt disney", "mickey mouse", "donald duck", "toy story", "finding nemo", "lion king", "frozen", "aladdin").any {
+            blob.contains(it)
+        }
+    }
+
     private fun loadAllContent() {
         viewModelScope.launch {
             if (_movieCategories.value.isEmpty()) {
@@ -398,9 +436,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun rebuildCategoriesFromSupabase() {
         val allItems = SupabaseRepository.getCatalogItems()
+            .filter { !isBlockedHentaiOrAdult(it) }
         val sbAuthors = SupabaseRepository.getAuthors()
 
-        // Ažuriraj slike autora iz Supabasea (TMDB portreti + Wikimedia rezerva)
         val mergedAuthorPhotos = fallbackAuthorImages.toMutableMap()
         for (a in sbAuthors) {
             if (a.photoUrl.isNotBlank()) {
@@ -409,8 +447,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         staticAuthorImages = mergedAuthorPhotos
 
-        val movies = allItems.filter { it.mediaType == "movie" }
-        val series = allItems.filter { it.mediaType == "series" }
+        // Čisti igrani filmovi (bez animiranih filmova i crtića)
+        val liveActionMovies = allItems.filter { it.mediaType == "movie" && !isAnimatedItem(it) }
+        // Animirani filmovi i kratki crtići
+        val animatedMoviesAndShorts = allItems.filter { it.mediaType == "movie" && isAnimatedItem(it) }
+        // Čiste igrane serije (bez animiranih serija)
+        val liveActionSeries = allItems.filter { it.mediaType == "series" && !isAnimatedItem(it) }
+        // Animirane serije
+        val animatedSeries = allItems.filter { it.mediaType == "series" && isAnimatedItem(it) }
         val concerts = allItems.filter { it.mediaType == "concert" }
 
         val authorList = if (sbAuthors.isNotEmpty()) {
@@ -422,20 +466,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val builtMovieCategories = movieGenreDefinitions.mapNotNull { genre ->
             when {
                 genre.isAuthorCollection -> genre to authorList
-                genre.isAdultCategory -> null
                 genre.title == "Top 10 danas" -> {
-                    val top10 = movies.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    val top10 = liveActionMovies.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
                     if (top10.isNotEmpty()) genre to top10 else null
                 }
                 genre.title == "Klasici i Najgledanije" -> {
-                    val classics = movies.sortedWith(
+                    val classics = liveActionMovies.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
                     ).take(25).map { it.toArchiveMovie() }
                     if (classics.isNotEmpty()) genre to classics else null
                 }
                 else -> {
-                    val matching = movies.filter { item ->
+                    val matching = liveActionMovies.filter { item ->
                         item.genres.any { it.equals(genre.title, ignoreCase = true) }
                     }.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
                     if (matching.isNotEmpty()) genre to matching else null
@@ -443,12 +486,47 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        val shortCartoons = animatedMoviesAndShorts.filter { item ->
+            item.genres.any { it.equals("Klasični crtići", ignoreCase = true) }
+        }
+        val featureAnimations = animatedMoviesAndShorts.filter { item ->
+            item.genres.none { it.equals("Klasični crtići", ignoreCase = true) }
+        }
+
+        val builtAnimationCategories = animationGenreDefinitions.mapNotNull { genre ->
+            when (genre.title) {
+                "Top 10 animiranih" -> {
+                    val top10 = featureAnimations.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    if (top10.isNotEmpty()) genre to top10 else null
+                }
+                "Disney i Pixar klasici" -> {
+                    val disney = featureAnimations.filter { isDisneyOrPixarItem(it) }
+                        .sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    if (disney.isNotEmpty()) genre to disney else null
+                }
+                "Animirani filmovi" -> {
+                    val otherAnim = featureAnimations.filter { !isDisneyOrPixarItem(it) }
+                        .sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    if (otherAnim.isNotEmpty()) genre to otherAnim else null
+                }
+                "Klasični crtići" -> {
+                    val shorts = shortCartoons.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    if (shorts.isNotEmpty()) genre to shorts else null
+                }
+                "Animirane serije" -> {
+                    val animSer = animatedSeries.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    if (animSer.isNotEmpty()) genre to animSer else null
+                }
+                else -> null
+            }
+        }
+
         val builtSeriesCategories = seriesGenreDefinitions.mapNotNull { genre ->
             if (genre.title.startsWith("Top 10")) {
-                val top10 = series.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                val top10 = liveActionSeries.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
                 if (top10.isNotEmpty()) genre to top10 else null
             } else {
-                val matching = series.filter { item ->
+                val matching = liveActionSeries.filter { item ->
                     item.genres.any { it.equals(genre.title, ignoreCase = true) }
                 }.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
                 if (matching.isNotEmpty()) genre to matching else null
@@ -468,6 +546,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (builtMovieCategories.isNotEmpty()) _movieCategories.value = builtMovieCategories
+        _animationCategories.value = builtAnimationCategories
         if (builtSeriesCategories.isNotEmpty()) _seriesCategories.value = builtSeriesCategories
         if (builtConcertCategories.isNotEmpty()) _concertCategories.value = builtConcertCategories
 
@@ -481,12 +560,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
     ) {
         val featuredFromDb = SupabaseRepository.getCatalogItems()
-            .filter { it.isFeatured && it.posterUrl.isNotBlank() }
+            .filter { it.isFeatured && it.posterUrl.isNotBlank() && !isBlockedHentaiOrAdult(it) && !isAnimatedItem(it) }
             .take(5)
             .map { it.toArchiveMovie() to (it.mediaType == "series") }
 
         val topFavs = favs.take(3).map {
-            it to (it.title.lowercase().contains("season") || it.title.lowercase().contains("episode"))
+            val isDbSeries = SupabaseRepository.getCatalogItem(it.identifier)?.mediaType == "series"
+            it to (isDbSeries || it.title.lowercase().contains("season") || it.title.lowercase().contains("episode"))
         }
         val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
         val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(2) ?: emptyList()).map { it to true }
@@ -533,12 +613,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val qLower = trimmed.lowercase()
 
-                // 1. Trenutna pretraga po Supabase bazi
                 val sbMatches = SupabaseRepository.getCatalogItems()
                     .filter { item ->
-                        item.title.lowercase().contains(qLower) ||
-                            item.descriptionHr.lowercase().contains(qLower) ||
-                            item.archiveId.lowercase().contains(qLower)
+                        !isBlockedHentaiOrAdult(item) && (
+                            item.title.lowercase().contains(qLower) ||
+                                item.descriptionHr.lowercase().contains(qLower) ||
+                                item.archiveId.lowercase().contains(qLower)
+                        )
                     }
                     .sortedByDescending { it.popularityScore }
                     .map { item ->
@@ -549,9 +630,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
 
-                // 2. Dodaj rezultate s Archive.org ako u Supabaseu ima manje od 15 pogodaka
                 val archiveMatches = if (sbMatches.size < 15 && trimmed.length >= 3) {
-                    fetchFromArchiveFallback("mediatype:movies AND title:\"$trimmed\"", 60, 1, excludeAdult = false)
+                    fetchFromArchiveFallback("mediatype:movies AND title:\"$trimmed\"", 60, 1, excludeAdult = true)
                 } else {
                     emptyList()
                 }
@@ -597,7 +677,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val sbMatches = findSupabaseItemsForGenre(genre)
-                if (sbMatches.isNotEmpty() && !genre.isAdultCategory) {
+                if (sbMatches.isNotEmpty()) {
                     val isTop10 = genre.title.startsWith("Top 10")
                     val allRated = sbMatches.map { item ->
                         RatedMovie(
@@ -622,12 +702,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         _totalGenrePages.value = pages
                     }
                 } else {
-                    // Rezerva preko Archive.org za 18+ ili prazne kategorije
                     val results = fetchFromArchiveFallback(
                         query = genre.query,
                         rows = 120,
                         page = page,
-                        excludeAdult = !genre.isAdultCategory
+                        excludeAdult = true
                     )
                     _genreMovies.value = results.take(pageSize)
                     _totalGenreMoviesCount.value = results.size
@@ -642,13 +721,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun findSupabaseItemsForGenre(genre: GenreOption): List<SupabaseCatalogItem> {
-        val all = SupabaseRepository.getCatalogItems()
+        val all = SupabaseRepository.getCatalogItems().filter { !isBlockedHentaiOrAdult(it) }
+
+        if (genre.isAnimationCategory) {
+            val animMovies = all.filter { it.mediaType == "movie" && isAnimatedItem(it) }
+            val shortCartoons = animMovies.filter { it.genres.any { g -> g.equals("Klasični crtići", ignoreCase = true) } }
+            val featureAnim = animMovies.filter { it.genres.none { g -> g.equals("Klasični crtići", ignoreCase = true) } }
+            val animSeries = all.filter { it.mediaType == "series" && isAnimatedItem(it) }
+
+            return when (genre.title) {
+                "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
+                "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedByDescending { it.popularityScore }
+                "Animirani filmovi" -> featureAnim.filter { !isDisneyOrPixarItem(it) }.sortedByDescending { it.popularityScore }
+                "Klasični crtići" -> shortCartoons.sortedByDescending { it.popularityScore }
+                "Animirane serije" -> animSeries.sortedByDescending { it.popularityScore }
+                else -> animMovies.sortedByDescending { it.popularityScore }
+            }
+        }
+
         val targetType = when {
             genre.isConcertCategory -> "concert"
             genre.isSeriesCategory -> "series"
             else -> "movie"
         }
-        val typedItems = all.filter { it.mediaType == targetType }
+        val typedItems = all.filter {
+            it.mediaType == targetType && (targetType == "concert" || !isAnimatedItem(it))
+        }
 
         return when {
             genre.title.startsWith("Top 10") -> typedItems.sortedByDescending { it.popularityScore }
