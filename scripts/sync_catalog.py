@@ -18,7 +18,7 @@ TMDB_IMG_BACKDROP = "https://image.tmdb.org/t/p/w1280"
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "MediaStudioCatalogSync/2.3 (AndroidTV App; contact@mediastudio.local)"
+    "User-Agent": "MediaStudioCatalogSync/2.5 (AndroidTV App; contact@mediastudio.local)"
 })
 
 state_lock = threading.Lock()
@@ -73,7 +73,7 @@ RELEASE_TAG_PATTERN = re.compile(
     r"full\s*movie|movie|film|subtitles|subbed|dubbed|eng|english|multi|dual\s*audio|"
     r"yify|yts|rarbg|galaxyrg|galaxy-rg|etrg|sparks|fgt|evo|bone|sartre|anoxmous|juggs|"
     r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series|"
-    r"the\s*original\s*series|original\s*series|tos"
+    r"the\s*original\s*series|original\s*series|tos|no\s*subs|us\s*cut|eu\s*cut|uk\s*cut"
     r")\b"
 )
 
@@ -93,24 +93,19 @@ TMDB_MOVIE_GENRE_MAP = {
     36: "Drama"
 }
 
-SPECIFIC_GENRES = {
-    "Vestern", "Horor", "Ratni", "Sci-Fi klasici",
-    "Krimi", "Triler i misterija", "Komedija", "Romantični"
-}
-
 TMDB_DISCOVER_GENRE_SEEDS = [
-    ("37", "Vestern"),
-    ("27", "Horor"),
-    ("10752", "Ratni"),
-    ("878", "Sci-Fi klasici"),
-    ("80", "Krimi"),
-    ("53", "Triler i misterija"),
-    ("9648", "Triler i misterija"),
-    ("35", "Komedija"),
-    ("10749", "Romantični"),
-    ("28", "Akcija i avantura"),
-    ("12", "Akcija i avantura"),
-    ("18", "Drama")
+    ("37", "Vestern", 15),
+    ("27", "Horor", 25),
+    ("10752", "Ratni", 15),
+    ("878", "Sci-Fi klasici", 25),
+    ("80", "Krimi", 30),
+    ("53", "Triler i misterija", 30),
+    ("9648", "Triler i misterija", 25),
+    ("35", "Komedija", 35),
+    ("10749", "Romantični", 20),
+    ("28", "Akcija i avantura", 30),
+    ("12", "Akcija i avantura", 30),
+    ("18", "Drama", 40)
 ]
 
 ARCHIVE_FEATURE_COLLECTIONS = [
@@ -122,7 +117,15 @@ ARCHIVE_FEATURE_COLLECTIONS = [
     "laserdiscarchive",
     "colorized-and-upscaled-movies",
     "vhsvault",
-    "miscellaneous_feature_films"
+    "miscellaneous_feature_films",
+    "westerns",
+    "war_films",
+    "horror_films",
+    "romance_films",
+    "thriller_films",
+    "action_adventure_films",
+    "drama_films",
+    "mystery_films"
 ]
 
 ARCHIVE_TV_COLLECTIONS = [
@@ -170,7 +173,6 @@ CLASSIC_SHORT_CARTOON_QUERIES = [
 ]
 
 CLASSIC_TV_SEED_TITLES = [
-    # Krimi, detektivske i triler serije
     "Columbo", "Murder, She Wrote", "Agatha Christie's Poirot", "Agatha Christie's Marple",
     "Sherlock", "The Adventures of Sherlock Holmes", "Inspector Morse", "Midsomer Murders",
     "Taggart", "Cracker", "Prime Suspect", "A Touch of Frost", "Jonathan Creek",
@@ -186,7 +188,6 @@ CLASSIC_TV_SEED_TITLES = [
     "NYPD Blue", "Law & Order", "The Rockford Files", "Mannix", "Cannon",
     "Barnaby Jones", "77 Sunset Strip", "Peter Gunn", "The Untouchables", "Dragnet",
     "Alfred Hitchcock Presents", "The Alfred Hitchcock Hour", "Tales of the Unexpected",
-    # Sci-Fi i fantastika serije
     "The Twilight Zone", "The Outer Limits", "Star Trek", "Star Trek: The Next Generation",
     "Star Trek: Deep Space Nine", "Star Trek: Voyager", "Star Trek: Enterprise",
     "Doctor Who", "Torchwood", "Battlestar Galactica", "Buck Rogers in the 25th Century",
@@ -202,7 +203,6 @@ CLASSIC_TV_SEED_TITLES = [
     "Alien Nation", "Quantum Leap", "Sliders", "The Invaders",
     "The Six Million Dollar Man", "The Bionic Woman", "The Incredible Hulk", "Wonder Woman",
     "Tales from the Crypt", "Are You Afraid of the Dark?", "Goosebumps", "Eerie, Indiana",
-    # Avanturističke i akcijske serije
     "The A-Team", "Knight Rider", "MacGyver", "Airwolf", "Street Hawk", "Starsky & Hutch",
     "The Dukes of Hazzard", "The Fall Guy", "T.J. Hooker", "CHiPs", "Charlie's Angels",
     "Mission: Impossible", "The Man from U.N.C.L.E.", "The Avengers", "The Saint",
@@ -215,7 +215,6 @@ CLASSIC_TV_SEED_TITLES = [
     "Marco Polo", "Game of Thrones", "The Witcher", "Band of Brothers", "The Pacific",
     "Combat!", "The Rat Patrol", "Tour of Duty", "Flash Gordon", "Thunderbirds",
     "Captain Scarlet and the Mysterons", "Stingray", "Fireball XL5", "Joe 90",
-    # Dramske, povijesne, vestern i obiteljske serije
     "The Sopranos", "Breaking Bad", "Better Call Saul", "Mad Men", "Boardwalk Empire",
     "Peaky Blinders", "Downton Abbey", "The Crown", "Rome", "Deadwood", "Hell on Wheels",
     "Bonanza", "Gunsmoke", "Rawhide", "The Virginian", "The High Chaparral",
@@ -231,7 +230,6 @@ CLASSIC_TV_SEED_TITLES = [
     "Roots", "Shogun", "North and South", "The Thorn Birds", "I, Claudius",
     "Brideshead Revisited", "Pride and Prejudice", "Upstairs, Downstairs", "Poldark",
     "All Creatures Great and Small", "Lassie", "Flipper", "Freaks and Geeks",
-    # Komedije i sitcomi (70-e, 80-e, 90-e, 2000-e)
     "'Allo 'Allo!", "Only Fools and Horses", "On the Buses", "You Rang, M'Lord?",
     "Fawlty Towers", "Blackadder", "Mr. Bean", "Keeping Up Appearances",
     "Are You Being Served?", "Open All Hours", "Porridge", "Some Mothers Do 'Ave 'Em",
@@ -255,7 +253,6 @@ CLASSIC_TV_SEED_TITLES = [
     "The King of Queens", "Malcolm in the Middle", "Scrubs", "NewsRadio",
     "Will & Grace", "30 Rock", "Parks and Recreation", "Community", "Brooklyn Nine-Nine",
     "How I Met Your Mother", "The Big Bang Theory", "Two and a Half Men", "Modern Family",
-    # Animirane i dječje serije
     "Batman: The Animated Series", "Superman: The Animated Series", "Spider-Man",
     "X-Men: The Animated Series", "DuckTales", "Chip 'n Dale: Rescue Rangers", "TaleSpin",
     "Darkwing Duck", "Gargoyles", "Avatar: The Last Airbender", "Teenage Mutant Ninja Turtles",
@@ -392,6 +389,14 @@ def supabase_patch_row(table, row_id, payload):
         print(f"[Supabase PATCH iznimka] {e}", flush=True)
 
 
+def supabase_delete_author_movies(author_db_id):
+    url = f"{SUPABASE_URL}/rest/v1/author_movies?author_id=eq.{author_db_id}"
+    try:
+        session.delete(url, headers=SB_HEADERS, timeout=15)
+    except Exception as e:
+        print(f"[Supabase DELETE author_movies] {e}", flush=True)
+
+
 def contains_hentai_or_adult(*texts):
     blob = " ".join(str(t) for t in texts if t).lower()
     return any(kw in blob for kw in HENTAI_AND_ADULT_KEYWORDS)
@@ -446,6 +451,7 @@ def pick_best_video_file(video_files):
 
 
 def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overview, hint_genre=None):
+    """Dodjeljuje sve stvarne TMDB žanrove filma (do 3) kako bi svaka žanrovska biblioteka imala 250+ filmova."""
     if 16 in genre_ids:
         company_blob = " ".join(str(c).lower() for c in companies)
         text_blob = f"{orig_title} {hr_title} {overview} {company_blob}".lower()
@@ -461,22 +467,13 @@ def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overvie
         if g_name and g_name not in mapped_ordered:
             mapped_ordered.append(g_name)
 
+    if hint_genre and hint_genre not in mapped_ordered:
+        mapped_ordered.append(hint_genre)
+
     if not mapped_ordered:
-        return [hint_genre] if hint_genre else ["Drama"]
+        return ["Drama"]
 
-    specific_present = [g for g in mapped_ordered if g in SPECIFIC_GENRES]
-    if specific_present:
-        filtered = [g for g in mapped_ordered if g != "Drama"]
-        stronger = [g for g in filtered if g in {"Vestern", "Ratni", "Sci-Fi klasici", "Horor", "Krimi", "Komedija"}]
-        if stronger:
-            filtered = [g for g in filtered if g != "Akcija i avantura"]
-        if hint_genre and hint_genre in filtered:
-            return [hint_genre]
-        return [filtered[0]]
-
-    if hint_genre and hint_genre in mapped_ordered:
-        return [hint_genre]
-    return [mapped_ordered[0]]
+    return mapped_ordered[:3]
 
 
 def determine_tv_primary_genres(genre_ids, orig_name, hr_name):
@@ -554,6 +551,7 @@ def format_duration_text(mins):
 def normalize_for_exact_title_compare(raw_title):
     s = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", str(raw_title), flags=re.IGNORECASE)
     s = s.replace("&", " and ")
+    s = re.sub(r"\[[^\]]*\]", " ", s)
     s = re.sub(r"[._]+", " ", s)
     s = re.sub(r"[\(\[\{]\s*(19\d{2}|20\d{2})\s*[\)\]\}]", " ", s)
     s = RELEASE_TAG_PATTERN.sub(" ", s)
@@ -607,7 +605,9 @@ def clean_filename_to_title(filename):
     year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
     year = int(year_match.group(1)) if year_match else 0
 
-    clean = re.sub(r"[._]+", " ", name)
+    clean = re.sub(r"\[[^\]]*\]", " ", name)
+    clean = re.sub(r"\(\([^)]*\)\)", " ", clean)
+    clean = re.sub(r"[._]+", " ", clean)
     clean = RELEASE_TAG_PATTERN.sub("", clean)
     if year:
         clean = re.sub(rf"\(?\b{year}\b\)?", "", clean)
@@ -618,7 +618,7 @@ def clean_filename_to_title(filename):
 
 
 def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
-    time.sleep(0.12)
+    time.sleep(0.03)
     meta = safe_get(f"https://archive.org/metadata/{identifier}")
     if not meta or meta.get("is_dark") or meta.get("is_restricted"):
         return [], {}
@@ -675,8 +675,12 @@ def get_tmdb_movie_details(tmdb_id):
         c.get("name", "") for c in credits.get("crew", [])
         if c.get("job") == "Director" and c.get("name")
     ]
+    all_crew = [
+        c.get("name", "") for c in credits.get("crew", [])
+        if c.get("name")
+    ]
     cast = [
-        c.get("name", "") for c in (credits.get("cast") or [])[:6]
+        c.get("name", "") for c in (credits.get("cast") or [])[:12]
         if c.get("name")
     ]
     genre_ids = [g.get("id") for g in (data.get("genres") or []) if g.get("id")]
@@ -711,6 +715,7 @@ def get_tmdb_movie_details(tmdb_id):
         "vote_average": float(data.get("vote_average") or 0.0),
         "popularity": float(data.get("popularity") or 10.0),
         "directors": directors,
+        "all_crew": all_crew,
         "cast": cast,
         "genre_ids": genre_ids,
         "companies": companies,
@@ -846,8 +851,8 @@ def validate_movie_match(
 
 
 def audit_and_dedupe_catalog():
-    """Paralelno provjerava rade li svi video linkovi u bazi, usklađuje žanrove serija i dopunjuje opise."""
-    print("1/8 Revizija postojećih stavki (linkovi, žanrovi serija, opisi i duplikati)...", flush=True)
+    """Uklanja duplikate (npr. dupli Psiho/Pijanist), proširuje žanrove postojećih filmova i čuva potvrđene serije."""
+    print("1/8 Revizija baze (brisanje duplikata, proširenje žanrova postojećih filmova)...", flush=True)
     r = session.get(
         f"{SUPABASE_URL}/rest/v1/catalog_items?select=id,archive_id,tmdb_id,title,media_type,release_year,genres,description_hr,stream_url,episodes,is_valid&limit=3500",
         headers=SB_HEADERS,
@@ -855,17 +860,22 @@ def audit_and_dedupe_catalog():
     )
     if r.status_code != 200:
         print(f"[Upozorenje] Dohvat tablice vratio status {r.status_code}: {r.text[:200]}", flush=True)
-        return set(), set(), set()
+        return set(), set(), set(), []
 
     rows = r.json()
     existing_archive_ids = {row["archive_id"] for row in rows if row.get("archive_id")}
     seen_tmdb_movies = set()
+    seen_title_years = set()
     seen_tmdb_series = set()
     movies_to_verify = []
     series_to_verify = []
+    author_promoted_rows = []
     rejected_count = 0
 
-    for row in rows:
+    # Sortiraj tako da izravni zapisi imaju prednost ispred autorskih ",tmdb-" duplikata
+    sorted_rows = sorted(rows, key=lambda x: (",tmdb-" in (x.get("archive_id") or ""), x.get("id") or 0))
+
+    for row in sorted_rows:
         ident = row["archive_id"]
         media_type = row.get("media_type") or "movie"
         tmdb_id = row.get("tmdb_id") or 0
@@ -890,7 +900,9 @@ def audit_and_dedupe_catalog():
                 rejected_count += 1
                 continue
             seen_tmdb_series.add(tv_id)
-            series_to_verify.append((row, tv_id))
+            eps = row.get("episodes") or []
+            if len(eps) < 2 or not (row.get("stream_url") or "").lower().endswith(".mp4"):
+                series_to_verify.append((row, tv_id))
             continue
 
         if media_type != "movie":
@@ -899,12 +911,32 @@ def audit_and_dedupe_catalog():
         if "Klasični crtići" in (row.get("genres") or []):
             continue
 
+        title_year_key = (normalize_for_exact_title_compare(row.get("title") or ""), row.get("release_year") or 0)
+
+        if tmdb_id > 0 and tmdb_id in seen_tmdb_movies:
+            supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+            rejected_count += 1
+            print(f"  [FALSE - duplikat tmdb_id={tmdb_id}] {row['title']} ({ident})", flush=True)
+            continue
+
+        if title_year_key[0] and title_year_key in seen_title_years:
+            supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+            rejected_count += 1
+            print(f"  [FALSE - duplikat naslova] {row['title']} ({ident})", flush=True)
+            continue
+
+        if ",tmdb-" in ident:
+            if tmdb_id > 0:
+                seen_tmdb_movies.add(tmdb_id)
+            if title_year_key[0]:
+                seen_title_years.add(title_year_key)
+            author_promoted_rows.append(row)
+            continue
+
         if tmdb_id > 0:
-            if tmdb_id in seen_tmdb_movies:
-                supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
-                rejected_count += 1
-                continue
             movies_to_verify.append(row)
+            if title_year_key[0]:
+                seen_title_years.add(title_year_key)
 
     def verify_existing_movie(row):
         ident = row["archive_id"]
@@ -913,30 +945,20 @@ def audit_and_dedupe_catalog():
         current_desc = (row.get("description_hr") or "").strip()
 
         tmdb_info = get_tmdb_movie_details(tmdb_id)
-        orig_lang = tmdb_info.get("original_language", "") if tmdb_info else ""
 
-        if ",tmdb-" in ident:
-            if not verify_stream_url_playable(current_url):
-                supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
-                return False, f"  [FALSE - nedostupan stream] {row['title']} ({ident})"
-
-            patch_payload = {}
-            if tmdb_info:
-                if not current_desc and tmdb_info["overview_hr"]:
-                    patch_payload["description_hr"] = tmdb_info["overview_hr"]
-                primary_genres = determine_primary_genres(
-                    tmdb_info["genre_ids"],
-                    tmdb_info["companies"],
-                    tmdb_info["orig_title"],
-                    tmdb_info["hr_title"],
-                    tmdb_info["overview_hr"]
-                )
-                if primary_genres != (row.get("genres") or []):
-                    patch_payload["genres"] = primary_genres
-            if patch_payload:
-                supabase_patch_row("catalog_items", row["id"], patch_payload)
+        if current_url.lower().endswith(".mp4") and current_desc and tmdb_info:
+            primary_genres = determine_primary_genres(
+                tmdb_info["genre_ids"],
+                tmdb_info["companies"],
+                tmdb_info["orig_title"],
+                tmdb_info["hr_title"],
+                tmdb_info["overview_hr"]
+            )
+            if primary_genres != (row.get("genres") or []):
+                supabase_patch_row("catalog_items", row["id"], {"genres": primary_genres})
             return True, None
 
+        orig_lang = tmdb_info.get("original_language", "") if tmdb_info else ""
         videos, arch_md = get_archive_item_details(ident, min_size_mb=20, allow_mkv=True)
         if not videos:
             supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
@@ -971,7 +993,7 @@ def audit_and_dedupe_catalog():
             supabase_patch_row("catalog_items", row["id"], patch_payload)
         return True, None
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         future_map = {pool.submit(verify_existing_movie, r_item): r_item for r_item in movies_to_verify}
         for fut in as_completed(future_map):
             r_item = future_map[fut]
@@ -984,18 +1006,7 @@ def audit_and_dedupe_catalog():
                     print(msg, flush=True)
 
     for row, tv_id in series_to_verify:
-        eps = row.get("episodes") or []
         tv_details = safe_get(f"{TMDB_BASE}/tv/{tv_id}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
-        if tv_details:
-            orig_name = tv_details.get("original_name") or tv_details.get("name") or row["title"]
-            hr_name = tv_details.get("name") or orig_name
-            g_ids = [g.get("id") for g in (tv_details.get("genres") or []) if g.get("id")]
-            correct_genres = determine_tv_primary_genres(g_ids, orig_name, hr_name)
-            if len(eps) >= 2 and verify_stream_url_playable(eps[0].get("url") or ""):
-                if correct_genres != (row.get("genres") or []):
-                    supabase_patch_row("catalog_items", row["id"], {"genres": correct_genres})
-                continue
-
         if not tv_details:
             continue
         orig_name = tv_details.get("original_name") or tv_details.get("name") or row["title"]
@@ -1016,39 +1027,103 @@ def audit_and_dedupe_catalog():
             })
 
     print(
-        f"  Revizija završena: {len(seen_tmdb_movies)} filmova, {len(seen_tmdb_series)} serija potvrđeno, {rejected_count} uklonjeno.",
+        f"  Revizija završena: {len(seen_tmdb_movies)} filmova, {len(seen_tmdb_series)} serija potvrđeno, {rejected_count} duplikata/neispravnih uklonjeno.",
         flush=True
     )
-    return existing_archive_ids, seen_tmdb_movies, seen_tmdb_series
+    return existing_archive_ids, seen_tmdb_movies, seen_tmdb_series, author_promoted_rows
 
 
-def tmdb_enrich_author_movie(title, year=0):
+def author_matches_tmdb_credits(author_name, details):
+    if not details:
+        return False
+    search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    tokens = [t for t in re.sub(r"[^\w\s]", " ", search_person.lower()).split() if len(t) >= 4]
+    if not tokens:
+        return False
+    surname = tokens[-1]
+    people = (details.get("directors") or []) + (details.get("all_crew") or []) + (details.get("cast") or [])
+    for p in people:
+        p_words = set(re.sub(r"[^\w\s]", " ", str(p).lower()).split())
+        if surname in p_words:
+            return True
+    return False
+
+
+def title_closely_matches(clean_title, orig_title, hr_title):
+    c_norm = normalize_for_exact_title_compare(clean_title)
+    if len(c_norm) < 2:
+        return False
+    for target in (orig_title, hr_title):
+        t_norm = normalize_for_exact_title_compare(target)
+        if not t_norm:
+            continue
+        if c_norm == t_norm:
+            return True
+        if len(c_norm) >= 4 and len(t_norm) >= 4 and (c_norm in t_norm or t_norm in c_norm):
+            return True
+    return False
+
+
+def tmdb_enrich_author_movie(title, year=0, author_name=""):
+    letters_only = re.sub(r"[^a-zA-Zčćžšđа-яА-Я]", "", title)
+    if len(letters_only) < 2:
+        return None
+
     params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR", "include_adult": "false"}
     if year > 0:
         params["year"] = year
     res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
     results = (res or {}).get("results", [])
+
     if not results and year > 0:
         params.pop("year")
         res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
         results = (res or {}).get("results", [])
+
     if not results:
         return None
 
-    item = results[0]
-    details = get_tmdb_movie_details(item["id"])
-    overview = details["overview_hr"] if details else (item.get("overview") or "").strip()
-    rel_date = (details["release_date"] if details else item.get("release_date")) or ""
+    best_match = None
+    best_details = None
+
+    for candidate in results[:5]:
+        rel_date = candidate.get("release_date") or ""
+        cand_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
+        if year > 0 and cand_year > 0 and abs(cand_year - year) > 2:
+            continue
+
+        details = get_tmdb_movie_details(candidate["id"])
+        if not details:
+            continue
+
+        orig_t = details["orig_title"]
+        hr_t = details["hr_title"]
+        credit_ok = author_matches_tmdb_credits(author_name, details)
+        title_ok = title_closely_matches(title, orig_t, hr_t)
+
+        if credit_ok and (title_ok or (year > 0 and cand_year > 0 and abs(cand_year - year) <= 1)):
+            best_match = candidate
+            best_details = details
+            break
+
+        if title_ok and year > 0 and cand_year > 0 and abs(cand_year - year) <= 1 and best_match is None:
+            best_match = candidate
+            best_details = details
+
+    if not best_match or not best_details:
+        return None
+
+    rel_date = best_details["release_date"] or best_match.get("release_date") or ""
     rel_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else year
-    poster_path = (details["poster_path"] if details else item.get("poster_path")) or ""
+    poster_path = best_details["poster_path"] or best_match.get("poster_path") or ""
 
     return {
-        "tmdb_id": item["id"],
-        "title": (details["hr_title"] if details else item.get("title")) or title,
+        "tmdb_id": best_match["id"],
+        "title": best_details["hr_title"] or best_match.get("title") or title,
         "release_year": rel_year,
-        "description_hr": overview,
+        "description_hr": best_details["overview_hr"],
         "poster_url": f"{TMDB_IMG_POSTER}{poster_path}" if poster_path else "",
-        "details": details
+        "details": best_details
     }
 
 
@@ -1062,8 +1137,8 @@ def fetch_wiki_bio(author_name):
     return ""
 
 
-def sync_authors(existing_archive_ids, seen_tmdb_movies):
-    print("2/8 Sinkronizacija 63 autora i promocija dostupnih dugometražnih filmova u žanrove...", flush=True)
+def sync_authors(existing_archive_ids, seen_tmdb_movies, author_promoted_rows):
+    print("2/8 Sinkronizacija i čišćenje 63 kolekcije autora...", flush=True)
     promoted_total = 0
 
     for idx, (author_name, archive_id) in enumerate(AUTHORS, start=1):
@@ -1123,9 +1198,10 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies):
 
         unique_movie_rows = {}
         promoted_for_author = 0
+        valid_catalog_arch_ids = set()
 
         for item in sorted(deduped.values(), key=lambda x: x["year"], reverse=True):
-            enriched = tmdb_enrich_author_movie(item["title"], item["year"])
+            enriched = tmdb_enrich_author_movie(item["title"], item["year"], author_name)
             final_title = enriched["title"] if enriched else item["title"]
             final_year = enriched["release_year"] if (enriched and enriched["release_year"]) else item["year"]
             dedup_key = (final_title.lower(), final_year)
@@ -1141,7 +1217,8 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies):
 
             tmdb_det = enriched.get("details") if enriched else None
             mid = enriched["tmdb_id"] if enriched else 0
-            if tmdb_det and mid > 0 and mid not in seen_tmdb_movies:
+            if tmdb_det and mid > 0:
+                catalog_arch_id = f"{archive_id},tmdb-{mid}"
                 tmdb_rt = tmdb_det["runtime"]
                 file_rt = item["duration_mins"]
                 is_feature_length = (file_rt >= 65) or (file_rt == 0 and tmdb_rt >= 65 and item["size_mb"] >= 250)
@@ -1167,43 +1244,50 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies):
                     and tmdb_det["poster_path"]
                     and verify_stream_url_playable(item["stream_url"])
                 ):
-                    catalog_arch_id = f"{archive_id},tmdb-{mid}"
-                    genres = determine_primary_genres(
-                        tmdb_det["genre_ids"],
-                        tmdb_det["companies"],
-                        tmdb_det["orig_title"],
-                        tmdb_det["hr_title"],
-                        tmdb_det["overview_hr"]
-                    )
-                    cat_row = {
-                        "archive_id": catalog_arch_id,
-                        "tmdb_id": mid,
-                        "title": tmdb_det["hr_title"],
-                        "media_type": "movie",
-                        "genres": genres,
-                        "release_year": final_year,
-                        "rating": round(tmdb_det["vote_average"], 1),
-                        "popularity_score": tmdb_det["popularity"] * 100.0 + (final_year * 2),
-                        "description_hr": tmdb_det["overview_hr"],
-                        "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}",
-                        "backdrop_url": f"{TMDB_IMG_BACKDROP}{tmdb_det['backdrop_path']}" if tmdb_det["backdrop_path"] else "",
-                        "stream_url": item["stream_url"],
-                        "is_featured": tmdb_det["vote_average"] >= 8.0 and 16 not in tmdb_det["genre_ids"],
-                        "is_valid": True,
-                        "tmdb_runtime": tmdb_rt,
-                        "archive_runtime": file_rt
-                    }
-                    supabase_upsert("catalog_items", [cat_row], "archive_id")
-                    seen_tmdb_movies.add(mid)
-                    existing_archive_ids.add(catalog_arch_id)
-                    promoted_for_author += 1
-                    promoted_total += 1
+                    valid_catalog_arch_ids.add(catalog_arch_id)
+                    if mid not in seen_tmdb_movies:
+                        genres = determine_primary_genres(
+                            tmdb_det["genre_ids"],
+                            tmdb_det["companies"],
+                            tmdb_det["orig_title"],
+                            tmdb_det["hr_title"],
+                            tmdb_det["overview_hr"]
+                        )
+                        cat_row = {
+                            "archive_id": catalog_arch_id,
+                            "tmdb_id": mid,
+                            "title": tmdb_det["hr_title"],
+                            "media_type": "movie",
+                            "genres": genres,
+                            "release_year": final_year,
+                            "rating": round(tmdb_det["vote_average"], 1),
+                            "popularity_score": tmdb_det["popularity"] * 100.0 + (final_year * 2),
+                            "description_hr": tmdb_det["overview_hr"],
+                            "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}",
+                            "backdrop_url": f"{TMDB_IMG_BACKDROP}{tmdb_det['backdrop_path']}" if tmdb_det["backdrop_path"] else "",
+                            "stream_url": item["stream_url"],
+                            "is_featured": tmdb_det["vote_average"] >= 8.0 and 16 not in tmdb_det["genre_ids"],
+                            "is_valid": True,
+                            "tmdb_runtime": tmdb_rt,
+                            "archive_runtime": file_rt
+                        }
+                        supabase_upsert("catalog_items", [cat_row], "archive_id")
+                        seen_tmdb_movies.add(mid)
+                        existing_archive_ids.add(catalog_arch_id)
+                        promoted_for_author += 1
+                        promoted_total += 1
 
+        for old_row in author_promoted_rows:
+            if old_row["archive_id"].startswith(f"{archive_id},tmdb-") and old_row["archive_id"] not in valid_catalog_arch_ids:
+                supabase_patch_row("catalog_items", old_row["id"], {"is_valid": False})
+
+        supabase_delete_author_movies(author_db_id)
         movie_rows = list(unique_movie_rows.values())
         if movie_rows:
             supabase_upsert("author_movies", movie_rows, "author_id,title,release_year")
+
         print(
-            f"  [{idx}/{len(AUTHORS)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} dodano u žanrove)",
+            f"  [{idx}/{len(AUTHORS)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} u žanrove)",
             flush=True
         )
 
@@ -1275,7 +1359,8 @@ def search_verified_archive_for_movie(tmdb_details, year):
 
 
 def sync_tmdb_movies_by_genre(seen_tmdb_movies):
-    print("3/8 Pretraga Top 500 igranih, Top 400 animiranih filmova i svih žanrova...", flush=True)
+    """Duboka pretraga TMDB-a (25 stranica po svakom žanru) za punjenje svih žanrova na 250+ naslova."""
+    print("3/8 Duboka pretraga TMDB-a po svim žanrovima (cilj: 250+ filmova po žanru)...", flush=True)
     candidates = {}
 
     for sort_by in ["vote_count.desc", "popularity.desc"]:
@@ -1287,7 +1372,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     "language": "hr-HR",
                     "without_genres": "16,99",
                     "include_adult": "false",
-                    "vote_count.gte": 400,
+                    "vote_count.gte": 300,
                     "sort_by": sort_by,
                     "page": page
                 }
@@ -1297,16 +1382,17 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                 if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     candidates[mid] = (m, None)
 
-    for page in range(1, 16):
+    for page in range(1, 21):
         data = safe_get(f"{TMDB_BASE}/movie/top_rated", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
         for m in (data or {}).get("results", []):
             mid = m["id"]
             if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                 candidates[mid] = (m, None)
 
-    for tmdb_genre_id, hr_genre_label in TMDB_DISCOVER_GENRE_SEEDS:
-        for sort_by in ["popularity.desc", "vote_count.desc"]:
-            for page in range(1, 7):
+    # Duboka pretraga po svakom pojedinačnom žanru (25 stranica x 3 poretka)
+    for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
+        for sort_by in ["popularity.desc", "vote_count.desc", "vote_average.desc"]:
+            for page in range(1, 26):
                 data = safe_get(
                     f"{TMDB_BASE}/discover/movie",
                     {
@@ -1315,7 +1401,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                         "with_genres": tmdb_genre_id,
                         "without_genres": "16,99",
                         "include_adult": "false",
-                        "vote_count.gte": 150,
+                        "vote_count.gte": min_votes,
                         "sort_by": sort_by,
                         "page": page
                     }
@@ -1325,6 +1411,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                         candidates[mid] = (m, hr_genre_label)
 
+    # Animirani dugometražni filmovi
     for sort_by in ["popularity.desc", "vote_count.desc"]:
         for page in range(1, 21):
             data = safe_get(
@@ -1334,7 +1421,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     "language": "hr-HR",
                     "with_genres": "16",
                     "include_adult": "false",
-                    "vote_count.gte": 100,
+                    "vote_count.gte": 80,
                     "sort_by": sort_by,
                     "page": page
                 }
@@ -1344,7 +1431,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                 if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     candidates[mid] = (m, None)
 
-    print(f"  Ukupno {len(candidates)} jedinstvenih TMDB kandidata za provjeru na Archive.org...", flush=True)
+    print(f"  Ukupno {len(candidates)} novih TMDB kandidata za provjeru na Archive.org...", flush=True)
 
     def process_movie(item):
         m, hint_genre = item
@@ -1387,9 +1474,9 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
             "archive_runtime": arch_mins
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        return f"  + TMDB->Archive: {row['title']} ({year}) -> {genres[0]}"
+        return f"  + TMDB->Archive: {row['title']} ({year}) -> {', '.join(genres)}"
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         futures = [pool.submit(process_movie, item) for item in candidates.values()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1398,19 +1485,19 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
 
 
 def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
-    print("4/8 Izravno rudarenje filmova iz Archive.org kolekcija...", flush=True)
+    print("4/8 Izravno rudarenje žanrovskih kolekcija na Archive.org...", flush=True)
     archive_docs = {}
 
     for col in ARCHIVE_FEATURE_COLLECTIONS + ["animationandcartoons"]:
         query = f"mediatype:movies AND collection:{col} AND -collection:television AND -subject:trailer AND -subject:news"
-        for page in [1, 2]:
+        for page in [1, 2, 3, 4, 5]:
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
                     "q": query,
                     "fl[]": ["identifier", "title", "year", "downloads"],
                     "sort[]": "downloads desc",
-                    "rows": 150,
+                    "rows": 200,
                     "page": page,
                     "output": "json"
                 }
@@ -1513,9 +1600,9 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
             "archive_runtime": arch_mins
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        return f"  + Archive->TMDB: {row['title']} ({rel_year}) -> {genres[0]}"
+        return f"  + Archive->TMDB: {row['title']} ({rel_year}) -> {', '.join(genres)}"
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         futures = [pool.submit(process_archive_doc, doc) for doc in archive_docs.values()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1838,7 +1925,7 @@ def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
 
 
 def sync_tmdb_series(seen_tmdb_series):
-    print("6/8 Duboka TMDB pretraga svih žanrova serija (Krimi, Sci-Fi, Avantura, Komedije, Drama)...", flush=True)
+    print("6/8 Duboka TMDB pretraga svih žanrova serija...", flush=True)
     candidate_shows = {}
 
     for endpoint in ["tv/popular", "tv/top_rated"]:
@@ -1848,7 +1935,6 @@ def sync_tmdb_series(seen_tmdb_series):
                 if s["id"] not in seen_tmdb_series:
                     candidate_shows[s["id"]] = s
 
-    # 1. Klasične serije 1960. - 1999. po svim žanrovima
     for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
         for sort_by in ["popularity.desc", "vote_count.desc"]:
             for page in range(1, 13):
@@ -1869,7 +1955,6 @@ def sync_tmdb_series(seen_tmdb_series):
                     if s["id"] not in seen_tmdb_series:
                         candidate_shows[s["id"]] = s
 
-    # 2. Novije serije 2000. - danas po svim žanrovima
     for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
         for sort_by in ["popularity.desc", "vote_count.desc"]:
             for page in range(1, 11):
@@ -1889,14 +1974,13 @@ def sync_tmdb_series(seen_tmdb_series):
                     if s["id"] not in seen_tmdb_series:
                         candidate_shows[s["id"]] = s
 
-    # 3. Izravna pretraga 250+ kultnih naslova iz svih žanrova
     for seed_title in CLASSIC_TV_SEED_TITLES:
         res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR"})
         first = ((res or {}).get("results") or [None])[0]
         if first and first["id"] not in seen_tmdb_series:
             candidate_shows[first["id"]] = first
 
-    print(f"  Ukupno {len(candidate_shows)} TMDB serija za provjeru na Archive.org...", flush=True)
+    print(f"  Ukupno {len(candidate_shows)} novih TMDB serija za provjeru na Archive.org...", flush=True)
 
     def process_series(item):
         tv_id, s = item
@@ -1953,7 +2037,7 @@ def sync_tmdb_series(seen_tmdb_series):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + TMDB->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(process_series, item) for item in candidate_shows.items()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1962,7 +2046,7 @@ def sync_tmdb_series(seen_tmdb_series):
 
 
 def sync_archive_tv_collections(seen_tmdb_series):
-    print("7/8 Izravno rudarenje TV kolekcija na Archive.org...", flush=True)
+    print("7/8 Paralelno rudarenje TV kolekcija na Archive.org...", flush=True)
     discovered_cores = {}
 
     for col in ARCHIVE_TV_COLLECTIONS:
@@ -1991,30 +2075,30 @@ def sync_archive_tv_collections(seen_tmdb_series):
 
     print(f"  Pronađeno {len(discovered_cores)} potencijalnih naslova serija u TV kolekcijama...", flush=True)
 
-    for core_title in discovered_cores:
+    def process_discovered_core(core_title):
         res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": core_title, "language": "hr-HR"})
         hit = ((res or {}).get("results") or [None])[0]
         if not hit:
-            continue
+            return None
 
         tv_id = hit["id"]
         with state_lock:
             if tv_id in seen_tmdb_series:
-                continue
+                return None
 
         orig_name = hit.get("original_name") or hit.get("name") or ""
         hr_name = hit.get("name") or orig_name
         valid_cores = {extract_series_core_title(orig_name), extract_series_core_title(hr_name)}
         if not series_core_matches(core_title, valid_cores):
-            continue
+            return None
 
         episodes = aggregate_series_from_archive(tv_id, orig_name, hr_name)
         if len(episodes) < 2:
-            continue
+            return None
 
         with state_lock:
             if tv_id in seen_tmdb_series:
-                continue
+                return None
             seen_tmdb_series.add(tv_id)
 
         first_air = hit.get("first_air_date") or ""
@@ -2048,7 +2132,14 @@ def sync_archive_tv_collections(seen_tmdb_series):
             "archive_runtime": 0
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        print(f"  + ArchiveTV->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}", flush=True)
+        return f"  + ArchiveTV->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(process_discovered_core, c) for c in discovered_cores]
+        for fut in as_completed(futures):
+            msg = fut.result()
+            if msg:
+                print(msg, flush=True)
 
 
 def sync_concerts():
@@ -2136,8 +2227,8 @@ def sync_concerts():
 
 
 if __name__ == "__main__":
-    existing_ids, seen_tmdb_m, seen_tmdb_s = audit_and_dedupe_catalog()
-    sync_authors(existing_ids, seen_tmdb_m)
+    existing_ids, seen_tmdb_m, seen_tmdb_s, author_promos = audit_and_dedupe_catalog()
+    sync_authors(existing_ids, seen_tmdb_m, author_promos)
     sync_tmdb_movies_by_genre(seen_tmdb_m)
     sync_archive_feature_collections(existing_ids, seen_tmdb_m)
     sync_classic_short_cartoons()
