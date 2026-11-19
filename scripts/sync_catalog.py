@@ -16,7 +16,7 @@ TMDB_IMG_BACKDROP = "https://image.tmdb.org/t/p/w1280"
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "MediaStudioCatalogSync/1.1 (AndroidTV App; contact@mediastudio.local)"
+    "User-Agent": "MediaStudioCatalogSync/1.3 (AndroidTV App; contact@mediastudio.local)"
 })
 
 SB_HEADERS = {
@@ -31,10 +31,11 @@ SPAM_OR_FAKE_KEYWORDS = [
     "joyblix", "for the full movie or to download", "superfans", "bestof", "best of",
     "ending explained", "movie review", "film review", "reaction", "gameplay",
     "walkthrough", "playthrough", "vtuber", "podcast", "trailer", "teaser",
-    "behind the scenes", "fan made", "fan-made", "parody", "recap", "soundtrack only"
+    "behind the scenes", "fan made", "fan-made", "parody", "recap", "soundtrack only",
+    "promo", "commercial", "bloopers", "deleted scenes"
 ]
 
-TMDB_GENRE_MAP = {
+TMDB_MOVIE_GENRE_MAP = {
     28: "Akcija i avantura",
     12: "Akcija i avantura",
     16: "Animirani klasici",
@@ -49,10 +50,35 @@ TMDB_GENRE_MAP = {
     878: "Sci-Fi klasici",
     53: "Triler i misterija",
     10752: "Ratni",
-    37: "Vestern",
-    10759: "Avanturističke serije",
-    10765: "Sci-Fi i fantastika serije"
+    37: "Vestern"
 }
+
+TMDB_TV_GENRE_MAP = {
+    80: "Krimi, detektivske i triler serije",
+    9648: "Krimi, detektivske i triler serije",
+    53: "Krimi, detektivske i triler serije",
+    10765: "Sci-Fi i fantastika serije",
+    878: "Sci-Fi i fantastika serije",
+    14: "Sci-Fi i fantastika serije",
+    35: "Komedije i sitcomi",
+    10759: "Avanturističke serije",
+    12: "Avanturističke serije",
+    28: "Avanturističke serije",
+    10768: "Avanturističke serije"
+}
+
+CLASSIC_TV_SEED_TITLES = [
+    "The Twilight Zone", "Alfred Hitchcock Presents", "Columbo", "The X-Files",
+    "Star Trek", "Star Trek: The Next Generation", "Doctor Who", "Twin Peaks",
+    "Mr. Bean", "Only Fools and Horses", "Fawlty Towers", "Sherlock",
+    "Band of Brothers", "Freaks and Geeks", "The Sopranos", "Seinfeld",
+    "3rd Rock from the Sun", "Everybody Loves Raymond", "ALF", "Battlestar Galactica",
+    "Buck Rogers in the 25th Century", "The Outer Limits", "Tales from the Crypt",
+    "Agatha Christie's Poirot", "Blackadder", "Monty Python's Flying Circus",
+    "Batman", "The Addams Family", "The Munsters", "I Love Lucy",
+    "The Saint", "The Prisoner", "Space: 1999", "Red Dwarf",
+    "Babylon 5", "Farscape", "Stargate SG-1", "Buffy the Vampire Slayer", "Firefly"
+]
 
 AUTHORS = [
     ("Alfred Hitchcock", "filmography-alfred-hitchcock"),
@@ -185,8 +211,17 @@ def parse_duration_minutes(raw_val):
         return 0
 
 
+def format_duration_text(mins):
+    if mins <= 0:
+        return ""
+    if mins >= 60:
+        return f"{mins // 60}h {mins % 60:02d}m"
+    return f"{mins} min"
+
+
 def clean_filename_to_title(filename):
-    name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", filename, flags=re.IGNORECASE)
+    base = filename.rsplit("/", 1)[-1]
+    name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
     year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
     year = int(year_match.group(1)) if year_match else 0
 
@@ -204,8 +239,7 @@ def clean_filename_to_title(filename):
     return clean.strip(), year
 
 
-def get_archive_item_details(identifier, min_size_mb=40):
-    """Dohvaća .mp4 datoteke, stvarno trajanje u minutama i metapodatke s Archive.org."""
+def get_archive_item_details(identifier, min_size_mb=35):
     time.sleep(0.25)
     meta = safe_get(f"https://archive.org/metadata/{identifier}")
     if not meta or meta.get("is_dark"):
@@ -220,7 +254,7 @@ def get_archive_item_details(identifier, min_size_mb=40):
         fname = f.get("name", "")
         if not fname.lower().endswith(".mp4"):
             continue
-        if any(skip in fname.lower() for skip in ["trailer", "sample", "teaser", "preview", "bestof", "superfans"]):
+        if any(skip in fname.lower() for skip in ["trailer", "sample", "teaser", "preview", "bestof", "superfans", "promo"]):
             continue
         try:
             size_mb = int(f.get("size", 0)) / (1024 * 1024)
@@ -230,13 +264,14 @@ def get_archive_item_details(identifier, min_size_mb=40):
             continue
 
         file_mins = parse_duration_minutes(f.get("length")) or meta_runtime
-        encoded_name = urllib.parse.quote(fname)
+        encoded_name = "/".join(urllib.parse.quote(p) for p in fname.split("/"))
         stream_url = f"https://archive.org/download/{identifier}/{encoded_name}"
         mp4s.append({
             "filename": fname,
             "size_mb": size_mb,
             "duration_mins": file_mins,
-            "stream_url": stream_url
+            "stream_url": stream_url,
+            "is_derivative": ".ia.mp4" in fname.lower() or f.get("source") == "derivative"
         })
 
     return mp4s, md
@@ -270,7 +305,7 @@ def is_future_release(release_date_str):
         return False
 
 
-def validate_match(identifier, archive_md, archive_mins, tmdb_runtime, tmdb_status, tmdb_release_date, expected_titles, is_series=False, episode_count=0):
+def validate_movie_match(identifier, archive_md, archive_mins, tmdb_runtime, tmdb_status, tmdb_release_date, expected_titles):
     ident_lower = identifier.lower()
     if ident_lower.startswith(("youtube-", "yt-")):
         return False, "youtube_rip"
@@ -286,18 +321,12 @@ def validate_match(identifier, archive_md, archive_mins, tmdb_runtime, tmdb_stat
     if any(kw in combined_meta for kw in SPAM_OR_FAKE_KEYWORDS):
         return False, "spam_or_non_movie_keyword"
 
-    if is_series:
-        if episode_count < 2:
-            return False, f"too_few_episodes ({episode_count})"
-        return True, "ok_series"
-
     if tmdb_status and tmdb_status != "Released":
         return False, f"unreleased_status ({tmdb_status})"
 
     if is_future_release(tmdb_release_date):
         return False, f"future_release ({tmdb_release_date})"
 
-    # Provjera podudaranja riječi naslova
     arch_title_norm = re.sub(r"[^\w\s]", " ", f"{raw_arch_title} {identifier}".lower())
     title_matched = False
     for cand in expected_titles:
@@ -310,7 +339,6 @@ def validate_match(identifier, archive_md, archive_mins, tmdb_runtime, tmdb_stat
     if expected_titles and not title_matched:
         return False, "title_mismatch"
 
-    # Provjera stvarnog trajanja filma (80% - 125% TMDB trajanja)
     if tmdb_runtime > 0:
         if archive_mins <= 0:
             return False, f"unknown_archive_runtime (tmdb={tmdb_runtime}m)"
@@ -326,9 +354,9 @@ def validate_match(identifier, archive_md, archive_mins, tmdb_runtime, tmdb_stat
 
 
 def audit_existing_catalog():
-    print("1/5 Provjera trajanja i valjanosti postojećih naslova u Supabaseu...", flush=True)
+    print("1/5 Revizija baze (brisanje starih neobjedinjenih serija i provjera filmova)...", flush=True)
     r = session.get(
-        f"{SUPABASE_URL}/rest/v1/catalog_items?select=id,archive_id,tmdb_id,title,media_type,episodes&limit=2000",
+        f"{SUPABASE_URL}/rest/v1/catalog_items?select=id,archive_id,tmdb_id,title,media_type&limit=2500",
         headers=SB_HEADERS,
         timeout=20
     )
@@ -337,72 +365,265 @@ def audit_existing_catalog():
         return
 
     rows = r.json()
-    valid_count = 0
-    invalid_count = 0
-
     for row in rows:
         ident = row["archive_id"]
         media_type = row.get("media_type") or "movie"
-        tmdb_id = row.get("tmdb_id") or 0
+
+        # Sve stare serije koje nisu objedinjene pod tmdb-tv-<id> označavamo nevažećima
+        if media_type == "series":
+            if not ident.startswith("tmdb-tv-"):
+                supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+                print(f"  [FALSE - stara neobjedinjena serija] {row['title']} ({ident})", flush=True)
+            continue
 
         if media_type == "concert":
             continue
 
+        tmdb_id = row.get("tmdb_id") or 0
         mp4s, arch_md = get_archive_item_details(ident, min_size_mb=20)
         if not mp4s:
-            supabase_patch_row("catalog_items", row["id"], {
-                "is_valid": False,
-                "archive_runtime": 0
-            })
-            invalid_count += 1
-            print(f"  [FALSE - nedostupan] {row['title']}", flush=True)
+            supabase_patch_row("catalog_items", row["id"], {"is_valid": False, "archive_runtime": 0})
             continue
 
         best = max(mp4s, key=lambda x: x["size_mb"])
         arch_mins = best["duration_mins"]
-
-        if media_type == "series":
-            eps = row.get("episodes") or []
-            ok, reason = validate_match(
-                ident, arch_md, arch_mins, 0, "Released", "",
-                [row["title"]], is_series=True, episode_count=len(eps)
-            )
-            supabase_patch_row("catalog_items", row["id"], {
-                "is_valid": ok,
-                "archive_runtime": arch_mins
-            })
-            if ok:
-                valid_count += 1
-            else:
-                invalid_count += 1
-                print(f"  [FALSE - {reason}] Serija: {row['title']}", flush=True)
-            continue
-
         tmdb_info = get_tmdb_movie_details(tmdb_id) if tmdb_id else None
         tmdb_runtime = tmdb_info["runtime"] if tmdb_info else 0
         tmdb_status = tmdb_info["status"] if tmdb_info else ""
         tmdb_rel = tmdb_info["release_date"] if tmdb_info else ""
 
-        ok, reason = validate_match(
-            ident, arch_md, arch_mins, tmdb_runtime, tmdb_status, tmdb_rel,
-            [row["title"]], is_series=False
+        ok, reason = validate_movie_match(
+            ident, arch_md, arch_mins, tmdb_runtime, tmdb_status, tmdb_rel, [row["title"]]
         )
-        patch_data = {
+        supabase_patch_row("catalog_items", row["id"], {
             "is_valid": ok,
             "tmdb_runtime": tmdb_runtime,
             "archive_runtime": arch_mins
+        })
+        if not ok:
+            print(f"  [FALSE - {reason}] {row['title']}", flush=True)
+
+
+def parse_season_and_episode(item_title, filename, total_seasons_hint=0):
+    """Spaja kontekst naziva stavke na Archive.org i naziva datoteke u (sezona, epizoda)."""
+    combined = f"{item_title} / {filename}"
+
+    # 1. Eksplicitni S01E02 ili 1x02 u kombiniranom tekstu
+    for pat in [
+        r"(?i)\bS(\d{1,2})\s*[-_.]?\s*E(\d{1,3})\b",
+        r"(?i)\b(\d{1,2})x(\d{1,3})\b",
+        r"(?i)Season\s*(\d{1,2}).*?(?:Episode|Ep\.?|E)\s*(\d{1,3})\b",
+        r"(?i)Sezona\s*(\d{1,2}).*?(?:Epizoda|Ep\.?|E)\s*(\d{1,3})\b"
+    ]:
+        m = re.search(pat, combined)
+        if m:
+            s = int(m.group(1))
+            e = int(m.group(2))
+            if 1 <= s <= 50 and 1 <= e <= 300:
+                return s, e
+
+    # 2. Sezona iz naziva stavke / mape, a epizoda iz naziva datoteke
+    season_num = 0
+    for s_pat in [
+        r"(?i)\bSeason\s*(\d{1,2})\b",
+        r"(?i)\bSezona\s*(\d{1,2})\b",
+        r"(?i)\bSeries\s*(\d{1,2})\b",
+        r"(?i)\bS(\d{1,2})\b"
+    ]:
+        sm = re.search(s_pat, f"{item_title} / {filename.rsplit('/', 1)[0] if '/' in filename else ''}")
+        if sm:
+            val = int(sm.group(1))
+            if 1 <= val <= 50:
+                season_num = val
+                break
+
+    base_fname = filename.rsplit("/", 1)[-1]
+    ep_num = 0
+    for e_pat in [
+        r"(?i)\b(?:Episode|Epizoda|Ep\.?|E|Part)\s*(\d{1,3})\b",
+        r"^\s*0*(\d{1,2})\s*[-_.]+\s*[A-Za-z]"
+    ]:
+        em = re.search(e_pat, base_fname)
+        if em:
+            val = int(em.group(1))
+            if 1 <= val <= 300:
+                ep_num = val
+                break
+
+    if season_num > 0 and ep_num > 0:
+        return season_num, ep_num
+
+    # 3. Ako serija ima samo 1 sezonu na TMDB-u, a pronađen je broj epizode
+    if total_seasons_hint == 1 and ep_num > 0:
+        return 1, ep_num
+
+    return 0, 0
+
+
+def fetch_tmdb_series_guide(tmdb_id, season_numbers):
+    """Dohvaća službene nazive epizoda i očekivano trajanje s TMDB-a za pronađene sezone."""
+    tv_details = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
+    if not tv_details:
+        return {}, 0, "", 1
+
+    overview_hr = (tv_details.get("overview") or "").strip()
+    if not overview_hr:
+        en_tv = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+        overview_hr = ((en_tv or {}).get("overview") or "").strip()
+
+    runtimes = tv_details.get("episode_run_time") or []
+    avg_runtime = int(runtimes[0]) if runtimes else 0
+    num_seasons = int(tv_details.get("number_of_seasons") or 1)
+
+    episode_guide = {}
+    for s_num in sorted(set(season_numbers)):
+        if s_num < 1 or s_num > 50:
+            continue
+        hr_season = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}/season/{s_num}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
+        en_season = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}/season/{s_num}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+
+        en_map = {}
+        for ep in (en_season or {}).get("episodes", []):
+            en_map[ep.get("episode_number")] = (
+                (ep.get("name") or "").strip(),
+                int(ep.get("runtime") or avg_runtime)
+            )
+
+        for ep in (hr_season or {}).get("episodes", []):
+            ep_no = ep.get("episode_number")
+            hr_name = (ep.get("name") or "").strip()
+            en_name, ep_rt = en_map.get(ep_no, ("", avg_runtime))
+            final_ep_name = hr_name if (hr_name and not hr_name.lower().startswith("epizoda ")) else (en_name or hr_name)
+            episode_guide[(s_num, ep_no)] = (final_ep_name, ep_rt or avg_runtime)
+
+        if not hr_season and en_map:
+            for ep_no, (en_name, ep_rt) in en_map.items():
+                episode_guide[(s_num, ep_no)] = (en_name, ep_rt or avg_runtime)
+
+    return episode_guide, avg_runtime, overview_hr, num_seasons
+
+
+def aggregate_series_from_archive(tmdb_id, orig_name, hr_name):
+    """Prikuplja sve razbacane sezone i epizode iste serije s Archive.org-a i slaže ih u jednu cjelinu."""
+    clean_q = re.sub(r"[^\w\s]", " ", orig_name).strip()
+    if len(clean_q) < 3:
+        return []
+
+    # Pretraga bez ograničenja na godinu prve sezone kako bismo uhvatili sve sezone (S01..S10)
+    query = f'title:"{clean_q}" AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review'
+    data = safe_get(
+        "https://archive.org/advancedsearch.php",
+        params={
+            "q": query,
+            "fl[]": ["identifier", "title", "downloads"],
+            "sort[]": "downloads desc",
+            "rows": 45,
+            "output": "json"
         }
-        if tmdb_info and tmdb_info["overview_hr"]:
-            patch_data["description_hr"] = tmdb_info["overview_hr"]
+    )
+    docs = (data or {}).get("response", {}).get("docs", [])
+    if not docs:
+        return []
 
-        supabase_patch_row("catalog_items", row["id"], patch_data)
-        if ok:
-            valid_count += 1
-        else:
-            invalid_count += 1
-            print(f"  [FALSE - {reason}] {row['title']} ({ident})", flush=True)
+    norm_series = re.sub(r"[^\w\s]", " ", orig_name.lower()).strip()
+    norm_series_words = [w for w in norm_series.split() if len(w) >= 2]
+    phrase_regex = re.compile(rf"\b{re.escape(norm_series)}\b")
 
-    print(f"  Rezultat revizije: {valid_count} ispravnih, {invalid_count} označeno kao FALSE.", flush=True)
+    # Prikupljanje svih kandidatskih datoteka iz svih pronađenih stavki
+    tv_basic = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+    total_seasons_hint = int((tv_basic or {}).get("number_of_seasons") or 1)
+
+    raw_candidates = []
+    detected_seasons = set()
+
+    for doc in docs:
+        ident = doc.get("identifier") or ""
+        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+            continue
+        doc_title = doc.get("title") or ident
+        if isinstance(doc_title, list):
+            doc_title = " ".join(str(x) for x in doc_title)
+
+        norm_doc = re.sub(r"[^\w\s]", " ", f"{doc_title} {ident}".lower())
+        if any(kw in norm_doc for kw in SPAM_OR_FAKE_KEYWORDS):
+            continue
+
+        # Provjera da stavka stvarno pripada toj seriji
+        if not phrase_regex.search(norm_doc):
+            if len(norm_series_words) < 2 or not all(w in norm_doc.split() for w in norm_series_words):
+                continue
+
+        mp4s, arch_md = get_archive_item_details(ident, min_size_mb=35)
+        if not mp4s:
+            continue
+
+        item_title_meta = arch_md.get("title") or doc_title
+        if isinstance(item_title_meta, list):
+            item_title_meta = item_title_meta[0]
+
+        for m in mp4s:
+            s_num, e_num = parse_season_and_episode(str(item_title_meta), m["filename"], total_seasons_hint)
+            if s_num > 0 and e_num > 0:
+                detected_seasons.add(s_num)
+                raw_candidates.append({
+                    "season": s_num,
+                    "episode": e_num,
+                    "filename": m["filename"],
+                    "size_mb": m["size_mb"],
+                    "duration_mins": m["duration_mins"],
+                    "stream_url": m["stream_url"],
+                    "is_derivative": m["is_derivative"]
+                })
+
+    if len(raw_candidates) < 2:
+        return []
+
+    # Dohvati TMDB vodič za sve otkrivene sezone
+    episode_guide, avg_runtime, _, _ = fetch_tmdb_series_guide(tmdb_id, detected_seasons)
+
+    # Deduplikacija po (sezona, epizoda) uz provjeru trajanja epizode
+    best_by_se = {}
+    for cand in raw_candidates:
+        key = (cand["season"], cand["episode"])
+        official_name, expected_rt = episode_guide.get(key, ("", avg_runtime))
+        dur = cand["duration_mins"]
+
+        # Odbaci prekratke najave (< 12 min) ili cjelosezonske kompilacije (> 2.2x trajanja epizode)
+        if dur > 0:
+            if dur < 12:
+                continue
+            if expected_rt > 0 and (dur < int(expected_rt * 0.55) or dur > int(expected_rt * 2.2)):
+                continue
+
+        # Bodovanje kvalitete kopije: prednost originalnom MP4 (ne .ia.mp4) i većoj datoteci
+        quality_score = cand["size_mb"] + (500.0 if not cand["is_derivative"] else 0.0)
+        if key not in best_by_se or quality_score > best_by_se[key]["quality_score"]:
+            clean_file_title, _ = clean_filename_to_title(cand["filename"])
+            ep_title_clean = official_name if official_name else (clean_file_title or f"Epizoda {cand['episode']}")
+            code_prefix = f"S{cand['season']:02d}E{cand['episode']:02d}"
+            display_title = f"{code_prefix} - {ep_title_clean}" if not ep_title_clean.upper().startswith(code_prefix) else ep_title_clean
+
+            best_by_se[key] = {
+                "season": cand["season"],
+                "episode": cand["episode"],
+                "title": display_title,
+                "url": cand["stream_url"],
+                "duration": format_duration_text(dur),
+                "quality_score": quality_score
+            }
+
+    sorted_episodes = [
+        {
+            "season": v["season"],
+            "episode": v["episode"],
+            "title": v["title"],
+            "url": v["url"],
+            "duration": v["duration"]
+        }
+        for _, v in sorted(best_by_se.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+
+    return sorted_episodes if len(sorted_episodes) >= 2 else []
 
 
 def search_verified_archive_for_movie(orig_title, hr_title, year, tmdb_runtime, tmdb_status, tmdb_rel):
@@ -443,9 +664,8 @@ def search_verified_archive_for_movie(orig_title, hr_title, year, tmdb_runtime, 
         best = max(mp4s, key=lambda x: x["size_mb"])
         arch_mins = best["duration_mins"]
 
-        ok, _ = validate_match(
-            ident, arch_md, arch_mins, tmdb_runtime, tmdb_status, tmdb_rel,
-            expected_titles, is_series=False
+        ok, _ = validate_movie_match(
+            ident, arch_md, arch_mins, tmdb_runtime, tmdb_status, tmdb_rel, expected_titles
         )
         if ok:
             return ident, best["stream_url"], arch_mins
@@ -453,83 +673,8 @@ def search_verified_archive_for_movie(orig_title, hr_title, year, tmdb_runtime, 
     return None, None, 0
 
 
-def search_verified_archive_for_series(orig_name, hr_name, year):
-    time.sleep(0.25)
-    clean_q = re.sub(r"[^\w\s]", " ", orig_name).strip()
-    if len(clean_q) < 2:
-        return None, None, []
-    year_clause = f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else ""
-    query = f'title:"{clean_q}"{year_clause} AND mediatype:movies AND -subject:trailer AND -subject:news'
-    data = safe_get(
-        "https://archive.org/advancedsearch.php",
-        params={
-            "q": query,
-            "fl[]": ["identifier", "title", "downloads"],
-            "sort[]": "downloads desc",
-            "rows": 6,
-            "output": "json"
-        }
-    )
-    docs = (data or {}).get("response", {}).get("docs", [])
-    for doc in docs:
-        ident = doc.get("identifier")
-        if not ident or ident.lower().startswith(("youtube-", "yt-")):
-            continue
-        mp4s, arch_md = get_archive_item_details(ident, min_size_mb=40)
-        if len(mp4s) < 2:
-            continue
-        mp4s.sort(key=lambda x: x["filename"])
-        episodes = [
-            {"title": clean_filename_to_title(m["filename"])[0] or f"Epizoda {i+1}", "url": m["stream_url"]}
-            for i, m in enumerate(mp4s)
-        ]
-        ok, _ = validate_match(
-            ident, arch_md, mp4s[0]["duration_mins"], 0, "Released", "",
-            [orig_name, hr_name], is_series=True, episode_count=len(episodes)
-        )
-        if ok:
-            return ident, mp4s[0]["stream_url"], episodes
-    return None, None, []
-
-
-def tmdb_enrich_movie(title, year=0):
-    params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR"}
-    if year > 0:
-        params["year"] = year
-    res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
-    results = (res or {}).get("results", [])
-    if not results and year > 0:
-        params.pop("year")
-        res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
-        results = (res or {}).get("results", [])
-    if not results:
-        return None
-
-    item = results[0]
-    details = get_tmdb_movie_details(item["id"])
-    overview = details["overview_hr"] if details else (item.get("overview") or "").strip()
-    runtime = details["runtime"] if details else 0
-
-    genres = list({TMDB_GENRE_MAP[g] for g in item.get("genre_ids", []) if g in TMDB_GENRE_MAP})
-    rel_date = item.get("release_date") or ""
-    rel_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else year
-
-    return {
-        "tmdb_id": item["id"],
-        "title": item.get("title") or item.get("original_title") or title,
-        "release_year": rel_year,
-        "rating": round(float(item.get("vote_average") or 0.0), 1),
-        "popularity_score": float(item.get("popularity") or 10.0) * 100.0,
-        "description_hr": overview,
-        "poster_url": f"{TMDB_IMG_POSTER}{item['poster_path']}" if item.get("poster_path") else "",
-        "backdrop_url": f"{TMDB_IMG_BACKDROP}{item['backdrop_path']}" if item.get("backdrop_path") else "",
-        "genres": genres,
-        "runtime": runtime
-    }
-
-
-def sync_tmdb_catalog():
-    print("2/5 Sinkronizacija provjerenih TMDB filmova i serija...", flush=True)
+def sync_tmdb_movies():
+    print("2/5 Sinkronizacija provjerenih TMDB filmova...", flush=True)
     seen_tmdb = set()
     for endpoint in ["movie/popular", "movie/top_rated"]:
         for page in range(1, 13):
@@ -549,17 +694,14 @@ def sync_tmdb_catalog():
                 details = get_tmdb_movie_details(m["id"])
                 if not details:
                     continue
-                tmdb_runtime = details["runtime"]
-                tmdb_status = details["status"]
-                tmdb_rel = details["release_date"] or rel_date
 
                 arch_id, stream_url, arch_mins = search_verified_archive_for_movie(
-                    orig_title, hr_title, year, tmdb_runtime, tmdb_status, tmdb_rel
+                    orig_title, hr_title, year, details["runtime"], details["status"], details["release_date"] or rel_date
                 )
                 if not arch_id:
                     continue
 
-                genres = list({TMDB_GENRE_MAP[g] for g in m.get("genre_ids", []) if g in TMDB_GENRE_MAP})
+                genres = list({TMDB_MOVIE_GENRE_MAP[g] for g in m.get("genre_ids", []) if g in TMDB_MOVIE_GENRE_MAP})
                 row = {
                     "archive_id": arch_id,
                     "tmdb_id": m["id"],
@@ -575,110 +717,72 @@ def sync_tmdb_catalog():
                     "stream_url": stream_url,
                     "is_featured": float(m.get("vote_average") or 0) >= 7.8,
                     "is_valid": True,
-                    "tmdb_runtime": tmdb_runtime,
+                    "tmdb_runtime": details["runtime"],
                     "archive_runtime": arch_mins
                 }
                 supabase_upsert("catalog_items", [row], "archive_id")
-                print(f"  + Provjereni film: {row['title']} ({year}) [{arch_mins}m / TMDB {tmdb_runtime}m]", flush=True)
+                print(f"  + Film: {row['title']} ({year}) [{arch_mins}m / TMDB {details['runtime']}m]", flush=True)
 
-    seen_tv = set()
+
+def sync_tmdb_series():
+    print("3/5 Okupljanje i slaganje serija po sezonama i epizodama...", flush=True)
+    candidate_shows = {}
+
+    # 1. Popularne i najbolje ocijenjene serije s TMDB-a
     for endpoint in ["tv/popular", "tv/top_rated"]:
         for page in range(1, 9):
             data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
             for s in (data or {}).get("results", []):
-                if s["id"] in seen_tv:
-                    continue
-                seen_tv.add(s["id"])
-                orig_name = s.get("original_name") or s.get("name") or ""
-                hr_name = s.get("name") or orig_name
-                first_air = s.get("first_air_date") or ""
-                year = int(first_air[:4]) if len(first_air) >= 4 and first_air[:4].isdigit() else 0
+                candidate_shows[s["id"]] = s
 
-                arch_id, stream_url, episodes = search_verified_archive_for_series(orig_name, hr_name, year)
-                if not arch_id:
-                    continue
+    # 2. Kultne serije za koje je poznato da postoje pune sezone na Archive.org
+    for seed_title in CLASSIC_TV_SEED_TITLES:
+        res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR"})
+        first = ((res or {}).get("results") or [None])[0]
+        if first:
+            candidate_shows[first["id"]] = first
 
-                overview = (s.get("overview") or "").strip()
-                genres = list({TMDB_GENRE_MAP[g] for g in s.get("genre_ids", []) if g in TMDB_GENRE_MAP})
-                row = {
-                    "archive_id": arch_id,
-                    "tmdb_id": s["id"],
-                    "title": hr_name,
-                    "media_type": "series",
-                    "genres": genres,
-                    "release_year": year,
-                    "rating": round(float(s.get("vote_average") or 0.0), 1),
-                    "popularity_score": float(s.get("popularity") or 10.0) * 100.0,
-                    "description_hr": overview,
-                    "poster_url": f"{TMDB_IMG_POSTER}{s['poster_path']}" if s.get("poster_path") else "",
-                    "backdrop_url": f"{TMDB_IMG_BACKDROP}{s['backdrop_path']}" if s.get("backdrop_path") else "",
-                    "stream_url": stream_url,
-                    "episodes": episodes,
-                    "is_featured": float(s.get("vote_average") or 0) >= 8.0,
-                    "is_valid": True,
-                    "tmdb_runtime": 0,
-                    "archive_runtime": 0
-                }
-                supabase_upsert("catalog_items", [row], "archive_id")
-                print(f"  + Provjerena serija: {row['title']} ({len(episodes)} ep.)", flush=True)
+    for tv_id, s in candidate_shows.items():
+        orig_name = s.get("original_name") or s.get("name") or ""
+        hr_name = s.get("name") or orig_name
+        first_air = s.get("first_air_date") or ""
+        year = int(first_air[:4]) if len(first_air) >= 4 and first_air[:4].isdigit() else 0
 
-
-def sync_top_archive_movies():
-    print("3/5 Dodavanje provjerenih klasika s Archive.org...", flush=True)
-    query = "mediatype:movies AND collection:(feature_films OR opensource_movies OR SciFi_Films OR laserdiscarchive OR film_noir) AND -subject:news"
-    data = safe_get(
-        "https://archive.org/advancedsearch.php",
-        params={
-            "q": query,
-            "fl[]": ["identifier", "title", "year", "downloads"],
-            "sort[]": "downloads desc",
-            "rows": 200,
-            "output": "json"
-        }
-    )
-    for doc in (data or {}).get("response", {}).get("docs", []):
-        ident = doc.get("identifier")
-        if not ident or ident.lower().startswith(("youtube-", "yt-")):
-            continue
-        raw_title = doc.get("title") or ident
-        if isinstance(raw_title, list):
-            raw_title = raw_title[0]
-        clean_t, parsed_y = clean_filename_to_title(str(raw_title))
-        if not clean_t or len(clean_t) < 2:
+        episodes = aggregate_series_from_archive(tv_id, orig_name, hr_name)
+        if len(episodes) < 2:
             continue
 
-        mp4s, arch_md = get_archive_item_details(ident, min_size_mb=200)
-        if not mp4s:
-            continue
-        best = max(mp4s, key=lambda x: x["size_mb"])
-        arch_mins = best["duration_mins"]
-        if arch_mins < 65:
-            continue
+        overview = (s.get("overview") or "").strip()
+        if not overview:
+            en_tv = safe_get(f"{TMDB_BASE}/tv/{tv_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+            overview = ((en_tv or {}).get("overview") or "").strip()
 
-        enriched = tmdb_enrich_movie(clean_t, parsed_y)
-        tmdb_runtime = enriched["runtime"] if enriched else 0
-        if tmdb_runtime > 0 and (arch_mins < int(tmdb_runtime * 0.80) or arch_mins > int(tmdb_runtime * 1.25)):
-            continue
+        genres = list({TMDB_TV_GENRE_MAP[g] for g in s.get("genre_ids", []) if g in TMDB_TV_GENRE_MAP})
+        if not genres:
+            genres = ["Krimi, detektivske i triler serije"]
 
+        seasons_found = len({ep["season"] for ep in episodes})
         row = {
-            "archive_id": ident,
-            "tmdb_id": enriched["tmdb_id"] if enriched else None,
-            "title": enriched["title"] if enriched else clean_t,
-            "media_type": "movie",
-            "genres": enriched["genres"] if enriched else ["Klasici i Najgledanije"],
-            "release_year": enriched["release_year"] if enriched else parsed_y,
-            "rating": enriched["rating"] if enriched else 0.0,
-            "popularity_score": enriched["popularity_score"] if enriched else float(doc.get("downloads") or 0) / 1000.0,
-            "description_hr": enriched["description_hr"] if enriched else "",
-            "poster_url": enriched["poster_url"] if enriched else f"https://archive.org/services/img/{ident}",
-            "backdrop_url": enriched["backdrop_url"] if enriched else "",
-            "stream_url": best["stream_url"],
-            "is_featured": False,
+            "archive_id": f"tmdb-tv-{tv_id}",
+            "tmdb_id": tv_id,
+            "title": hr_name,
+            "media_type": "series",
+            "genres": genres,
+            "release_year": year,
+            "rating": round(float(s.get("vote_average") or 0.0), 1),
+            "popularity_score": float(s.get("popularity") or 10.0) * 100.0 + (len(episodes) * 15),
+            "description_hr": overview,
+            "poster_url": f"{TMDB_IMG_POSTER}{s['poster_path']}" if s.get("poster_path") else "",
+            "backdrop_url": f"{TMDB_IMG_BACKDROP}{s['backdrop_path']}" if s.get("backdrop_path") else "",
+            "stream_url": episodes[0]["url"],
+            "episodes": episodes,
+            "is_featured": float(s.get("vote_average") or 0) >= 8.0,
             "is_valid": True,
-            "tmdb_runtime": tmdb_runtime,
-            "archive_runtime": arch_mins
+            "tmdb_runtime": 0,
+            "archive_runtime": 0
         }
         supabase_upsert("catalog_items", [row], "archive_id")
+        print(f"  + Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.)", flush=True)
 
 
 def sync_concerts():
@@ -730,6 +834,34 @@ def sync_concerts():
                 "archive_runtime": best["duration_mins"]
             }
             supabase_upsert("catalog_items", [row], "archive_id")
+
+
+def tmdb_enrich_movie(title, year=0):
+    params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR"}
+    if year > 0:
+        params["year"] = year
+    res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+    results = (res or {}).get("results", [])
+    if not results and year > 0:
+        params.pop("year")
+        res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+        results = (res or {}).get("results", [])
+    if not results:
+        return None
+
+    item = results[0]
+    details = get_tmdb_movie_details(item["id"])
+    overview = details["overview_hr"] if details else (item.get("overview") or "").strip()
+    rel_date = item.get("release_date") or ""
+    rel_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else year
+
+    return {
+        "tmdb_id": item["id"],
+        "title": item.get("title") or item.get("original_title") or title,
+        "release_year": rel_year,
+        "description_hr": overview,
+        "poster_url": f"{TMDB_IMG_POSTER}{item['poster_path']}" if item.get("poster_path") else ""
+    }
 
 
 def fetch_wiki_bio(author_name):
@@ -814,8 +946,8 @@ def sync_authors():
 
 if __name__ == "__main__":
     audit_existing_catalog()
-    sync_tmdb_catalog()
-    sync_top_archive_movies()
+    sync_tmdb_movies()
+    sync_tmdb_series()
     sync_concerts()
     sync_authors()
-    print("Sinkronizacija i provjera trajanja uspješno završene!", flush=True)
+    print("Sinkronizacija serija po sezonama i epizodama uspješno završena!", flush=True)
