@@ -70,7 +70,7 @@ private interface ArchiveSearchApi {
             "runtime", "year", "avg_rating", "num_reviews"
         ),
         @Query("sort[]") sort: String = "downloads desc",
-        @Query("rows") rows: Int = 120,
+        @Query("rows") rows: Int = 150,
         @Query("page") page: Int = 1,
         @Query("output") output: String = "json"
     ): ArchiveSearchResponse
@@ -95,10 +95,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .create(ArchiveSearchApi::class.java)
 
     private val blockedAdultKeywords = listOf(
-        "hentai", "ecchi", "yaoi", "yuri", "erotic", "erotica", "xxx", "porn", "porno",
-        "pornography", "adult film", "adult anime", "softcore", "hardcore", "playboy",
-        "penthouse", "orgy", "fetish", "nc-17", "nsfw", "nude", "naked", "vintage porn",
-        "erotik film", "sexfilm", "adultvhs"
+        "erotic", "erotica", "xxx", "porn", "porno", "pornography", "adult film",
+        "realm of the senses", "empire des sens", "good girl bad girl", "softcore",
+        "hardcore", "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france",
+        "nsfw", "nude", "naked", "masturbating", "vintage porn", "erotik film",
+        "baise moi", "fick mich", "schulmädchen", "sexfilm", "adultvhs"
+    )
+
+    private val blockedSpecificAdultKeywords = listOf(
+        "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay", "boy love", "bl", "gay porn", "homosexual"
     )
 
     private val animationKeywords = listOf(
@@ -248,7 +253,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Krimi", "$movieBaseQuery AND subject:(crime OR gangster)"),
         GenreOption("Romantični", "$movieBaseQuery AND subject:romance"),
         GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
-        GenreOption("Ratni", "$movieBaseQuery AND subject:war")
+        GenreOption("Ratni", "$movieBaseQuery AND subject:war"),
+        GenreOption(
+            title = "18+ / Erotski",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
+            defaultSort = "downloads desc",
+            isAdultCategory = true
+        )
     )
 
     val animationGenreDefinitions = listOf(
@@ -338,6 +349,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val pageSize = 60
 
+    private var isAdultCategoryUnlocked = false
+    private var unlockedAdultMovies: List<ArchiveMovie> = emptyList()
+
     init {
         SupabaseRepository.init(application)
         loadFavorites()
@@ -394,7 +408,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun isBlockedHentaiOrAdult(item: SupabaseCatalogItem): Boolean {
         val blob = "${item.title} ${item.descriptionHr} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
-        return blockedAdultKeywords.any { blob.contains(it) }
+        return blockedSpecificAdultKeywords.any { blob.contains(it) } ||
+            blockedAdultKeywords.any { blob.contains(it) }
     }
 
     private fun isAnimatedItem(item: SupabaseCatalogItem): Boolean {
@@ -466,6 +481,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val builtMovieCategories = movieGenreDefinitions.mapNotNull { genre ->
             when {
                 genre.isAuthorCollection -> genre to authorList
+                genre.isAdultCategory -> {
+                    if (isAdultCategoryUnlocked && unlockedAdultMovies.isNotEmpty()) {
+                        genre to unlockedAdultMovies
+                    } else {
+                        null
+                    }
+                }
                 genre.title == "Top 10 danas" -> {
                     val top10 = liveActionMovies.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
                     if (top10.isNotEmpty()) genre to top10 else null
@@ -655,6 +677,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
+        if (genre.isAdultCategory) {
+            isAdultCategoryUnlocked = true
+        }
         _genreMovies.value = emptyList()
         loadGenrePage(1)
     }
@@ -683,7 +708,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val sbMatches = findSupabaseItemsForGenre(genre)
+                val sbMatches = if (genre.isAdultCategory) emptyList() else findSupabaseItemsForGenre(genre)
                 if (sbMatches.isNotEmpty()) {
                     val isTop10 = genre.title.startsWith("Top 10")
                     val allRated = sbMatches.map { item ->
@@ -711,13 +736,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val results = fetchFromArchiveFallback(
                         query = genre.query,
-                        rows = 120,
+                        rows = 150,
                         page = page,
-                        excludeAdult = true
+                        excludeAdult = !genre.isAdultCategory,
+                        isAdultCategory = genre.isAdultCategory
                     )
                     _genreMovies.value = results.take(pageSize)
                     _totalGenreMoviesCount.value = results.size
                     _totalGenrePages.value = if (results.size >= pageSize) page + 1 else page
+
+                    if (genre.isAdultCategory && results.isNotEmpty()) {
+                        unlockedAdultMovies = results.map { it.movie }.take(25)
+                        val currentWithoutAdult = _movieCategories.value.filterNot { it.first.isAdultCategory }
+                        _movieCategories.value = currentWithoutAdult + (genre to unlockedAdultMovies)
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -770,7 +802,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         query: String,
         rows: Int,
         page: Int,
-        excludeAdult: Boolean
+        excludeAdult: Boolean,
+        isAdultCategory: Boolean = false
     ): List<RatedMovie> {
         return try {
             val docs = api.searchMovies(query = query, rows = rows, page = page).response?.docs ?: emptyList()
@@ -781,9 +814,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     is List<*> -> t.firstOrNull()?.toString()?.trim() ?: id
                     else -> id
                 }
-                val combined = "${id.lowercase()} ${title.lowercase()}"
+                val desc = when (val d = doc.description) {
+                    is String -> d.trim()
+                    is List<*> -> d.joinToString(" ").trim()
+                    else -> ""
+                }
+                val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()}"
+
+                if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (excludeAdult && blockedAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
+                if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
                 if (title.lowercase().contains("trailer") || title.lowercase().contains("teaser")) return@mapNotNull null
+
+                val runtimeMinutes = parseRuntimeMinutes(doc.runtime)
+                if (isAdultCategory && runtimeMinutes in 1..10) return@mapNotNull null
 
                 val ratingVal = when (val r = doc.avgRating) {
                     is Number -> r.toDouble()
@@ -800,6 +844,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    private fun parseRuntimeMinutes(runtimeValue: Any?): Int {
+        val raw = when (runtimeValue) {
+            is String -> runtimeValue.trim()
+            is List<*> -> runtimeValue.firstOrNull()?.toString()?.trim() ?: ""
+            else -> ""
+        }
+        if (raw.isEmpty()) return 0
+        if (raw.contains(":")) {
+            val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
+            return when (parts.size) {
+                3 -> parts[0] * 60 + parts[1]
+                2 -> parts[0]
+                else -> 0
+            }
+        }
+        val numeric = raw.toDoubleOrNull() ?: return 0
+        return if (numeric > 300) (numeric / 60.0).toInt() else numeric.toInt()
     }
 
     private fun SupabaseCatalogItem.toArchiveMovie(): ArchiveMovie {
