@@ -56,6 +56,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.Charset
+import java.util.Locale
 import java.util.zip.GZIPInputStream
 
 data class SrtCue(
@@ -105,10 +106,10 @@ fun PlayerScreen(
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
     var currentSubtitleText by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableLongStateOf(0L) }
-    
-    // NOVO: Audio dijalozi
+
     var showAudioDialog by remember { mutableStateOf(false) }
     var hasMultipleAudioTracks by remember { mutableStateOf(false) }
+    var hasNotifiedMultiAudio by remember { mutableStateOf(false) }
 
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
@@ -116,10 +117,10 @@ fun PlayerScreen(
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15_000, 
-                50_000, 
-                1_500,  
-                3_000   
+                15_000,
+                50_000,
+                1_500,
+                3_000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -130,10 +131,18 @@ fun PlayerScreen(
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
 
-        ExoPlayer.Builder(context)
+        val player = ExoPlayer.Builder(context)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
             .build()
+
+        // Automatski preferiraj hrvatski ili engleski zvuk ako stream sadrži više audio traka
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setPreferredAudioLanguages("hr", "hrv", "en", "eng")
+            .build()
+
+        player
     }
 
     BackHandler {
@@ -161,6 +170,9 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(identifier, directVideoUrl) {
+        hasMultipleAudioTracks = false
+        hasNotifiedMultiAudio = false
+
         if (directVideoUrl.isNotEmpty()) {
             availableQualities = emptyList()
             selectedQuality = null
@@ -181,7 +193,8 @@ fun PlayerScreen(
 
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
-            delay(2000L)
+            val durationMs = if (quickHudMessage.startsWith("🔊")) 4500L else 2000L
+            delay(durationMs)
             if (!isContinuousSeeking) {
                 quickHudMessage = ""
             }
@@ -220,11 +233,17 @@ fun PlayerScreen(
                     duration = exoPlayer.duration.coerceAtLeast(0L)
                 }
             }
-            
-            // NOVO: Otkrivanje broja audio traka kada se učitaju podaci (Tracks)
+
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-                hasMultipleAudioTracks = audioGroups.sumOf { it.length } > 1
+                val totalAudioTracks = audioGroups.sumOf { it.length }
+                hasMultipleAudioTracks = totalAudioTracks > 1
+
+                if (totalAudioTracks > 1 && !hasNotifiedMultiAudio) {
+                    hasNotifiedMultiAudio = true
+                    quickHudMessage = "🔊 Dostupno $totalAudioTracks audio jezika (OK → 🔊 Audio)"
+                    quickHudTick++
+                }
             }
         }
         exoPlayer.addListener(listener)
@@ -357,14 +376,14 @@ fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 26.dp)
-                    .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(10.dp))
-                    .border(1.5.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.82f), RoundedCornerShape(10.dp))
+                    .border(1.5.dp, Color.White.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 20.dp, vertical = 10.dp)
             ) {
                 Text(
                     text = quickHudMessage,
                     color = Color.White,
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -464,23 +483,28 @@ fun PlayerScreen(
                                 controlsInteractionTick++
                             }
                         )
-                        
-                        // NOVO: Prikaz gumba za Audio ako imamo više zvučnih traka
+
                         if (hasMultipleAudioTracks) {
                             PlayerChipButton(
                                 label = "🔊 Audio",
-                                onClick = { showAudioDialog = true }
+                                isHighlighted = true,
+                                onClick = {
+                                    controlsInteractionTick++
+                                    showAudioDialog = true
+                                }
                             )
                         }
 
-                        // AŽURIRANO: Logika za Epizode vs Rezolucije
                         if (availableQualities.size > 1) {
                             val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
                             val btnLabel = if (isEpisodic) "📺 Epizode" else "⚙ Verzija"
-                            
+
                             PlayerChipButton(
                                 label = btnLabel,
-                                onClick = { showQualityDialog = true }
+                                onClick = {
+                                    controlsInteractionTick++
+                                    showQualityDialog = true
+                                }
                             )
                         }
 
@@ -488,6 +512,7 @@ fun PlayerScreen(
                             label = if (activeSubtitleName != null) "CC ✓" else "CC Titlovi",
                             isHighlighted = activeSubtitleName != null,
                             onClick = {
+                                controlsInteractionTick++
                                 showSubtitleDialog = true
                                 if (subtitleList.isEmpty()) {
                                     isLoadingSubtitles = true
@@ -593,26 +618,27 @@ fun PlayerScreen(
                 }
             }
         }
-        
-        // NOVO: Dijalog za odabir Audio trake
+
         if (showAudioDialog) {
             AlertDialog(
                 onDismissRequest = { showAudioDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = { Text("Odaberi audio traku", color = Color.White) },
+                title = { Text("Odaberi audio jezik", color = Color.White) },
                 text = {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         val audioGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                        var counter = 0
                         audioGroups.forEach { group ->
                             for (trackIndex in 0 until group.length) {
+                                counter++
+                                val trackNum = counter
                                 val format = group.getTrackFormat(trackIndex)
-                                val lang = format.language?.uppercase() ?: "NEPOZNATO"
-                                val label = format.label ?: "Traka ${trackIndex + 1}"
+                                val displayLabel = formatAudioTrackLabel(format.language, format.label, trackNum)
                                 val isSelected = group.isTrackSelected(trackIndex)
-                                
+
                                 item {
                                     DialogFocusableRow(
-                                        label = "[$lang] $label",
+                                        label = displayLabel,
                                         isSelected = isSelected,
                                         onClick = {
                                             exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
@@ -635,11 +661,10 @@ fun PlayerScreen(
             )
         }
 
-        // AŽURIRANO: Izbornik za odabir epizode/rezolucije
         if (showQualityDialog) {
             val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
             val dialogTitle = if (isEpisodic) "Odaberi Epizodu" else "Odaberi Verziju / Rezoluciju"
-            
+
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
                 containerColor = Color(0xFF1A1A1A),
@@ -729,6 +754,32 @@ fun PlayerScreen(
                 }
             )
         }
+    }
+}
+
+private fun formatAudioTrackLabel(languageCode: String?, rawLabel: String?, trackNumber: Int): String {
+    val code = languageCode?.trim()?.lowercase() ?: ""
+    val friendlyLang = when (code) {
+        "en", "eng" -> "Engleski"
+        "hr", "hrv" -> "Hrvatski"
+        "sr", "srp" -> "Srpski"
+        "bs", "bos" -> "Bosanski"
+        "pt", "por" -> "Portugalski"
+        "es", "spa" -> "Španjolski"
+        "fr", "fra", "fre" -> "Francuski"
+        "de", "deu", "ger" -> "Njemački"
+        "it", "ita" -> "Italijanski"
+        "ru", "rus" -> "Ruski"
+        "ja", "jpn" -> "Japanski"
+        "ko", "kor" -> "Korejski"
+        "", "und" -> "Nepoznati jezik"
+        else -> Locale(code).getDisplayLanguage(Locale("hr")).replaceFirstChar { it.uppercase() }
+    }
+    val extra = rawLabel?.trim()?.takeIf { it.isNotBlank() && !it.equals(friendlyLang, ignoreCase = true) }
+    return if (extra != null) {
+        "Traka $trackNumber: $friendlyLang ($extra)"
+    } else {
+        "Traka $trackNumber: $friendlyLang"
     }
 }
 
@@ -925,7 +976,7 @@ private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = wi
         conn.connectTimeout = 7000
         conn.readTimeout = 7000
         val bytes = conn.inputStream.use { it.readBytes() }
-        
+
         val rawText = if (sub.isGzipped) {
             GZIPInputStream(ByteArrayInputStream(bytes)).readBytes()
         } else {
@@ -933,7 +984,7 @@ private suspend fun downloadSubtitleText(sub: PlayerSubtitleOption): String = wi
         }
 
         var text = String(rawText, Charsets.UTF_8)
-        if (text.contains("")) {
+        if (text.contains('\uFFFD')) {
             text = String(rawText, Charset.forName("windows-1250"))
         }
         text
