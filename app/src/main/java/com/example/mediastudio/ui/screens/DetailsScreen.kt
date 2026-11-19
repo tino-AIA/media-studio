@@ -59,6 +59,7 @@ fun DetailsScreen(
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
     var translatedDescription by remember { mutableStateOf("") }
     var imageUrl by remember { mutableStateOf("") }
+    var resolvedStreamUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var isSupabaseAuthorList by remember { mutableStateOf(false) }
 
@@ -82,6 +83,7 @@ fun DetailsScreen(
     LaunchedEffect(movie.identifier) {
         isLoading = true
         isSupabaseAuthorList = false
+        resolvedStreamUrl = ""
 
         if (isAuthorMode) {
             val authorName = movie.identifier.substringAfter("AUTHOR|")
@@ -113,33 +115,63 @@ fun DetailsScreen(
                 movieInfo = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
             }
         } else if (isDirectLinkMode) {
+            resolvedStreamUrl = movie.identifier
             val sbMatch = SupabaseRepository.findByStreamUrl(movie.identifier)
+            val sbCatalogMatch = SupabaseRepository.getCatalogItems().find { it.streamUrl == movie.identifier }
             if (sbMatch != null) {
                 imageUrl = sbMatch.first
                 translatedDescription = sbMatch.second.ifBlank {
-                    "Odabrani naslov iz kolekcije autora spreman je za reprodukciju."
+                    sbCatalogMatch?.descriptionHr?.takeIf { it.isNotBlank() }
+                        ?: fetchMoviePlotFallback(movie.title, sbCatalogMatch?.releaseYear ?: 0)
+                }
+            } else if (sbCatalogMatch != null) {
+                imageUrl = sbCatalogMatch.posterUrl
+                translatedDescription = sbCatalogMatch.descriptionHr.ifBlank {
+                    fetchMoviePlotFallback(sbCatalogMatch.title, sbCatalogMatch.releaseYear)
                 }
             } else {
-                imageUrl = ""
-                translatedDescription = "Odabrani naslov iz kolekcije autora spreman je za reprodukciju."
+                imageUrl = PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
+                translatedDescription = fetchMoviePlotFallback(movie.title, 0)
             }
             movieInfo = null
         } else {
             val sbItem = SupabaseRepository.getCatalogItem(movie.identifier)
             if (sbItem != null) {
+                resolvedStreamUrl = sbItem.streamUrl.takeIf { it.startsWith("http") } ?: ""
                 imageUrl = sbItem.posterUrl.ifBlank {
                     PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
                 }
-                val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
-                movieInfo = info
-                translatedDescription = sbItem.descriptionHr.ifBlank {
-                    translateToCroatian(info.description)
+                val yearStr = if (sbItem.releaseYear > 0) sbItem.releaseYear.toString() else (movie.year ?: "")
+
+                if (movie.identifier.contains(",tmdb-")) {
+                    val authorSlug = movie.identifier.substringBefore(",tmdb-")
+                    val matchedAuthor = SupabaseRepository.getAuthors()
+                        .find { it.archiveId.equals(authorSlug, ignoreCase = true) }?.name ?: ""
+                    val desc = sbItem.descriptionHr.ifBlank {
+                        fetchMoviePlotFallback(sbItem.title, sbItem.releaseYear)
+                    }
+                    translatedDescription = desc
+                    movieInfo = MovieFullInfo(
+                        qualities = emptyList(),
+                        description = desc,
+                        year = yearStr,
+                        director = matchedAuthor
+                    )
+                } else {
+                    val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
+                    movieInfo = info.copy(year = yearStr.ifEmpty { info.year })
+                    val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else translateToCroatian(info.description)
+                    translatedDescription = sbItem.descriptionHr
+                        .ifBlank { cleanArchiveDesc }
+                        .ifBlank { fetchMoviePlotFallback(sbItem.title, sbItem.releaseYear) }
                 }
             } else {
                 imageUrl = PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
                 val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
                 movieInfo = info
-                translatedDescription = translateToCroatian(info.description)
+                val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else translateToCroatian(info.description)
+                translatedDescription = cleanArchiveDesc
+                    .ifBlank { fetchMoviePlotFallback(movie.title, info.year.toIntOrNull() ?: 0) }
             }
         }
 
@@ -237,7 +269,7 @@ fun DetailsScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
-                    text = translatedDescription.ifEmpty { currentInfo?.description ?: "Nema dostupnog opisa." },
+                    text = translatedDescription.ifEmpty { currentInfo?.description ?: "Opis za ovaj naslov trenutno nije dostupan." },
                     color = Color(0xFFDDDDDD),
                     fontSize = 15.sp,
                     lineHeight = 22.sp,
@@ -395,7 +427,9 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(12.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
-                                    if (isDirectLinkMode) {
+                                    if (resolvedStreamUrl.isNotEmpty()) {
+                                        onPlayClick(resolvedStreamUrl)
+                                    } else if (isDirectLinkMode) {
                                         onPlayClick(movie.identifier)
                                     } else {
                                         onPlayClick(currentInfo?.year ?: "")
@@ -466,6 +500,51 @@ fun DetailsScreen(
             }
         }
     }
+}
+
+private suspend fun fetchMoviePlotFallback(title: String, year: Int): String = withContext(Dispatchers.IO) {
+    try {
+        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+        val queries = buildList {
+            if (year > 0) add("$cleanTitle ($year film)")
+            add("$cleanTitle (film)")
+            add(cleanTitle)
+        }
+
+        for (q in queries) {
+            val encoded = URLEncoder.encode(q, "UTF-8")
+            val hrUrl = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
+            val hrConn = hrUrl.openConnection() as HttpURLConnection
+            hrConn.setRequestProperty("User-Agent", "Mozilla/5.0")
+            hrConn.connectTimeout = 5000
+            hrConn.readTimeout = 5000
+            val hrJson = JSONObject(hrConn.inputStream.bufferedReader().use { it.readText() })
+            val hrPages = hrJson.getJSONObject("query").getJSONObject("pages")
+            val hrId = hrPages.keys().next()
+            if (hrId != "-1") {
+                val extract = hrPages.getJSONObject(hrId).optString("extract").trim()
+                if (extract.length > 40) return@withContext extract.take(900)
+            }
+        }
+
+        for (q in queries) {
+            val encoded = URLEncoder.encode(q, "UTF-8")
+            val enUrl = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
+            val enConn = enUrl.openConnection() as HttpURLConnection
+            enConn.setRequestProperty("User-Agent", "Mozilla/5.0")
+            enConn.connectTimeout = 5000
+            enConn.readTimeout = 5000
+            val enJson = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
+            val enPages = enJson.getJSONObject("query").getJSONObject("pages")
+            val enId = enPages.keys().next()
+            if (enId != "-1") {
+                val extract = enPages.getJSONObject(enId).optString("extract").trim()
+                if (extract.length > 40) return@withContext translateToCroatian(extract.take(900))
+            }
+        }
+    } catch (_: Exception) {
+    }
+    "Opis za ovaj naslov trenutno nije dostupan."
 }
 
 private suspend fun fetchWikiInfo(authorName: String): String = withContext(Dispatchers.IO) {
