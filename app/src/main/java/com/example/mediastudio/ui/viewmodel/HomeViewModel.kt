@@ -592,14 +592,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSearchQuery(query: String) {
-        _currentSearchQuery.value = query
         performGlobalSearch(query)
     }
 
     fun performGlobalSearch(query: String) {
         searchJob?.cancel()
+        _currentSearchQuery.value = query
         val trimmed = query.trim()
-        _currentSearchQuery.value = trimmed
 
         if (trimmed.length < 2) {
             _globalSearchResults.value = emptyList()
@@ -612,13 +611,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _isSearchingGlobal.value = true
             try {
                 val qLower = trimmed.lowercase()
+                val words = qLower.split(Regex("\\s+")).filter { it.isNotEmpty() }
 
                 val sbMatches = SupabaseRepository.getCatalogItems()
                     .filter { item ->
                         !isBlockedHentaiOrAdult(item) && (
                             item.title.lowercase().contains(qLower) ||
                                 item.descriptionHr.lowercase().contains(qLower) ||
-                                item.archiveId.lowercase().contains(qLower)
+                                item.archiveId.lowercase().contains(qLower) ||
+                                (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
                         )
                     }
                     .sortedByDescending { it.popularityScore }
@@ -631,7 +632,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                 val archiveMatches = if (sbMatches.size < 15 && trimmed.length >= 3) {
-                    fetchFromArchiveFallback("mediatype:movies AND title:\"$trimmed\"", 60, 1, excludeAdult = true)
+                    val searchWords = trimmed.split(Regex("\\s+")).filter { it.length >= 2 }
+                    val tokenClause = if (searchWords.isNotEmpty()) {
+                        searchWords.joinToString(" AND ") { w -> "title:$w*" }
+                    } else {
+                        "title:\"$trimmed\""
+                    }
+                    fetchFromArchiveFallback("mediatype:movies AND ($tokenClause)", 60, 1, excludeAdult = true)
                 } else {
                     emptyList()
                 }
