@@ -155,7 +155,7 @@ def clean_filename_to_title(filename):
         clean = re.sub(rf"\(?\b{year}\b\)?", "", clean)
     clean = re.sub(r"\(\s*\)|\[\s*\]", "", clean)
     clean = re.sub(r"^\s*\d+[\.\-\s]+", "", clean)
-    clean = re.sub(r"\s+", " ").strip(" -")
+    clean = re.sub(r"\s+", " ", clean).strip(" -")
     return clean.strip(), year
 
 
