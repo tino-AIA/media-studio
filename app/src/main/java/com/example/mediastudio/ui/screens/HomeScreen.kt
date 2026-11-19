@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.PosterFetcher
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
@@ -69,21 +70,20 @@ fun HomeScreen(
     val context = LocalContext.current
     val selectedTab by viewModel.selectedTab.collectAsState()
     val movieCategories by viewModel.movieCategories.collectAsState()
+    val animationCategories by viewModel.animationCategories.collectAsState()
     val seriesCategories by viewModel.seriesCategories.collectAsState()
-    
     val concertCategories by viewModel.concertCategories.collectAsState()
-    
+
     val favoriteMovies by viewModel.favoriteMovies.collectAsState()
     val heroMovies by viewModel.heroMovies.collectAsState()
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
-    // Ovdje ispravljamo čitanje authorImages iz statične varijable u HomeViewModelu
     val authorImages = viewModel.staticAuthorImages
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    
+
     var showExitDialog by remember { mutableStateOf(false) }
 
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
@@ -107,18 +107,20 @@ fun HomeScreen(
 
     val activeCategories = when (selectedTab) {
         ContentTab.MOVIES -> movieCategories
+        ContentTab.ANIMATION -> animationCategories
         ContentTab.SERIES -> seriesCategories
         ContentTab.CONCERTS -> concertCategories
         else -> emptyList()
     }
-    
+
     val activeDrawerList = when (selectedTab) {
         ContentTab.MOVIES -> viewModel.movieGenreDefinitions
+        ContentTab.ANIMATION -> viewModel.animationGenreDefinitions
         ContentTab.SERIES -> viewModel.seriesGenreDefinitions
         ContentTab.CONCERTS -> viewModel.concertGenreDefinitions
         else -> emptyList()
     }
-    
+
     val isSeriesTab = selectedTab == ContentTab.SERIES
 
     ModalNavigationDrawer(
@@ -150,10 +152,11 @@ fun HomeScreen(
                             }
                         }
                     )
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = when (selectedTab) {
+                            ContentTab.ANIMATION -> "Kategorije crtića"
                             ContentTab.SERIES -> "Kategorije serija"
                             ContentTab.CONCERTS -> "Kategorije glazbe"
                             else -> "Žanrovi filmova"
@@ -190,7 +193,7 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxSize().alpha(0.35f)
                 )
             }
-            
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -252,7 +255,7 @@ fun HomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             TabButton(
                                 title = "🎬 Filmovi",
@@ -261,7 +264,13 @@ fun HomeScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             TabButton(
-                                title = "📺 Serije i kolekcije",
+                                title = "🎨 Animirani",
+                                isSelected = selectedTab == ContentTab.ANIMATION,
+                                onClick = { viewModel.selectTab(ContentTab.ANIMATION) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            TabButton(
+                                title = "📺 Serije",
                                 isSelected = selectedTab == ContentTab.SERIES,
                                 onClick = { viewModel.selectTab(ContentTab.SERIES) },
                                 modifier = Modifier.weight(1f)
@@ -301,7 +310,11 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxSize().padding(paddingValues)
                         ) {
                             items(favoriteMovies) { movie ->
-                                val isProbablySeries = movie.title.lowercase().contains("season") || movie.title.lowercase().contains("episode")
+                                val isDbSeries = SupabaseRepository.getCatalogItem(movie.identifier)?.mediaType == "series"
+                                val isProbablySeries = isDbSeries ||
+                                    movie.identifier.startsWith("tmdb-tv-") ||
+                                    movie.title.lowercase().contains("season") ||
+                                    movie.title.lowercase().contains("episode")
                                 MovieCard(
                                     movie = movie,
                                     isSeries = isProbablySeries,
@@ -340,7 +353,7 @@ fun HomeScreen(
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.width(650.dp)
                                         )
-                                        
+
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
                                                 text = if (isSeries) "SERIJA" else "FILM",
@@ -400,15 +413,16 @@ fun HomeScreen(
                         items(count = activeCategories.size) { index ->
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
+                            val isRowSeries = isSeriesTab || genre.isSeriesCategory
                             MovieCategoryRow(
                                 genre = genre,
                                 movies = itemsList,
                                 isNetflixTop10 = isTop10,
-                                isSeries = isSeriesTab,
+                                isSeries = isRowSeries,
                                 viewModel = viewModel,
                                 authorImages = authorImages,
                                 onMovieClick = { item ->
-                                    if (isSeriesTab) onSeriesClick(item) else onMovieClick(item)
+                                    if (isRowSeries) onSeriesClick(item) else onMovieClick(item)
                                 },
                                 onHeaderClick = { onGenreSelect(genre) }
                             )
@@ -658,14 +672,16 @@ private fun TabButton(
                 shape = RoundedCornerShape(10.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(vertical = 10.dp),
+            .padding(horizontal = 6.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
         )
     }
@@ -751,7 +767,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    
+
     val firstArchiveId = movie.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("") }
     val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
@@ -781,7 +797,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
                 val painter = rememberAsyncImagePainter(
                     model = posterUrl.ifBlank { fallbackUrl }
                 )
-                
+
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
                         CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
@@ -858,7 +874,7 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    
+
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
     var posterUrl by remember { mutableStateOf("") }
 
@@ -867,7 +883,6 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
             val authorName = movie.title
             val archiveId = viewModel.getAuthorArchiveId(authorName)
             val mappedImage = viewModel.staticAuthorImages[authorName] ?: ""
-            // Ovdje povlači sliku iz HomeViewModel statične liste
             posterUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
@@ -900,10 +915,9 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                    // Ako pukne učitavanje slike redatelja ili filma, stavi fallback
                     if (painter.state is AsyncImagePainter.State.Error) {
-                         val fallbackId = if (isAuthor) viewModel.getAuthorArchiveId(movie.title) else movie.identifier.split(",").first()
-                         val fallback = "https://archive.org/services/img/$fallbackId"
+                        val fallbackId = if (isAuthor) viewModel.getAuthorArchiveId(movie.title) else movie.identifier.split(",").first()
+                        val fallback = "https://archive.org/services/img/$fallbackId"
                         Image(
                             painter = rememberAsyncImagePainter(fallback),
                             contentDescription = movie.title,
