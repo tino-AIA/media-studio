@@ -46,12 +46,16 @@ data class SeriesFullInfo(
 
 object PosterFetcher {
     private val cache = mutableMapOf<String, String>()
-    private const val TMDB_API_KEY = "3e9f4c3a726ea7247a32d164627d2c38" 
-    private const val OMDB_API_KEY = "thewdb" // OMDB public fallback key
+    private const val TMDB_API_KEY = "0eb677c7b027f3fc1502856e48f4da97"
+    private const val OMDB_API_KEY = "thewdb"
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        // Agresivno čišćenje imena kako bi API dobio samo suštinu filma
+        // 1. Trenutni dohvat iz Supabase predmemorije (0 ms čekanja)
+        SupabaseRepository.getCachedPoster(archiveId, title)?.let { sbPoster ->
+            return@withContext sbPoster
+        }
+
         var cleanTitle = title
             .replace(Regex("\\(\\d{4}\\)"), "")
             .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol\\.?\\s*\\d+|part\\s*\\d+|episode\\s*\\d+)\\b.*"), "")
@@ -59,13 +63,12 @@ object PosterFetcher {
             .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
-            
-        // Ako je naslov prekratak ili oštećen, koristimo Archive ID koji je često puno točniji
+
         if (cleanTitle.length < 3) {
-             cleanTitle = archiveId.replace("_", " ").replace("-", " ")
-                 .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol|part)\\b.*"), "")
-                 .replace(Regex("\\d{4}"), "")
-                 .trim()
+            cleanTitle = archiveId.replace("_", " ").replace("-", " ")
+                .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol|part)\\b.*"), "")
+                .replace(Regex("\\d{4}"), "")
+                .trim()
         }
 
         val cacheKey = "${isSeries}_$cleanTitle"
@@ -76,8 +79,6 @@ object PosterFetcher {
 
         try {
             val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
-            
-            // 1. Pokušaj TMDB
             val type = if (isSeries) "tv" else "movie"
             val url = URL("https://api.themoviedb.org/3/search/$type?api_key=$TMDB_API_KEY&query=$encoded")
             val conn = url.openConnection() as HttpURLConnection
@@ -97,7 +98,6 @@ object PosterFetcher {
                 }
             }
 
-            // 2. Ako TMDB zakaže, pokušaj OMDB API kao jaku rezervu
             val omdbType = if (isSeries) "series" else "movie"
             val omdbUrl = URL("https://www.omdbapi.com/?t=$encoded&type=$omdbType&apikey=$OMDB_API_KEY")
             val omdbConn = omdbUrl.openConnection() as HttpURLConnection
@@ -112,25 +112,10 @@ object PosterFetcher {
                     return@withContext httpsPoster
                 }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
-            // 3. Ako je serija, pokušaj i TVMaze
-            if (isSeries) {
-                val tvMazeUrl = URL("https://api.tvmaze.com/singlesearch/shows?q=$encoded")
-                val tvMazeConn = tvMazeUrl.openConnection() as HttpURLConnection
-                tvMazeConn.setRequestProperty("User-Agent", USER_AGENT)
-                tvMazeConn.connectTimeout = 2500
-                if (tvMazeConn.responseCode == 200) {
-                    val tvMazeJson = JSONObject(tvMazeConn.inputStream.bufferedReader().use { it.readText() })
-                    val img = tvMazeJson.optJSONObject("image")?.optString("original")
-                    if (!img.isNullOrBlank()) {
-                        val httpsImg = img.replace("http://", "https://")
-                        cache[cacheKey] = httpsImg
-                        return@withContext httpsImg
-                    }
-                }
-            }
-        } catch (e: Exception) { e.printStackTrace() }
-        
         cache[cacheKey] = fallback
         fallback
     }
@@ -140,6 +125,26 @@ object ArchiveMetadataModule {
     private val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".m4v", ".mov", ".ogv", ".webm")
 
     suspend fun fetchMovieFullInfo(identifier: String): MovieFullInfo = withContext(Dispatchers.IO) {
+        // 1. Provjeri Supabase bazu za instantni stream i hrvatski opis
+        SupabaseRepository.getCatalogItem(identifier)?.let { sbItem ->
+            if (sbItem.streamUrl.isNotBlank()) {
+                return@withContext MovieFullInfo(
+                    qualities = listOf(
+                        VideoQualityOption(
+                            label = "HD / Standard",
+                            url = sbItem.streamUrl,
+                            height = 720,
+                            sizeBytes = 0L
+                        )
+                    ),
+                    description = sbItem.descriptionHr.ifBlank { "Opis za ovaj naslov trenutno nije dostupan." },
+                    year = if (sbItem.releaseYear > 0) sbItem.releaseYear.toString() else "",
+                    director = ""
+                )
+            }
+        }
+
+        // 2. Rezerva: izravni dohvat s Archive.org
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
@@ -233,6 +238,33 @@ object ArchiveMetadataModule {
     }
 
     suspend fun fetchSeriesFullInfo(identifiersStr: String, seriesTitleHint: String = ""): SeriesFullInfo = withContext(Dispatchers.IO) {
+        // 1. Provjeri Supabase bazu za gotove epizode serije
+        SupabaseRepository.getCatalogItem(identifiersStr)?.let { sbSeries ->
+            if (sbSeries.episodes.isNotEmpty()) {
+                val mappedEpisodes = sbSeries.episodes.mapIndexed { idx, ep ->
+                    SeriesEpisode(
+                        seasonNumber = 1,
+                        episodeNumber = idx + 1,
+                        title = ep.title,
+                        subtitleSearchQuery = "${sbSeries.title} ${ep.title}".trim(),
+                        fileUrl = ep.url,
+                        itemIdentifier = sbSeries.archiveId
+                    )
+                }
+                val season = SeriesSeason(
+                    seasonNumber = 1,
+                    seasonTitle = "Epizode",
+                    episodes = mappedEpisodes
+                )
+                return@withContext SeriesFullInfo(
+                    description = sbSeries.descriptionHr.ifBlank { "Opis nije dostupan." },
+                    seasons = listOf(season),
+                    episodes = mappedEpisodes
+                )
+            }
+        }
+
+        // 2. Rezerva: dohvat s Archive.org
         try {
             val ids = identifiersStr.split(",")
             var firstDesc = ""
@@ -247,7 +279,7 @@ object ArchiveMetadataModule {
                     val jsonStr = URL("https://archive.org/metadata/$cleanId").readText()
                     val root = JSONObject(jsonStr)
                     val metadata = root.optJSONObject("metadata")
-                    
+
                     val showTitle = metadata?.optString("title")?.takeIf { it.isNotBlank() }
                         ?: seriesTitleHint.ifBlank { cleanId.replace("_", " ").replace("-", " ") }
 
@@ -266,6 +298,7 @@ object ArchiveMetadataModule {
 
                             val isVideo = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
                                     format.contains("MPEG4", ignoreCase = true) ||
+                                    format.contains("h.264", ignoreCase = true) ||
                                     format.contains("Matroska", ignoreCase = true) ||
                                     format.contains("Ogg Video", ignoreCase = true)
 
@@ -331,38 +364,10 @@ object ArchiveMetadataModule {
                                 )
                             )
                         }
-                    } else {
-                        val searchUrl = "https://archive.org/advancedsearch.php?q=collection:$cleanId+AND+mediatype:movies&fl[]=identifier&fl[]=title&fl[]=runtime&sort[]=title+asc&rows=120&output=json"
-                        val searchJson = JSONObject(URL(searchUrl).readText())
-                        val docs = searchJson.optJSONObject("response")?.optJSONArray("docs")
-
-                        if (docs != null) {
-                            for (i in 0 until docs.length()) {
-                                val doc = docs.optJSONObject(i) ?: continue
-                                val epId = doc.optString("identifier").takeIf { it.isNotBlank() } ?: continue
-                                val epTitle = doc.optString("title").takeIf { it.isNotBlank() }
-                                    ?: epId.replace("_", " ").replace("-", " ")
-                                val runtime = doc.optString("runtime")
-
-                                val (seasonNum, epNum) = parseSeasonAndEpisode("$epId $epTitle $showTitle")
-                                val bestUrl = fetchAvailableQualities(epId).firstOrNull()?.url
-                                    ?: "https://archive.org/download/$epId/$epId.mp4"
-
-                                rawEpisodes.add(
-                                    SeriesEpisode(
-                                        seasonNumber = if (seasonNum > 0) seasonNum else 1,
-                                        episodeNumber = epNum,
-                                        title = epTitle,
-                                        subtitleSearchQuery = epTitle,
-                                        fileUrl = bestUrl,
-                                        itemIdentifier = epId,
-                                        durationText = runtime
-                                    )
-                                )
-                            }
-                        }
                     }
-                } catch (e: Exception) { e.printStackTrace() }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
 
             val distinctEpisodes = rawEpisodes
@@ -424,10 +429,10 @@ object ArchiveMetadataModule {
         }
         val seasonOnly = Regex("(?i)Season\\s*(\\d{1,2})\\b").find(text)
         val s = seasonOnly?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        
+
         val epOnly = Regex("(?i)(?:Episode|Ep\\.?|Part)\\s*(\\d{1,3})\\b").find(text)
         val e = epOnly?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        
+
         return s to e
     }
 
