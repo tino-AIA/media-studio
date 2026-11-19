@@ -305,7 +305,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND subject:(crime OR detective OR mystery OR thriller)", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND subject:(sci-fi OR \"science fiction\" OR fantasy)", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND subject:(comedy OR sitcom)", "downloads desc", isSeriesCategory = true),
-        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true)
+        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true),
+        GenreOption("Dramske i obiteljske serije", "$seriesBaseQuery AND subject:(drama OR family OR western)", "downloads desc", isSeriesCategory = true)
     )
 
     private val concertBaseQuery = "mediatype:movies AND collection:vhsconcerts_music"
