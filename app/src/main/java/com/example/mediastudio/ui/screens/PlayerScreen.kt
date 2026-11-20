@@ -118,6 +118,14 @@ fun PlayerScreen(
     var hasMultipleAudioTracks by remember { mutableStateOf(false) }
     var hasNotifiedMultiAudio by remember { mutableStateOf(false) }
 
+    val isEpisodicContent = remember(availableQualities) {
+        availableQualities.any {
+            it.label.contains(
+                Regex("(?i)(\\bs\\d{1,2}\\s*e\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b|\\bepisode\\b|\\bepizoda\\b|\\bseason\\b|\\bsezona\\b)")
+            )
+        }
+    }
+
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
@@ -561,11 +569,8 @@ fun PlayerScreen(
                         }
 
                         if (availableQualities.size > 1) {
-                            val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
-                            val btnLabel = if (isEpisodic) "📺 Epizode" else "⚙ Verzija"
-
                             PlayerChipButton(
-                                label = btnLabel,
+                                label = if (isEpisodicContent) "📺 Epizode" else "⚙ Verzije",
                                 onClick = {
                                     controlsInteractionTick++
                                     showQualityDialog = true
@@ -727,8 +732,7 @@ fun PlayerScreen(
         }
 
         if (showQualityDialog) {
-            val isEpisodic = availableQualities.any { it.label.contains(Regex("(?i)(s\\d+e\\d+|episode|part|pt|vol)")) } || availableQualities.size > 3
-            val dialogTitle = if (isEpisodic) "Odaberi Epizodu" else "Odaberi Verziju / Rezoluciju"
+            val dialogTitle = if (isEpisodicContent) "Odaberi epizodu" else "Odaberi verziju / rezoluciju"
 
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
