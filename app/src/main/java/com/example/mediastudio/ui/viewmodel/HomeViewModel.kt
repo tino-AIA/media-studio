@@ -97,33 +97,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         .create(ArchiveSearchApi::class.java)
 
     private val adultEroticKeywords = listOf(
-        "18+", "erotski", "erotic", "erotica", "erotsk", "erotik", "xxx", "porn", "porno",
-        "pornography", "pornograf", "adult film", "adult movie", "adultvhs",
-        "softcore", "hardcore", "playboy", "penthouse", "orgy", "orgij", "fetish", "fetiš",
-        "nc-17", "alpha france", "nsfw", "nude", "naked", "golotinj", "striptiz",
-        "masturbating", "vintage porn", "baise moi", "baise-moi", "fick mich",
-        "schulmädchen", "sexfilm", "nimfoman", "nymphomaniac", "senzualn", "sensual",
-        "bordel", "brothel", "voyeur", "tinto brass", "jess franco", "zalman king",
-        "just jaeckin", "radley metzger", "walerian borowczyk",
-        "emmanuelle", "caligula", "kaligula", "sanjari", "the dreamers", "lolita",
-        "last tango in paris", "posljednji tango u parizu", "9½ weeks", "9 1/2 weeks",
-        "nine 1/2 weeks", "devet i pol tjedana", "showgirls", "basic instinct",
-        "sirove strasti", "eyes wide shut", "širom zatvorenih očiju",
-        "blue is the warmest", "plava je najtoplija boja", "fifty shades",
-        "pedeset nijansi", "365 days", "365 dana", "secretary 2002", "bitter moon",
-        "gorki mjesec", "malèna", "malena", "salò", "belle de jour", "ljepotica dana",
-        "henry & june", "henry i june", "unfaithful", "nevjerna", "body of evidence",
-        "sliver", "wild things", "the handmaiden", "sluškinja", "realm of the senses",
-        "empire des sens", "carstvo čula", "romance x", "anatomy of hell",
-        "anatomija pakla", "lie with me", "jeune & jolie", "young & beautiful",
-        "mlada i lijepa", "below her mouth", "room in rome", "soba u rimu",
-        "habitación en roma", "shortbus", "the brown bunny", "shame 2011",
-        "q desire", "love 2015", "histoire d'o", "story of o", "lady chatterley",
-        "ai no corrida", "good girl bad girl"
+        "18+", "erotski", "erotic", "erotica", "erotik", "xxx", "porn", "porno",
+        "pornography", "adult film", "adult movie", "adultvhs", "softcore", "hardcore",
+        "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france", "nsfw",
+        "vintage porn", "baise moi", "baise-moi", "fick mich", "schulmädchen", "sexfilm",
+        "tinto brass", "jess franco", "zalman king", "just jaeckin", "radley metzger",
+        "emmanuelle", "caligula", "kaligula", "last tango in paris", "posljednji tango u parizu",
+        "9½ weeks", "9 1/2 weeks", "nine 1/2 weeks", "devet i pol tjedana", "showgirls",
+        "basic instinct", "sirove strasti", "fifty shades", "pedeset nijansi", "365 days",
+        "365 dana", "salò", "belle de jour", "ljepotica dana", "henry & june", "henry i june",
+        "realm of the senses", "empire des sens", "carstvo čula", "romance x",
+        "anatomy of hell", "anatomija pakla", "jeune & jolie", "young & beautiful",
+        "below her mouth", "room in rome", "soba u rimu", "shortbus", "the brown bunny",
+        "histoire d'o", "story of o", "lady chatterley", "ai no corrida"
     )
 
     private val blockedSpecificAdultKeywords = listOf(
         "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay porn", "boy love"
+    )
+
+    private val blockedRegionalAndArabicKeywords = listOf(
+        "bollywood", "tollywood", "kollywood", "hindi", "telugu", "tamil", "urdu",
+        "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
+        "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh"
     )
 
     private val blockedSearchNoiseKeywords = listOf(
@@ -435,9 +431,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun isBlockedRegionalOrArabic(textBlob: String): Boolean {
+        if (Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u0900-\\u0D7F]").containsMatchIn(textBlob)) {
+            return true
+        }
+        val lower = textBlob.lowercase()
+        return blockedRegionalAndArabicKeywords.any { kw ->
+            Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(lower)
+        }
+    }
+
     private fun isBlockedSpecificAdult(item: SupabaseCatalogItem): Boolean {
         val blob = "${item.title} ${item.descriptionHr} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
-        return blockedSpecificAdultKeywords.any { blob.contains(it) }
+        return blockedSpecificAdultKeywords.any { blob.contains(it) } || isBlockedRegionalOrArabic(blob)
     }
 
     private fun isAdultOrEroticItem(item: SupabaseCatalogItem): Boolean {
@@ -449,12 +455,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
         val titleAndId = "${item.title} ${item.archiveId}".lowercase()
-        val fullBlob = "$titleAndId ${item.descriptionHr}".lowercase()
         return adultEroticKeywords.any { kw ->
             if (kw.length <= 5) {
                 Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(titleAndId)
             } else {
-                fullBlob.contains(kw)
+                titleAndId.contains(kw)
             }
         }
     }
@@ -570,7 +575,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 else -> {
                     val matching = liveActionMovies.filter { item ->
                         item.genres.any { it.equals(genre.title, ignoreCase = true) }
-                    }.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(25).map { it.toArchiveMovie() }
                     if (matching.isNotEmpty()) genre to matching else null
                 }
             }
@@ -591,20 +599,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 "Disney i Pixar klasici" -> {
                     val disney = featureAnimations.filter { isDisneyOrPixarItem(it) }
-                        .sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(25).map { it.toArchiveMovie() }
                     if (disney.isNotEmpty()) genre to disney else null
                 }
                 "Animirani filmovi" -> {
                     val otherAnim = featureAnimations.filter { !isDisneyOrPixarItem(it) }
-                        .sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(25).map { it.toArchiveMovie() }
                     if (otherAnim.isNotEmpty()) genre to otherAnim else null
                 }
                 "Klasični crtići" -> {
-                    val shorts = shortCartoons.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    val shorts = shortCartoons.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(25).map { it.toArchiveMovie() }
                     if (shorts.isNotEmpty()) genre to shorts else null
                 }
                 "Animirane serije" -> {
-                    val animSer = animatedSeries.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                    val animSer = animatedSeries.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(25).map { it.toArchiveMovie() }
                     if (animSer.isNotEmpty()) genre to animSer else null
                 }
                 else -> null
@@ -618,7 +638,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val matching = liveActionSeries.filter { item ->
                     item.genres.any { it.equals(genre.title, ignoreCase = true) }
-                }.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }
+                        .thenByDescending { it.popularityScore }
+                ).take(25).map { it.toArchiveMovie() }
                 if (matching.isNotEmpty()) genre to matching else null
             }
         }
@@ -847,7 +870,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (genre.isAdultCategory) {
                     val sbAdultRated = deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
                         .filter { it.mediaType == "movie" && !isBlockedSpecificAdult(it) && isAdultOrEroticItem(it) }
-                        .sortedByDescending { it.popularityScore }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        )
                         .map { item ->
                             RatedMovie(
                                 movie = item.toArchiveMovie(),
@@ -938,11 +964,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
             return when (genre.title) {
                 "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
-                "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedByDescending { it.popularityScore }
-                "Animirani filmovi" -> featureAnim.filter { !isDisneyOrPixarItem(it) }.sortedByDescending { it.popularityScore }
-                "Klasični crtići" -> shortCartoons.sortedByDescending { it.popularityScore }
-                "Animirane serije" -> animSeries.sortedByDescending { it.popularityScore }
-                else -> animMovies.sortedByDescending { it.popularityScore }
+                "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Animirani filmovi" -> featureAnim.filter { !isDisneyOrPixarItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Klasični crtići" -> shortCartoons.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Animirane serije" -> animSeries.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                else -> animMovies.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
             }
         }
 
@@ -963,7 +999,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             )
             else -> typedItems.filter { item ->
                 item.genres.any { it.equals(genre.title, ignoreCase = true) }
-            }.sortedByDescending { it.popularityScore }
+            }.sortedWith(
+                compareByDescending<SupabaseCatalogItem> { it.rating }
+                    .thenByDescending { it.popularityScore }
+            )
         }
     }
 
@@ -999,6 +1038,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()} ${subjectStr.lowercase()} ${collectionStr.lowercase()}"
 
                 if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
+                if (isBlockedRegionalOrArabic(combined)) return@mapNotNull null
                 if (excludeAdult && adultEroticKeywords.any { kw ->
                         if (kw.length <= 5) Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(combined)
                         else combined.contains(kw)
