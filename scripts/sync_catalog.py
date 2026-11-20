@@ -18,14 +18,15 @@ TMDB_IMG_POSTER = "https://image.tmdb.org/t/p/w500"
 TMDB_IMG_BACKDROP = "https://image.tmdb.org/t/p/w1280"
 
 session = requests.Session()
-adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+adapter = HTTPAdapter(pool_connections=48, pool_maxsize=48, max_retries=1)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 session.headers.update({
-    "User-Agent": "MediaStudioCatalogSync/3.0 (AndroidTV App; contact@mediastudio.local)"
+    "User-Agent": "MediaStudioCatalogSync/3.3 (AndroidTV App; contact@mediastudio.local)"
 })
 
 state_lock = threading.Lock()
+author_enrich_cache = {}
 
 SB_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -125,6 +126,43 @@ TMDB_DISCOVER_GENRE_SEEDS = [
     ("18", "Drama", 45)
 ]
 
+DISNEY_PIXAR_AND_ANIMATION_SEEDS = [
+    "Snow White and the Seven Dwarfs", "Pinocchio", "Fantasia", "Dumbo", "Bambi",
+    "Saludos Amigos", "The Three Caballeros", "Make Mine Music", "Fun and Fancy Free",
+    "Melody Time", "The Adventures of Ichabod and Mr. Toad", "Cinderella",
+    "Alice in Wonderland", "Peter Pan", "Lady and the Tramp", "Sleeping Beauty",
+    "One Hundred and One Dalmatians", "The Sword in the Stone", "The Jungle Book",
+    "The Aristocats", "Robin Hood", "The Many Adventures of Winnie the Pooh",
+    "The Rescuers", "The Fox and the Hound", "The Black Cauldron",
+    "The Great Mouse Detective", "Oliver & Company", "The Little Mermaid",
+    "The Rescuers Down Under", "Beauty and the Beast", "Aladdin", "The Lion King",
+    "Pocahontas", "The Hunchback of Notre Dame", "Hercules", "Mulan", "Tarzan",
+    "Fantasia 2000", "Dinosaur", "The Emperor's New Groove", "Atlantis: The Lost Empire",
+    "Lilo & Stitch", "Treasure Planet", "Brother Bear", "Home on the Range",
+    "Chicken Little", "Meet the Robinsons", "Bolt", "The Princess and the Frog",
+    "Tangled", "Winnie the Pooh", "Wreck-It Ralph", "Frozen", "Big Hero 6",
+    "Zootopia", "Moana", "Ralph Breaks the Internet", "Frozen II", "Raya and the Last Dragon",
+    "Encanto", "A Goofy Movie", "DuckTales the Movie: Treasure of the Lost Lamp",
+    "The Nightmare Before Christmas", "James and the Giant Peach", "Who Framed Roger Rabbit",
+    "Mary Poppins", "Bedknobs and Broomsticks", "Pete's Dragon",
+    "Toy Story", "A Bug's Life", "Toy Story 2", "Monsters, Inc.", "Finding Nemo",
+    "The Incredibles", "Cars", "Ratatouille", "WALL-E", "Up", "Toy Story 3",
+    "Cars 2", "Brave", "Monsters University", "Inside Out", "The Good Dinosaur",
+    "Finding Dory", "Cars 3", "Coco", "Incredibles 2", "Toy Story 4", "Onward",
+    "Soul", "Luca", "Turning Red", "Lightyear", "Elemental", "Inside Out 2",
+    "Spirited Away", "My Neighbor Totoro", "Princess Mononoke", "Howl's Moving Castle",
+    "Kiki's Delivery Service", "Castle in the Sky", "Nausicaä of the Valley of the Wind",
+    "Ponyo", "Grave of the Fireflies", "Porco Rosso", "The Wind Rises",
+    "Shrek", "Shrek 2", "Madagascar", "Kung Fu Panda", "How to Train Your Dragon",
+    "Ice Age", "Despicable Me", "Minions", "The Iron Giant", "Coraline",
+    "Corpse Bride", "Anastasia", "The Prince of Egypt", "The Road to El Dorado",
+    "Spirit: Stallion of the Cimarron", "The Land Before Time", "An American Tail",
+    "All Dogs Go to Heaven", "The Secret of NIMH", "Ferngully: The Last Rainforest",
+    "The Swan Princess", "The Polar Express", "Monster House", "Wallace & Gromit: The Curse of the Were-Rabbit",
+    "Chicken Run", "The Mitchells vs. the Machines", "Spider-Man: Into the Spider-Verse",
+    "Akira", "Ghost in the Shell", "Watership Down", "Animal Farm", "Heavy Metal"
+]
+
 ARCHIVE_FEATURE_COLLECTIONS = [
     "feature_films", "film_noir", "SciFi_Films", "comedy_films", "opensource_movies",
     "laserdiscarchive", "colorized-and-upscaled-movies", "vhsvault",
@@ -160,14 +198,20 @@ TMDB_TV_GENRE_MAP = {
 
 TMDB_TV_DISCOVER_GENRE_IDS = ["80", "9648", "10765", "10759", "35", "18", "10751", "37", "16", "10762"]
 
-CLASSIC_SHORT_CARTOON_QUERIES = [
+DISNEY_SHORT_CARTOON_QUERIES = [
+    "Walt Disney", "Mickey Mouse", "Donald Duck", "Goofy", "Pluto",
+    "Silly Symphonies", "Silly Symphony", "Chip and Dale", "Chip 'n' Dale",
+    "Steamboat Willie", "Oswald the Lucky Rabbit", "Winnie the Pooh",
+    "Scrooge McDuck", "Huey Dewey Louie", "Minnie Mouse", "Daisy Duck"
+]
+
+CLASSIC_SHORT_CARTOON_QUERIES = DISNEY_SHORT_CARTOON_QUERIES + [
     "Tom and Jerry", "Looney Tunes", "Merrie Melodies", "Bugs Bunny",
-    "Popeye the Sailor", "Woody Woodpecker", "Pink Panther cartoon",
-    "Mickey Mouse cartoon", "Donald Duck cartoon", "Silly Symphonies",
-    "Droopy cartoon", "Betty Boop", "Felix the Cat", "Casper the Friendly Ghost",
-    "Superman cartoon", "Mighty Mouse", "Road Runner", "Daffy Duck",
-    "Porky Pig", "Tweety", "Goofy cartoon", "Pluto cartoon", "Yogi Bear",
-    "Huckleberry Hound", "Top Cat", "The Flintstones", "The Jetsons", "Scooby-Doo"
+    "Popeye", "Woody Woodpecker", "Pink Panther",
+    "Droopy", "Betty Boop", "Felix the Cat", "Casper the Friendly Ghost",
+    "Superman", "Mighty Mouse", "Road Runner", "Daffy Duck",
+    "Porky Pig", "Tweety", "Yogi Bear", "Huckleberry Hound",
+    "Top Cat", "The Flintstones", "The Jetsons", "Scooby-Doo"
 ]
 
 CLASSIC_TV_SEED_TITLES = [
@@ -343,7 +387,6 @@ def safe_get(url, params=None, timeout=12):
 
 
 def translate_to_croatian(text):
-    """Prevodi engleski opis na hrvatski kada TMDB nema hrvatski sažetak."""
     if not text or len(text.strip()) < 5:
         return text
     try:
@@ -386,6 +429,17 @@ def verify_stream_url_playable(url):
 def supabase_upsert(table, rows, conflict_col):
     if not rows:
         return []
+    conflict_cols = [c.strip() for c in conflict_col.split(",") if c.strip()]
+    if conflict_cols:
+        deduped_map = {}
+        for row in rows:
+            key = tuple(
+                str(row.get(c)).strip().lower() if isinstance(row.get(c), str) else row.get(c)
+                for c in conflict_cols
+            )
+            deduped_map[key] = row
+        rows = list(deduped_map.values())
+
     url = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict_col}"
     try:
         r = session.post(url, headers=SB_HEADERS, json=rows, timeout=20)
@@ -585,6 +639,7 @@ def normalize_for_exact_title_compare(raw_title):
     s = s.replace("&", " and ")
     s = re.sub(r"\[[^\]]*\]", " ", s)
     s = re.sub(r"[._]+", " ", s)
+    s = re.sub(r"(?i)^(?:walt\s+disney(?:'s|\s+pictures|\s+presents)?|disney(?:'s)?|pixar(?:'s)?|dreamworks(?:'s)?|studio\s+ghibli)\s*[-:]?\s*", "", s)
     s = re.sub(r"[\(\[\{]\s*(19\d{2}|20\d{2})\s*[\)\]\}]", " ", s)
     s = RELEASE_TAG_PATTERN.sub(" ", s)
     s = re.sub(r"\b(19\d{2}|20\d{2})\b\s*$", " ", s)
@@ -649,6 +704,22 @@ def clean_filename_to_title(filename, fallback_to_stem=False):
     if not clean and fallback_to_stem:
         clean = re.sub(r"[._]+", " ", name).strip()
     return clean.strip(), year
+
+
+def extract_variant_label(filename, enriched_title):
+    """Izdvaja oznaku verzije/reza iz naziva datoteke (npr. US cut, EU cut, Part 1) kako bi se izbjegli duplikati."""
+    base = filename.rsplit("/", 1)[-1]
+    name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
+    m = re.search(
+        r"(?i)\b(us\s*cut|eu\s*cut|uk\s*cut|director'?s\s*cut|extended|theatrical|unrated|uncut|restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+|1080p|720p|480p)\b",
+        name
+    )
+    if m:
+        return m.group(1).strip()
+    clean_stem, _ = clean_filename_to_title(filename, fallback_to_stem=True)
+    if clean_stem and clean_stem.lower() != enriched_title.lower():
+        return clean_stem[:32].strip()
+    return ""
 
 
 def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
@@ -1034,7 +1105,7 @@ def audit_and_dedupe_catalog():
             supabase_patch_row("catalog_items", row["id"], patch_payload)
         return True, None
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=14) as pool:
         future_map = {pool.submit(verify_existing_movie, r_item): r_item for r_item in movies_to_verify}
         for fut in as_completed(future_map):
             r_item = future_map[fut]
@@ -1110,6 +1181,11 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
     if len(letters_only) < 2:
         return None
 
+    cache_key = (title.lower().strip(), year, author_name)
+    with state_lock:
+        if cache_key in author_enrich_cache:
+            return author_enrich_cache[cache_key]
+
     params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR", "include_adult": "false"}
     if year > 0:
         params["year"] = year
@@ -1122,12 +1198,14 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
         results = (res or {}).get("results", [])
 
     if not results:
+        with state_lock:
+            author_enrich_cache[cache_key] = None
         return None
 
     best_match = None
     best_details = None
 
-    for candidate in results[:5]:
+    for candidate in results[:3]:
         rel_date = candidate.get("release_date") or ""
         cand_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
         if year > 0 and cand_year > 0 and abs(cand_year - year) > 2:
@@ -1152,13 +1230,15 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
             best_details = details
 
     if not best_match or not best_details:
+        with state_lock:
+            author_enrich_cache[cache_key] = None
         return None
 
     rel_date = best_details["release_date"] or best_match.get("release_date") or ""
     rel_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else year
     poster_path = best_details["poster_path"] or best_match.get("poster_path") or ""
 
-    return {
+    enriched_obj = {
         "tmdb_id": best_match["id"],
         "title": best_details["hr_title"] or best_match.get("title") or title,
         "release_year": rel_year,
@@ -1166,6 +1246,9 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
         "poster_url": f"{TMDB_IMG_POSTER}{poster_path}" if poster_path else "",
         "details": best_details
     }
+    with state_lock:
+        author_enrich_cache[cache_key] = enriched_obj
+    return enriched_obj
 
 
 def fetch_wiki_bio(author_name):
@@ -1179,7 +1262,7 @@ def fetch_wiki_bio(author_name):
 
 
 def sync_authors(existing_archive_ids, seen_tmdb_movies, author_promoted_rows):
-    """Paralelno sinkronizira 63 autora, zadržava SVE videozapise u kolekciji i promovira dugometražne u žanrove."""
+    """Paralelno sinkronizira 63 autora, zadržava SVE verzije u kolekciji bez duplikatnih ključeva i promovira u žanrove."""
     print("2/8 Paralelna sinkronizacija 63 kolekcije autora...", flush=True)
     promoted_counter = [0]
 
@@ -1219,7 +1302,6 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies, author_promoted_rows):
         if not videos:
             return f"  [{idx}/{len(AUTHORS)}] {author_name}: kolekcija nedostupna/ograničena"
 
-        # Grupiraj samo po istom osnovnom imenu datoteke (bez .ia.mp4 duplikata), ali zadrži SVE različite filmove i verzije
         deduped = {}
         for m in videos:
             clean_t, year = clean_filename_to_title(m["filename"], fallback_to_stem=True)
@@ -1246,14 +1328,17 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies, author_promoted_rows):
 
         for item in sorted(deduped.values(), key=lambda x: x["year"], reverse=True):
             enriched = tmdb_enrich_author_movie(item["title"], item["year"], author_name)
-            final_title = enriched["title"] if enriched else item["title"]
+            base_title = enriched["title"] if enriched else item["title"]
             final_year = enriched["release_year"] if (enriched and enriched["release_year"]) else item["year"]
 
+            final_title = base_title
             dedup_key = (final_title.lower(), final_year)
             if dedup_key in unique_movie_rows:
-                # Ako postoje dvije različite datoteke istog naziva (npr. dva dijela ili reza), sačuvaj obje
-                if unique_movie_rows[dedup_key]["stream_url"] != item["stream_url"]:
-                    dedup_key = (f"{final_title.lower()} [{item['title'].lower()}]", final_year)
+                if unique_movie_rows[dedup_key]["stream_url"] == item["stream_url"]:
+                    continue
+                variant_tag = extract_variant_label(item["filename"], base_title)
+                final_title = f"{base_title} ({variant_tag})" if variant_tag else f"{base_title} (verzija {len(unique_movie_rows) + 1})"
+                dedup_key = (final_title.lower(), final_year)
 
             if dedup_key not in unique_movie_rows:
                 unique_movie_rows[dedup_key] = {
@@ -1345,7 +1430,7 @@ def sync_authors(existing_archive_ids, seen_tmdb_movies, author_promoted_rows):
 
         return f"  [{idx}/{len(AUTHORS)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} u žanrove)"
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         futures = [pool.submit(process_single_author, item) for item in enumerate(AUTHORS, start=1)]
         for fut in as_completed(futures):
             print(fut.result(), flush=True)
@@ -1362,7 +1447,7 @@ def search_verified_archive_for_movie(tmdb_details, year):
         return None, None, 0
     if is_future_release(tmdb_details["release_date"]):
         return None, None, 0
-    if tmdb_details["runtime"] > 0 and tmdb_details["runtime"] < 60:
+    if tmdb_details["runtime"] > 0 and tmdb_details["runtime"] < 55:
         return None, None, 0
 
     orig_title = tmdb_details["orig_title"]
@@ -1375,6 +1460,9 @@ def search_verified_archive_for_movie(tmdb_details, year):
     if len(clean_q) < 2:
         return None, None, 0
 
+    is_animated = 16 in (tmdb_details.get("genre_ids") or [])
+    min_mb = 85 if is_animated else 200
+
     require_credits = has_multiple_tmdb_versions(orig_title)
     year_clause = f" AND year:{year}" if year >= 2024 else (f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else "")
     query = f'title:"{clean_q}"{year_clause} AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review'
@@ -1385,7 +1473,7 @@ def search_verified_archive_for_movie(tmdb_details, year):
             "q": query,
             "fl[]": ["identifier", "title", "downloads"],
             "sort[]": "downloads desc",
-            "rows": 6,
+            "rows": 7,
             "output": "json"
         }
     )
@@ -1396,7 +1484,7 @@ def search_verified_archive_for_movie(tmdb_details, year):
         ident = doc.get("identifier")
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
             continue
-        videos, arch_md = get_archive_item_details(ident, min_size_mb=220, allow_mkv=True)
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
         if not videos:
             continue
         best = pick_best_video_file(videos)
@@ -1419,11 +1507,11 @@ def search_verified_archive_for_movie(tmdb_details, year):
 
 
 def sync_tmdb_movies_by_genre(seen_tmdb_movies):
-    print("3/8 Pretraga TMDB filmova po svim žanrovima...", flush=True)
+    print("3/8 Pretraga TMDB filmova po svim žanrovima (uključujući Disney, Pixar i animirane)...", flush=True)
     candidates = {}
 
     for sort_by in ["vote_count.desc", "popularity.desc"]:
-        for page in range(1, 16):
+        for page in range(1, 14):
             data = safe_get(
                 f"{TMDB_BASE}/discover/movie",
                 {
@@ -1442,7 +1530,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
                         candidates[mid] = (m, None)
 
-    for page in range(1, 13):
+    for page in range(1, 11):
         data = safe_get(f"{TMDB_BASE}/movie/top_rated", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
         for m in (data or {}).get("results", []):
             mid = m["id"]
@@ -1452,7 +1540,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
 
     for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
         for sort_by in ["popularity.desc", "vote_count.desc"]:
-            for page in range(1, 11):
+            for page in range(1, 8):
                 data = safe_get(
                     f"{TMDB_BASE}/discover/movie",
                     {
@@ -1473,7 +1561,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                             candidates[mid] = (m, hr_genre_label)
 
     for sort_by in ["popularity.desc", "vote_count.desc"]:
-        for page in range(1, 13):
+        for page in range(1, 16):
             data = safe_get(
                 f"{TMDB_BASE}/discover/movie",
                 {
@@ -1481,7 +1569,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                     "language": "hr-HR",
                     "with_genres": "16",
                     "include_adult": "false",
-                    "vote_count.gte": 80,
+                    "vote_count.gte": 40,
                     "sort_by": sort_by,
                     "page": page
                 }
@@ -1491,6 +1579,17 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
                 if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
                         candidates[mid] = (m, None)
+
+    def fetch_anim_seed(anim_seed):
+        res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": anim_seed, "language": "hr-HR", "include_adult": "false"})
+        return (res or {}).get("results", [])[:2]
+
+    with ThreadPoolExecutor(max_workers=14) as pool:
+        for res_list in pool.map(fetch_anim_seed, DISNEY_PIXAR_AND_ANIMATION_SEEDS):
+            for m in res_list:
+                mid = m["id"]
+                if mid not in seen_tmdb_movies and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                    candidates[mid] = (m, None)
 
     print(f"  Ukupno {len(candidates)} novih TMDB kandidata za provjeru na Archive.org...", flush=True)
 
@@ -1537,7 +1636,7 @@ def sync_tmdb_movies_by_genre(seen_tmdb_movies):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + TMDB->Archive: {row['title']} ({year}) -> {', '.join(genres)}"
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=16) as pool:
         futures = [pool.submit(process_movie, item) for item in candidates.values()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1609,7 +1708,8 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
         if not details or not details["poster_path"]:
             return None
 
-        videos, arch_md = get_archive_item_details(ident, min_size_mb=200, allow_mkv=True)
+        is_anim = 16 in (details.get("genre_ids") or [])
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=(85 if is_anim else 200), allow_mkv=True)
         if not videos:
             return None
         best = pick_best_video_file(videos)
@@ -1663,7 +1763,7 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + Archive->TMDB: {row['title']} ({rel_year}) -> {', '.join(genres)}"
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=16) as pool:
         futures = [pool.submit(process_archive_doc, doc) for doc in archive_docs.values()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1672,67 +1772,106 @@ def sync_archive_feature_collections(existing_archive_ids, seen_tmdb_movies):
 
 
 def sync_classic_short_cartoons():
-    print("5/8 Sinkronizacija klasičnih kratkih crtića...", flush=True)
-    added_shorts = 0
+    """Sinkronizira Disney kratke crtiće i ostale klasične kratke crtiće (prag 4 MB)."""
+    print("5/8 Sinkronizacija Disney i klasičnih kratkih crtića...", flush=True)
+    added_counter = [0]
+    seen_short_titles = set()
 
+    disney_tokens = {
+        "disney", "mickey", "donald duck", "goofy", "pluto", "silly symphon",
+        "steamboat willie", "oswald", "winnie the pooh", "scrooge", "chip and dale",
+        "chip 'n' dale", "minnie mouse", "daisy duck"
+    }
+
+    candidate_docs = {}
     for cartoon_query in CLASSIC_SHORT_CARTOON_QUERIES:
-        query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons) AND -subject:trailer'
+        is_disney_q = cartoon_query in DISNEY_SHORT_CARTOON_QUERIES
+        if is_disney_q:
+            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons OR collection:opensource_movies OR collection:community_media) AND -subject:trailer'
+        else:
+            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons) AND -subject:trailer'
+
         data = safe_get(
             "https://archive.org/advancedsearch.php",
             params={
                 "q": query,
                 "fl[]": ["identifier", "title", "year", "downloads", "description"],
                 "sort[]": "downloads desc",
-                "rows": 30,
+                "rows": 45,
                 "output": "json"
             }
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
-            ident = doc.get("identifier") or ""
-            if not ident or ident.lower().startswith(("youtube-", "yt-")):
-                continue
-            raw_title = doc.get("title") or ident
-            if isinstance(raw_title, list):
-                raw_title = raw_title[0]
-            if contains_hentai_or_adult(ident, raw_title, doc.get("description")) or \
-               contains_blocked_regional_or_arabic(ident, raw_title, doc.get("description")):
-                continue
+            ident = doc.get("identifier")
+            if ident and ident not in candidate_docs:
+                candidate_docs[ident] = (doc, is_disney_q)
 
-            clean_t, parsed_y = clean_filename_to_title(str(raw_title))
-            if not clean_t or len(clean_t) < 2:
-                continue
+    def process_short_doc(item):
+        doc, is_disney_q = item
+        ident = doc.get("identifier") or ""
+        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+            return
+        raw_title = doc.get("title") or ident
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0]
+        if contains_hentai_or_adult(ident, raw_title, doc.get("description")) or \
+           contains_blocked_regional_or_arabic(ident, raw_title, doc.get("description")):
+            return
 
-            mp4s, _ = get_archive_item_details(ident, min_size_mb=15)
-            if not mp4s:
-                continue
-            best = max(mp4s, key=lambda x: x["size_mb"])
-            dur = best["duration_mins"]
-            if dur > 0 and (dur < 4 or dur > 35):
-                continue
+        clean_t, parsed_y = clean_filename_to_title(str(raw_title), fallback_to_stem=True)
+        if not clean_t or len(clean_t) < 2:
+            return
 
-            desc = doc.get("description") or ""
-            if isinstance(desc, list):
-                desc = " ".join(str(x) for x in desc)
+        norm_s = normalize_for_exact_title_compare(clean_t)
+        if not norm_s:
+            return
+        with state_lock:
+            if norm_s in seen_short_titles:
+                return
+            seen_short_titles.add(norm_s)
 
-            row = {
-                "archive_id": ident,
-                "title": clean_t,
-                "media_type": "movie",
-                "genres": ["Animirani klasici", "Klasični crtići"],
-                "release_year": parsed_y,
-                "popularity_score": float(doc.get("downloads") or 0),
-                "description_hr": str(desc)[:800],
-                "poster_url": f"https://archive.org/services/img/{ident}",
-                "stream_url": best["stream_url"],
-                "is_featured": False,
-                "is_valid": True,
-                "tmdb_runtime": dur,
-                "archive_runtime": dur
-            }
-            supabase_upsert("catalog_items", [row], "archive_id")
-            added_shorts += 1
+        videos, _ = get_archive_item_details(ident, min_size_mb=4, allow_mkv=True)
+        if not videos:
+            return
+        best = pick_best_video_file(videos)
+        dur = best["duration_mins"]
+        if dur > 0 and (dur < 2 or dur > 35):
+            return
 
-    print(f"  Obrađeno {added_shorts} klasičnih kratkih crtića.", flush=True)
+        if not verify_stream_url_playable(best["stream_url"]):
+            return
+
+        desc = doc.get("description") or ""
+        if isinstance(desc, list):
+            desc = " ".join(str(x) for x in desc)
+
+        blob_check = f"{ident} {raw_title} {clean_t}".lower()
+        is_disney_item = is_disney_q or any(tok in blob_check for tok in disney_tokens)
+        genres = ["Animirani klasici", "Klasični crtići", "Disney kratki crtići"] if is_disney_item else ["Animirani klasici", "Klasični crtići"]
+
+        row = {
+            "archive_id": ident,
+            "title": clean_t,
+            "media_type": "movie",
+            "genres": genres,
+            "release_year": parsed_y,
+            "popularity_score": float(doc.get("downloads") or 0),
+            "description_hr": str(desc)[:800],
+            "poster_url": f"https://archive.org/services/img/{ident}",
+            "stream_url": best["stream_url"],
+            "is_featured": False,
+            "is_valid": True,
+            "tmdb_runtime": dur,
+            "archive_runtime": dur
+        }
+        supabase_upsert("catalog_items", [row], "archive_id")
+        with state_lock:
+            added_counter[0] += 1
+
+    with ThreadPoolExecutor(max_workers=14) as pool:
+        list(pool.map(process_short_doc, candidate_docs.values()))
+
+    print(f"  Obrađeno {added_counter[0]} Disney i klasičnih kratkih crtića.", flush=True)
 
 
 def parse_season_and_episode(item_title, filename, total_seasons_hint=0):
@@ -2102,7 +2241,7 @@ def sync_tmdb_series(seen_tmdb_series):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + TMDB->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=14) as pool:
         futures = [pool.submit(process_series, item) for item in candidate_shows.items()]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -2201,7 +2340,7 @@ def sync_archive_tv_collections(seen_tmdb_series):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + ArchiveTV->Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=14) as pool:
         futures = [pool.submit(process_discovered_core, c) for c in discovered_cores]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -2209,89 +2348,349 @@ def sync_archive_tv_collections(seen_tmdb_series):
                 print(msg, flush=True)
 
 
+# 300 najpopularnijih Rock i Metal bendova i pjevača
+CONCERT_ROCK_METAL_ARTISTS = [
+    "Queen", "Pink Floyd", "Led Zeppelin", "AC/DC", "Metallica", "Iron Maiden",
+    "Black Sabbath", "Deep Purple", "Guns N' Roses", "Nirvana", "Pearl Jam",
+    "Soundgarden", "Alice in Chains", "Foo Fighters", "Red Hot Chili Peppers", "U2",
+    "The Rolling Stones", "The Beatles", "The Who", "Jimi Hendrix", "The Doors",
+    "Eric Clapton", "Dire Straits", "Bruce Springsteen", "Bon Jovi", "Van Halen",
+    "Aerosmith", "Kiss", "Scorpions", "Judas Priest", "Motorhead", "Megadeth",
+    "Slayer", "Pantera", "Sepultura", "System of a Down", "Korn", "Slipknot",
+    "Linkin Park", "Rammstein", "Nightwish", "Tool", "Rage Against the Machine",
+    "Green Day", "The Offspring", "Ramones", "Sex Pistols", "The Clash", "The Cure",
+    "Depeche Mode", "Joy Division", "New Order", "Talking Heads", "R.E.M.",
+    "Radiohead", "Oasis", "Blur", "Muse", "Coldplay", "INXS", "Simple Minds",
+    "Tears for Fears", "Sting", "The Police", "Phil Collins", "Genesis", "Peter Gabriel",
+    "David Bowie", "Lou Reed", "Iggy Pop", "Patti Smith", "Santana", "Bob Dylan",
+    "Neil Young", "Fleetwood Mac", "Eagles", "Lynyrd Skynyrd", "ZZ Top", "Rush",
+    "Yes", "King Crimson", "Jethro Tull", "Whitesnake", "Def Leppard", "Motley Crue",
+    "Ozzy Osbourne", "Alice Cooper", "Faith No More", "Beastie Boys",
+    "Creedence Clearwater Revival", "Janis Joplin", "Cream", "The Yardbirds",
+    "The Kinks", "The Animals", "The Byrds", "Grateful Dead", "Jefferson Airplane",
+    "Crosby, Stills, Nash & Young", "Simon & Garfunkel", "Tom Petty", "Bob Seger",
+    "Journey", "Foreigner", "Toto", "Boston", "Kansas", "Styx", "REO Speedwagon",
+    "Heart", "Pat Benatar", "Joan Jett", "Blondie", "The Pretenders",
+    "Siouxsie and the Banshees", "Bauhaus", "The Sisters of Mercy", "The Smiths",
+    "Morrissey", "Pixies", "Sonic Youth", "The Smashing Pumpkins", "Stone Temple Pilots",
+    "Bush", "Audioslave", "Chris Cornell", "Temple of the Dog", "Nine Inch Nails",
+    "Marilyn Manson", "Ministry", "Rob Zombie", "White Zombie", "Disturbed",
+    "Godsmack", "Avenged Sevenfold", "Five Finger Death Punch", "Trivium",
+    "Lamb of God", "Machine Head", "Gojira", "Meshuggah", "Opeth", "Mastodon",
+    "Dream Theater", "Symphony X", "Helloween", "Blind Guardian", "Gamma Ray",
+    "Stratovarius", "Sonata Arctica", "Epica", "Within Temptation", "Therion",
+    "Sabaton", "Powerwolf", "Amon Amarth", "Arch Enemy", "In Flames",
+    "Children of Bodom", "Dark Tranquillity", "At the Gates", "Kreator", "Sodom",
+    "Destruction", "Testament", "Exodus", "Anthrax", "Overkill", "Death",
+    "Cannibal Corpse", "Morbid Angel", "Deicide", "Obituary", "Venom",
+    "Celtic Frost", "Bathory", "Mayhem", "Emperor", "Dimmu Borgir", "Cradle of Filth",
+    "Type O Negative", "Danzig", "Misfits", "Bad Religion", "NOFX", "Pennywise",
+    "Rancid", "Social Distortion", "Blink-182", "Sum 41", "Rise Against",
+    "Billy Talent", "Bad Brains", "Black Flag", "Dead Kennedys", "Fugazi",
+    "Hüsker Dü", "The Replacements", "Dinosaur Jr.", "Pavement", "Weezer", "Beck",
+    "The White Stripes", "Jack White", "The Black Keys", "The Strokes",
+    "Arctic Monkeys", "Franz Ferdinand", "Interpol", "The Killers", "Kings of Leon",
+    "Arcade Fire", "Vampire Weekend", "Tame Impala", "Queens of the Stone Age",
+    "Kyuss", "Monster Magnet", "Clutch", "Fu Manchu", "Electric Wizard", "Sleep",
+    "Cathedral", "Candlemass", "Dio", "Rainbow", "Thin Lizzy", "Uriah Heep",
+    "Nazareth", "Status Quo", "Slade", "T. Rex", "Roxy Music", "Bryan Ferry",
+    "Gary Moore", "Rory Gallagher", "Joe Bonamassa", "Jeff Beck", "Stevie Ray Vaughan",
+    "The Allman Brothers Band", "The Doobie Brothers", "Steely Dan", "Chicago",
+    "Peter Frampton", "Ted Nugent", "Sammy Hagar", "Bad Company", "Humble Pie",
+    "Small Faces", "Faces", "Rod Stewart", "Joe Cocker", "Leon Russell",
+    "Van Morrison", "Elvis Costello", "Joe Jackson", "Nick Cave", "PJ Harvey",
+    "Björk", "Portishead", "Massive Attack", "The Prodigy", "The Chemical Brothers",
+    "Faithless", "Garbage", "No Doubt", "Alanis Morissette", "The Cranberries",
+    "Sinéad O'Connor", "Tori Amos", "Kate Bush", "Florence and the Machine",
+    "Evanescence", "Paramore", "Halestorm", "Ghost", "Volbeat", "Alter Bridge",
+    "Creed", "Nickelback", "3 Doors Down", "Staind", "Deftones", "Incubus",
+    "Jane's Addiction", "Primus", "Living Colour", "Suicidal Tendencies", "Body Count",
+    "Savatage", "Manowar", "Saxon", "Accept", "W.A.S.P.", "Twisted Sister",
+    "Quiet Riot", "Skid Row", "Cinderella", "Poison", "Warrant", "Tesla",
+    "Extreme", "Mr. Big", "Europe", "Marillion", "Porcupine Tree", "Steven Wilson",
+    "Camel", "Caravan", "Gentle Giant", "Emerson, Lake & Palmer", "Alan Parsons Project",
+    "Supertramp", "Electric Light Orchestra", "10cc", "The Moody Blues", "Procol Harum",
+    "Hawkwind", "Blue Öyster Cult", "Cheap Trick", "The Cars"
+]
+
+# 300 najpopularnijih Pop, R&B, Dance, Soul, Reggae i Latin izvođača
+CONCERT_POP_ARTISTS = [
+    "Michael Jackson", "Madonna", "Prince", "Whitney Houston", "George Michael",
+    "Wham!", "Tina Turner", "Elton John", "Freddie Mercury", "Kylie Minogue",
+    "Robbie Williams", "Take That", "Spice Girls", "Backstreet Boys", "NSYNC",
+    "Britney Spears", "Christina Aguilera", "Beyoncé", "Destiny's Child", "Rihanna",
+    "Lady Gaga", "Katy Perry", "Taylor Swift", "Adele", "Amy Winehouse", "Sade",
+    "Celine Dion", "Mariah Carey", "Janet Jackson", "Cher", "ABBA", "Bee Gees",
+    "Modern Talking", "Pet Shop Boys", "Erasure", "Duran Duran", "Spandau Ballet",
+    "A-ha", "Eurythmics", "Annie Lennox", "Cyndi Lauper", "Lionel Richie",
+    "Stevie Wonder", "Marvin Gaye", "Diana Ross", "Donna Summer", "Barry White",
+    "Earth, Wind & Fire", "Kool & the Gang", "Bob Marley", "UB40", "Shakira",
+    "Ricky Martin", "Enrique Iglesias", "Julio Iglesias", "Eros Ramazzotti",
+    "Laura Pausini", "Zucchero", "Gipsy Kings", "Buena Vista Social Club",
+    "Justin Timberlake", "Bruno Mars", "Ed Sheeran", "Justin Bieber", "Ariana Grande",
+    "Dua Lipa", "Billie Eilish", "Selena Gomez", "Miley Cyrus", "Demi Lovato",
+    "Shawn Mendes", "Harry Styles", "One Direction", "Maroon 5", "The Weeknd",
+    "Drake", "Usher", "Alicia Keys", "John Legend", "Ne-Yo", "Chris Brown",
+    "Mary J. Blige", "TLC", "En Vogue", "Salt-N-Pepa", "Toni Braxton",
+    "Boyz II Men", "Luther Vandross", "Teddy Pendergrass", "Aretha Franklin",
+    "Otis Redding", "Sam Cooke", "James Brown", "Al Green", "Curtis Mayfield",
+    "Isaac Hayes", "Sly and the Family Stone", "Parliament", "Funkadelic", "Chic",
+    "Nile Rodgers", "Gloria Gaynor", "Village People", "Boney M.", "Sandra",
+    "Kim Wilde", "Samantha Fox", "Sabrina", "Rick Astley", "Jason Donovan",
+    "Bananarama", "Culture Club", "Boy George", "Simply Red", "Lisa Stansfield",
+    "Roxette", "Ace of Base", "Aqua", "Vengaboys", "Haddaway", "Snap!",
+    "2 Unlimited", "La Bouche", "Culture Beat", "Dr. Alban", "Technotronic",
+    "Black Box", "C+C Music Factory", "Paula Abdul", "Debbie Gibson", "Tiffany",
+    "New Kids on the Block", "Westlife", "Boyzone", "Sugababes", "Girls Aloud",
+    "Little Mix", "Fifth Harmony", "The Pussycat Dolls", "Black Eyed Peas", "Fergie",
+    "Gwen Stefani", "Nelly Furtado", "Pink", "Kelly Clarkson", "Avril Lavigne",
+    "Sia", "Lana Del Rey", "Lorde", "Halsey", "Camila Cabello", "Ellie Goulding",
+    "Jessie J", "Sam Smith", "Lewis Capaldi", "George Ezra", "James Blunt",
+    "Dido", "Natalie Imbruglia", "Sheryl Crow", "Norah Jones", "Katie Melua",
+    "Michael Bublé", "Tom Jones", "Engelbert Humperdinck", "Barbra Streisand",
+    "Liza Minnelli", "Bette Midler", "Olivia Newton-John", "Dolly Parton",
+    "Shania Twain", "Faith Hill", "LeAnn Rimes", "Carrie Underwood", "Gloria Estefan",
+    "Miami Sound Machine", "Selena", "Juanes", "Luis Miguel", "Alejandro Sanz",
+    "Carlos Vives", "Marc Anthony", "Jennifer Lopez", "Pitbull", "Daddy Yankee",
+    "Maluma", "Bad Bunny", "J Balvin", "Rosalía", "Bryan Adams", "Richard Marx",
+    "Michael Bolton", "Kenny G", "Chris Isaak", "Seal", "Terence Trent D'Arby",
+    "Des'ree", "Gabrielle", "Corinne Bailey Rae", "Duffy", "Joss Stone",
+    "Paloma Faith", "Emeli Sandé", "Leona Lewis", "Rita Ora", "Charli XCX",
+    "Carly Rae Jepsen", "Kesha", "Christina Perri", "Colbie Caillat", "Jason Mraz",
+    "John Mayer", "Jack Johnson", "James Morrison", "Paolo Nutini", "Mika",
+    "Scissor Sisters", "Jamiroquai", "The Brand New Heavies", "Incognito",
+    "Level 42", "ABC", "The Human League", "Orchestral Manoeuvres in the Dark",
+    "Ultravox", "Alphaville", "Camouflage", "Falco", "Nena", "Kraftwerk",
+    "Moby", "Daft Punk", "Justice", "Calvin Harris", "David Guetta", "Avicii",
+    "Tiësto", "Armin van Buuren", "Swedish House Mafia", "Disclosure", "Rudimental",
+    "Clean Bandit", "Years & Years", "Billy Joel", "Paul McCartney", "Ringo Starr",
+    "Carole King", "James Taylor", "Cat Stevens", "Joni Mitchell", "Neil Diamond",
+    "Barry Manilow", "Paul Simon", "Art Garfunkel", "Hall & Oates", "Huey Lewis and the News",
+    "Kenny Loggins", "Christopher Cross", "Bonnie Tyler", "Belinda Carlisle",
+    "Bangles", "The Go-Go's", "Enya", "Loreena McKennitt", "Sarah McLachlan",
+    "Jewel", "Tracy Chapman", "Suzanne Vega", "Neneh Cherry", "All Saints",
+    "Atomic Kitten", "Steps", "S Club 7", "East 17", "98 Degrees", "Hanson",
+    "Savage Garden", "Darren Hayes", "Train", "OneRepublic", "Imagine Dragons",
+    "Twenty One Pilots", "The Script", "Bastille", "Foster the People", "MGMT",
+    "Empire of the Sun", "M83", "Röyksopp", "Goldfrapp", "Moloko", "Róisín Murphy",
+    "Dannii Minogue", "Sophie Ellis-Bextor", "Nelly", "Pharrell Williams",
+    "Timbaland", "Missy Elliott", "Aaliyah", "Brandy",
+    "Monica", "Ashanti", "Ciara", "Kelly Rowland", "Solange", "Erykah Badu",
+    "Lauryn Hill", "Jill Scott", "Maxwell", "D'Angelo", "Frank Ocean", "SZA",
+    "H.E.R.", "Daniel Caesar", "Khalid", "Post Malone", "Doja Cat", "Olivia Rodrigo"
+]
+
+CONCERT_CLASSICAL_JAZZ_ARTISTS = [
+    "Miles Davis", "John Coltrane", "Louis Armstrong", "Duke Ellington", "Ella Fitzgerald",
+    "Billie Holiday", "Nina Simone", "Frank Sinatra", "Tony Bennett", "Nat King Cole",
+    "Ray Charles", "B.B. King", "Muddy Waters", "Buddy Guy", "Herbie Hancock",
+    "Chick Corea", "Keith Jarrett", "Pat Metheny", "Oscar Peterson", "Chet Baker",
+    "Stan Getz", "Dave Brubeck", "Charlie Parker", "Dizzy Gillespie", "Thelonious Monk",
+    "Count Basie", "Glenn Miller", "Benny Goodman", "Luciano Pavarotti", "Plácido Domingo",
+    "José Carreras", "Three Tenors", "Andrea Bocelli", "Maria Callas", "Sarah Brightman",
+    "Herbert von Karajan", "Leonard Bernstein", "Yo-Yo Ma", "Itzhak Perlman",
+    "Vladimir Horowitz", "Arthur Rubinstein", "Glenn Gould", "Ennio Morricone",
+    "Vangelis", "Jean-Michel Jarre", "Diana Krall", "Jamie Cullum", "Wynton Marsalis",
+    "Branford Marsalis", "Sonny Rollins", "Wayne Shorter", "Jaco Pastorius",
+    "Weather Report", "Return to Forever", "Mahavishnu Orchestra", "Marcus Miller",
+    "Stanley Clarke", "George Benson", "Al Jarreau", "Bobby McFerrin", "Quincy Jones"
+]
+
+ROCK_METAL_LOOKUP = {a.lower() for a in CONCERT_ROCK_METAL_ARTISTS} | {
+    "rock", "metal", "punk", "grunge", "hard rock", "heavy metal", "thrash", "indie",
+    "alternative", "woodstock", "glastonbury", "monsters of rock", "download festival",
+    "acdc", "guns n roses", "motörhead", "rem", "motley crue"
+}
+
+POP_LOOKUP = {a.lower() for a in CONCERT_POP_ARTISTS} | {
+    "pop", "dance", "disco", "r&b", "soul", "funk", "reggae", "latin", "synthpop",
+    "eurodance", "live aid", "mtv", "beyonce", "celine dion", "michael buble",
+    "emeli sande", "tiesto", "roisin murphy"
+}
+
+CLASSICAL_JAZZ_LOOKUP = {a.lower() for a in CONCERT_CLASSICAL_JAZZ_ARTISTS} | {
+    "jazz", "blues", "classical", "symphony", "orchestra", "opera", "tenor", "soprano",
+    "philharmonic", "quartet", "concerto", "sonata", "mozart", "beethoven", "bach",
+    "vivaldi", "tchaikovsky", "chopin", "verdi", "puccini", "montreux jazz",
+    "bb king", "placido domingo", "jose carreras"
+}
+
+
+def classify_concert_genre(title, description="", subject="", hint_genre=None):
+    blob = f"{title} {subject} {description}".lower()
+    for kw in CLASSICAL_JAZZ_LOOKUP:
+        if len(kw) >= 4 and re.search(rf"\b{re.escape(kw)}\b", blob):
+            return "Klasika i Jazz"
+    if hint_genre:
+        return hint_genre
+    for kw in ROCK_METAL_LOOKUP:
+        if len(kw) >= 4 and re.search(rf"\b{re.escape(kw)}\b", blob):
+            return "Rock i Metal"
+    for kw in POP_LOOKUP:
+        if len(kw) >= 4 and re.search(rf"\b{re.escape(kw)}\b", blob):
+            return "Pop glazba"
+    if any(w in blob for w in ["festival", "band", "live at", "live in", "arena", "stadium"]):
+        return "Rock i Metal"
+    return "Pop glazba"
+
+
 def sync_concerts():
-    print("8/8 Sinkronizacija cjelovitih koncerata...", flush=True)
-    concert_base = (
-        "mediatype:movies AND "
-        "(collection:(vhsconcerts_music OR concerts OR live_music_video OR musicvideos) OR "
-        "subject:(concert OR \"live concert\" OR \"live performance\") OR "
-        "title:(\"live at\" OR \"live in\")) AND "
-        "-subject:trailer AND -subject:interview AND -subject:news"
-    )
-    concert_queries = [
-        ("Rock i Metal", f"{concert_base} AND (subject:(rock OR metal OR punk OR grunge) OR title:(rock OR metal OR punk))"),
-        ("Pop glazba", f"{concert_base} AND (subject:(pop OR \"pop music\" OR dance OR \"r&b\" OR disco) OR title:(pop OR tour))"),
-        ("Klasika i Jazz", f"{concert_base} AND (subject:(classical OR jazz OR blues OR soul OR symphony OR orchestra) OR title:(jazz OR symphony OR orchestra))")
+    """Paralelno puni koncerte iz 300 Rock/Metal izvođača, 300 Pop izvođača, Klasike/Jazza i Archive.org kolekcija."""
+    print("8/8 Duboka paralelna sinkronizacija koncerata (300 Rock/Metal + 300 Pop + Klasika/Jazz)...", flush=True)
+    candidate_docs = {}
+
+    collection_queries = [
+        ("mediatype:movies AND collection:vhsconcerts_music AND -subject:trailer AND -subject:interview AND -subject:news", 10, None),
+        ("mediatype:movies AND collection:concerts AND -subject:trailer AND -subject:interview AND -subject:news", 4, None),
+        ("mediatype:movies AND (subject:\"live concert\" OR subject:\"concert film\") AND -subject:trailer AND -subject:news", 3, None)
     ]
 
-    seen_concert_titles = set()
-    added_concerts = 0
-
-    for genre_label, query in concert_queries:
-        for page in [1, 2]:
+    for q, max_pages, hint in collection_queries:
+        for page in range(1, max_pages + 1):
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
-                    "q": query,
-                    "fl[]": ["identifier", "title", "description", "downloads"],
+                    "q": q,
+                    "fl[]": ["identifier", "title", "description", "subject", "downloads"],
                     "sort[]": "downloads desc",
-                    "rows": 100,
+                    "rows": 200,
                     "page": page,
                     "output": "json"
                 }
             )
-            for doc in (data or {}).get("response", {}).get("docs", []):
-                ident = doc.get("identifier") or ""
-                if not ident or ident.lower().startswith(("youtube-", "yt-")):
-                    continue
+            docs = (data or {}).get("response", {}).get("docs", [])
+            if not docs:
+                break
+            for doc in docs:
+                ident = doc.get("identifier")
+                if ident and ident not in candidate_docs:
+                    candidate_docs[ident] = (doc, hint)
 
-                raw_title = doc.get("title") or ident
-                if isinstance(raw_title, list):
-                    raw_title = raw_title[0]
-                if contains_hentai_or_adult(ident, raw_title, doc.get("description")) or \
-                   contains_blocked_regional_or_arabic(ident, raw_title, doc.get("description")):
-                    continue
+    artist_tasks = []
+    seen_seed_names = set()
+    for artist in CONCERT_ROCK_METAL_ARTISTS:
+        al = artist.strip().lower()
+        if al and al not in seen_seed_names:
+            seen_seed_names.add(al)
+            artist_tasks.append((artist.strip(), "Rock i Metal"))
+    for artist in CONCERT_POP_ARTISTS:
+        al = artist.strip().lower()
+        if al and al not in seen_seed_names:
+            seen_seed_names.add(al)
+            artist_tasks.append((artist.strip(), "Pop glazba"))
+    for artist in CONCERT_CLASSICAL_JAZZ_ARTISTS:
+        al = artist.strip().lower()
+        if al and al not in seen_seed_names:
+            seen_seed_names.add(al)
+            artist_tasks.append((artist.strip(), "Klasika i Jazz"))
 
-                clean_t, parsed_y = clean_filename_to_title(str(raw_title))
-                if not clean_t or len(clean_t) < 3:
-                    continue
+    def search_artist_concerts(task):
+        artist, hint_genre = task
+        clean_artist = artist.replace('"', "").strip()
+        if len(clean_artist) <= 3:
+            q = f'mediatype:movies AND title:"{clean_artist}" AND (title:(live OR concert OR tour OR wembley) OR collection:vhsconcerts_music OR subject:concert) AND -subject:trailer'
+        else:
+            q = f'mediatype:movies AND title:"{clean_artist}" AND (title:(live OR concert OR tour OR unplugged OR wembley OR budokan OR arena OR stadium) OR collection:vhsconcerts_music OR collection:concerts OR subject:concert) AND -subject:trailer AND -subject:interview'
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": q,
+                "fl[]": ["identifier", "title", "description", "subject", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 12,
+                "output": "json"
+            }
+        )
+        return ((data or {}).get("response", {}).get("docs", []), hint_genre)
 
-                norm_c = normalize_for_exact_title_compare(clean_t)
-                if not norm_c or norm_c in seen_concert_titles:
-                    continue
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for docs, hint_genre in pool.map(search_artist_concerts, artist_tasks):
+            for doc in docs:
+                ident = doc.get("identifier")
+                if ident and ident not in candidate_docs:
+                    candidate_docs[ident] = (doc, hint_genre)
 
-                videos, _ = get_archive_item_details(ident, min_size_mb=120, allow_mkv=True)
-                if not videos:
-                    continue
-                best = pick_best_video_file(videos)
-                dur = best["duration_mins"]
-                if dur > 0 and dur < 25:
-                    continue
+    print(f"  Pronađeno {len(candidate_docs)} kandidata koncerata za provjeru...", flush=True)
 
-                seen_concert_titles.add(norm_c)
-                desc = doc.get("description") or ""
-                if isinstance(desc, list):
-                    desc = " ".join(str(x) for x in desc)
+    seen_concert_titles = set()
+    added_counter = [0]
 
-                row = {
-                    "archive_id": ident,
-                    "title": clean_t,
-                    "media_type": "concert",
-                    "genres": [genre_label],
-                    "release_year": parsed_y,
-                    "popularity_score": float(doc.get("downloads") or 0),
-                    "description_hr": str(desc)[:1000],
-                    "poster_url": f"https://archive.org/services/img/{ident}",
-                    "stream_url": best["stream_url"],
-                    "is_featured": False,
-                    "is_valid": True,
-                    "tmdb_runtime": 0,
-                    "archive_runtime": dur
-                }
-                supabase_upsert("catalog_items", [row], "archive_id")
-                added_concerts += 1
+    def process_concert_doc(item):
+        doc, hint_genre = item
+        ident = doc.get("identifier") or ""
+        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+            return None
 
-    print(f"  Obrađeno {added_concerts} cjelovitih koncerata.", flush=True)
+        raw_title = doc.get("title") or ident
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0]
+
+        desc = doc.get("description") or ""
+        if isinstance(desc, list):
+            desc = " ".join(str(x) for x in desc)
+
+        subj = doc.get("subject") or ""
+        if isinstance(subj, list):
+            subj = " ".join(str(x) for x in subj)
+
+        if contains_hentai_or_adult(ident, raw_title, desc) or \
+           contains_blocked_regional_or_arabic(ident, raw_title, desc):
+            return None
+
+        clean_t, parsed_y = clean_filename_to_title(str(raw_title))
+        if not clean_t or len(clean_t) < 3:
+            return None
+
+        norm_c = normalize_for_exact_title_compare(clean_t)
+        if not norm_c:
+            return None
+
+        with state_lock:
+            if norm_c in seen_concert_titles:
+                return None
+            seen_concert_titles.add(norm_c)
+
+        videos, _ = get_archive_item_details(ident, min_size_mb=65, allow_mkv=True)
+        if not videos:
+            return None
+        best = pick_best_video_file(videos)
+        dur = best["duration_mins"]
+        if dur > 0 and dur < 20:
+            return None
+
+        if not verify_stream_url_playable(best["stream_url"]):
+            return None
+
+        genre_label = classify_concert_genre(clean_t, desc, subj, hint_genre)
+        row = {
+            "archive_id": ident,
+            "title": clean_t,
+            "media_type": "concert",
+            "genres": [genre_label],
+            "release_year": parsed_y,
+            "popularity_score": float(doc.get("downloads") or 0),
+            "description_hr": str(desc)[:1000],
+            "poster_url": f"https://archive.org/services/img/{ident}",
+            "stream_url": best["stream_url"],
+            "is_featured": False,
+            "is_valid": True,
+            "tmdb_runtime": 0,
+            "archive_runtime": dur
+        }
+        supabase_upsert("catalog_items", [row], "archive_id")
+        with state_lock:
+            added_counter[0] += 1
+            count_now = added_counter[0]
+        if count_now % 50 == 0:
+            print(f"  + Spremljeno {count_now} koncerata (zadnji: {clean_t} -> {genre_label})", flush=True)
+        return genre_label
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = [pool.submit(process_concert_doc, item) for item in candidate_docs.values()]
+        for fut in as_completed(futures):
+            fut.result()
+
+    print(f"  Ukupno spremljeno {added_counter[0]} cjelovitih koncerata.", flush=True)
 
 
 if __name__ == "__main__":
