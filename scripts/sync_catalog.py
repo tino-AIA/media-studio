@@ -436,18 +436,23 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
 
 
 def pick_best_video_file(video_files):
+    """Daje prednost izvornim .mp4 i .mkv datotekama (više audio traka) i automatski pada na .ia.mp4."""
     def sort_key(f):
         fname_lower = f["filename"].lower()
         is_deriv = f.get("is_derivative", False)
         if not is_deriv and fname_lower.endswith(".mp4"):
             tier = 0
-        elif fname_lower.endswith(".mp4"):
+        elif not is_deriv:
             tier = 1
         else:
             tier = 2
         return (tier, -f["size_mb"])
 
-    return min(video_files, key=sort_key)
+    ordered = sorted(video_files, key=sort_key)
+    for candidate in ordered:
+        if verify_stream_url_playable(candidate["stream_url"]):
+            return candidate
+    return ordered[0]
 
 
 def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overview, hint_genre=None):
