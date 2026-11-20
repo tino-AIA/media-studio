@@ -55,6 +55,7 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
@@ -93,6 +94,7 @@ fun PlayerScreen(
     var controlsInteractionTick by remember { mutableIntStateOf(0) }
 
     var activeStreamUrl by remember { mutableStateOf("") }
+    var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
     var triedMp4Fallback by remember { mutableStateOf(false) }
     var playbackErrorMessage by remember { mutableStateOf("") }
 
@@ -177,28 +179,39 @@ fun PlayerScreen(
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedMp4Fallback = false
+        mp4FallbackUrlOverride = null
         playbackErrorMessage = ""
         isBuffering = true
 
-        if (directVideoUrl.isNotEmpty()) {
+        val initialUrl = if (directVideoUrl.isNotEmpty()) {
             availableQualities = emptyList()
             selectedQuality = null
-            activeStreamUrl = directVideoUrl
-            exoPlayer.setMediaItem(MediaItem.fromUri(directVideoUrl), 0L)
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = true
+            directVideoUrl
         } else {
             val cleanId = identifier.substringBefore(",tmdb-")
             val qualities = ArchiveMetadataModule.fetchAvailableQualities(cleanId)
             availableQualities = qualities
             val bestQuality = qualities.firstOrNull()
             selectedQuality = bestQuality
-            val startUrl = bestQuality?.url ?: fallbackVideoUrl
-            activeStreamUrl = startUrl
-            exoPlayer.setMediaItem(MediaItem.fromUri(startUrl), 0L)
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = true
+            bestQuality?.url ?: fallbackVideoUrl
         }
+
+        val upgradedOriginalUrl = if (initialUrl.lowercase().contains(".ia.mp4")) {
+            findOriginalMultiAudioUrl(initialUrl)
+        } else {
+            null
+        }
+
+        if (upgradedOriginalUrl != null && upgradedOriginalUrl != initialUrl) {
+            mp4FallbackUrlOverride = initialUrl
+            activeStreamUrl = upgradedOriginalUrl
+            exoPlayer.setMediaItem(MediaItem.fromUri(upgradedOriginalUrl), 0L)
+        } else {
+            activeStreamUrl = initialUrl
+            exoPlayer.setMediaItem(MediaItem.fromUri(initialUrl), 0L)
+        }
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
     }
 
     LaunchedEffect(quickHudTick) {
@@ -246,11 +259,11 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                if (!triedMp4Fallback && activeStreamUrl.contains("archive.org/download/")) {
+                if (!triedMp4Fallback && (mp4FallbackUrlOverride != null || activeStreamUrl.contains("archive.org/download/"))) {
                     triedMp4Fallback = true
                     isBuffering = true
                     coroutineScope.launch {
-                        val mp4Alternative = findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
+                        val mp4Alternative = mp4FallbackUrlOverride ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
                         if (mp4Alternative != null && mp4Alternative != activeStreamUrl) {
                             activeStreamUrl = mp4Alternative
                             exoPlayer.setMediaItem(MediaItem.fromUri(mp4Alternative), 0L)
@@ -807,6 +820,53 @@ fun PlayerScreen(
                 }
             )
         }
+    }
+}
+
+private suspend fun findOriginalMultiAudioUrl(iaMp4Url: String): String? = withContext(Dispatchers.IO) {
+    try {
+        val afterDownload = iaMp4Url.substringAfter("archive.org/download/", "")
+        val itemId = afterDownload.substringBefore("/")
+        val encodedFile = afterDownload.substringAfter("/", "")
+        if (itemId.isBlank() || encodedFile.isBlank()) return@withContext null
+
+        val decodedFile = URLDecoder.decode(encodedFile, "UTF-8")
+        val stem = decodedFile.replace(Regex("(?i)\\.ia\\.mp4$"), "")
+        if (stem.isBlank() || stem == decodedFile) return@withContext null
+
+        val metaJson = JSONObject(URL("https://archive.org/metadata/$itemId").readText())
+        if (metaJson.optBoolean("is_dark", false) || metaJson.optBoolean("is_restricted", false)) {
+            return@withContext null
+        }
+        val files = metaJson.optJSONArray("files") ?: return@withContext null
+
+        var bestOriginalUrl: String? = null
+        var bestPriority = Int.MAX_VALUE
+
+        for (i in 0 until files.length()) {
+            val f = files.optJSONObject(i) ?: continue
+            val name = f.optString("name")
+            val lower = name.lowercase()
+            if (lower.endsWith(".ia.mp4") || f.optString("source") == "derivative") continue
+            if (!lower.endsWith(".mkv") && !lower.endsWith(".mp4")) continue
+
+            val nameWithoutExt = name.substringBeforeLast(".")
+            if (nameWithoutExt.equals(stem, ignoreCase = true) ||
+                nameWithoutExt.substringAfterLast("/").equals(stem.substringAfterLast("/"), ignoreCase = true)
+            ) {
+                val priority = if (lower.endsWith(".mp4")) 0 else 1
+                if (priority < bestPriority) {
+                    bestPriority = priority
+                    val encoded = name.split("/").joinToString("/") { part ->
+                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                    }
+                    bestOriginalUrl = "https://archive.org/download/$itemId/$encoded"
+                }
+            }
+        }
+        bestOriginalUrl
+    } catch (_: Exception) {
+        null
     }
 }
 
