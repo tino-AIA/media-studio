@@ -289,6 +289,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val animationGenreDefinitions = listOf(
         GenreOption("Top 10 animiranih", "mediatype:movies AND (subject:animation OR subject:cartoon)", "downloads desc", isAnimationCategory = true),
         GenreOption("Disney i Pixar klasici", "mediatype:movies AND (title:(disney OR pixar OR \"walt disney\" OR mickey))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Disney kratki crtići", "mediatype:movies AND title:(\"walt disney\" OR \"mickey mouse\" OR \"donald duck\" OR \"silly symphonies\" OR goofy)", "downloads desc", isAnimationCategory = true),
         GenreOption("Animirani filmovi", "mediatype:movies AND (subject:animation OR collection:animationandcartoons)", "downloads desc", isAnimationCategory = true),
         GenreOption("Klasični crtići", "mediatype:movies AND (title:(\"looney tunes\" OR \"tom and jerry\" OR popeye OR \"bugs bunny\" OR \"pink panther\"))", "downloads desc", isAnimationCategory = true),
         GenreOption("Animirane serije", "mediatype:movies AND (subject:animation OR subject:cartoon) AND subject:\"tv series\"", "downloads desc", isAnimationCategory = true, isSeriesCategory = true)
@@ -468,6 +469,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val animGenres = setOf(
             "animirani klasici",
             "disney i pixar klasici",
+            "disney kratki crtići",
             "animirani filmovi",
             "klasični crtići",
             "animirane serije"
@@ -478,9 +480,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isDisneyOrPixarItem(item: SupabaseCatalogItem): Boolean {
-        if (item.genres.any { it.equals("Disney i Pixar klasici", ignoreCase = true) }) return true
+        if (item.genres.any {
+                it.equals("Disney i Pixar klasici", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
+        ) {
+            return true
+        }
         val blob = "${item.title} ${item.descriptionHr} ${item.archiveId}".lowercase()
-        return listOf("disney", "pixar", "walt disney", "mickey mouse", "donald duck", "toy story", "finding nemo", "lion king", "frozen", "aladdin").any {
+        return listOf(
+            "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
+            "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
+        ).any {
             blob.contains(it)
         }
     }
@@ -585,10 +596,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val shortCartoons = animatedMoviesAndShorts.filter { item ->
-            item.genres.any { it.equals("Klasični crtići", ignoreCase = true) }
+            item.genres.any {
+                it.equals("Klasični crtići", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
         }
         val featureAnimations = animatedMoviesAndShorts.filter { item ->
-            item.genres.none { it.equals("Klasični crtići", ignoreCase = true) }
+            item.genres.none {
+                it.equals("Klasični crtići", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
         }
 
         val builtAnimationCategories = animationGenreDefinitions.mapNotNull { genre ->
@@ -604,6 +621,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                                 .thenByDescending { it.popularityScore }
                         ).take(25).map { it.toArchiveMovie() }
                     if (disney.isNotEmpty()) genre to disney else null
+                }
+                "Disney kratki crtići" -> {
+                    val disneyShorts = shortCartoons.filter { item ->
+                        item.genres.any { it.equals("Disney kratki crtići", ignoreCase = true) } || isDisneyOrPixarItem(item)
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(25).map { it.toArchiveMovie() }
+                    if (disneyShorts.isNotEmpty()) genre to disneyShorts else null
                 }
                 "Animirani filmovi" -> {
                     val otherAnim = featureAnimations.filter { !isDisneyOrPixarItem(it) }
@@ -958,13 +984,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         if (genre.isAnimationCategory) {
             val animMovies = all.filter { it.mediaType == "movie" && isAnimatedItem(it) }
-            val shortCartoons = animMovies.filter { it.genres.any { g -> g.equals("Klasični crtići", ignoreCase = true) } }
-            val featureAnim = animMovies.filter { it.genres.none { g -> g.equals("Klasični crtići", ignoreCase = true) } }
+            val shortCartoons = animMovies.filter { item ->
+                item.genres.any { g ->
+                    g.equals("Klasični crtići", ignoreCase = true) ||
+                        g.equals("Disney kratki crtići", ignoreCase = true)
+                }
+            }
+            val featureAnim = animMovies.filter { item ->
+                item.genres.none { g ->
+                    g.equals("Klasični crtići", ignoreCase = true) ||
+                        g.equals("Disney kratki crtići", ignoreCase = true)
+                }
+            }
             val animSeries = all.filter { it.mediaType == "series" && isAnimatedItem(it) }
 
             return when (genre.title) {
                 "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
                 "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Disney kratki crtići" -> shortCartoons.filter { item ->
+                    item.genres.any { g -> g.equals("Disney kratki crtići", ignoreCase = true) } || isDisneyOrPixarItem(item)
+                }.sortedWith(
                     compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
                 )
                 "Animirani filmovi" -> featureAnim.filter { !isDisneyOrPixarItem(it) }.sortedWith(
