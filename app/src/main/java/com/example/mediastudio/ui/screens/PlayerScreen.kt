@@ -98,6 +98,14 @@ data class PlayerVersionOption(
     val height: Int = 0
 )
 
+private data class ParsedEpisodeContext(
+    val isSeries: Boolean,
+    val seriesTitle: String,
+    val season: Int,
+    val episode: Int,
+    val episodeTitle: String
+)
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -153,24 +161,16 @@ fun PlayerScreen(
     var hasMultipleAudioTracks by remember { mutableStateOf(false) }
     var hasNotifiedMultiAudio by remember { mutableStateOf(false) }
 
-    val isEpisodicContent = remember(availableVersions) {
-        availableVersions.any {
-            it.label.contains(
-                Regex("(?i)(\\bs\\d{1,2}\\s*e\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b|\\bepisode\\b|\\bepizoda\\b|\\bseason\\b|\\bsezona\\b)")
-            )
-        }
-    }
-
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                30_000, // minBufferMs: 30s unaprijed
-                90_000, // maxBufferMs: 90s unaprijed za glatku reprodukciju velikih HD datoteka
-                3_500,  // bufferForPlaybackMs: 3.5s prije prvog kadra
-                7_500   // bufferForPlaybackAfterRebufferMs: 7.5s zalihe nakon zastoja
+                30_000,
+                90_000,
+                3_500,
+                7_500
             )
             .setBackBuffer(15_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -285,7 +285,7 @@ fun PlayerScreen(
         }
         val subtitleDbKey = buildSubtitleDbKey(identifier, directVideoUrl)
         val safeCacheSlug = subtitleDbKey.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
-        val localCacheFile = File(context.cacheDir, "sub_hr_v4_$safeCacheSlug.json")
+        val localCacheFile = File(context.cacheDir, "sub_hr_v5_$safeCacheSlug.json")
 
         val sbMeta = SupabaseRepository.getCatalogItem(identifier)
         val titleEmbeddedYear = Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)").find(movieTitle)?.groupValues?.get(1).orEmpty()
@@ -294,7 +294,7 @@ fun PlayerScreen(
         }
         resolvedMovieYear = effectiveYear
 
-        // 1. Pokreni izvorni (najveći/najkvalitetniji) video stream odmah
+        // 1. Pokreni video stream odmah
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             directVideoUrl
         } else {
@@ -329,17 +329,20 @@ fun PlayerScreen(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
-        // 2. U pozadini učitaj sve verzije za ⚙ Verzije (automatski prebaci samo ako je trenutni strani audio, a postoji ENG)
+        // 2. U pozadini učitaj samo verzije TOG KONKRETNOG filma ili epizode (nikad druge filmove/epizode)
         launch {
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
+            val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, sbMeta?.mediaType)
             val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
+
             val discoveredVersions = loadAllMovieVersions(
                 cleanArchiveId = cleanArchiveId,
                 currentUrl = activeStreamUrl,
                 movieTitle = movieTitle,
                 movieYear = effectiveYear,
                 expectedRuntimeMins = expectedRuntimeMins,
-                searchAlternativeItems = !concertMode && !identifier.startsWith("tmdb-tv-")
+                episodeCtx = episodeCtx,
+                searchAlternativeItems = !concertMode
             )
 
             if (discoveredVersions.isNotEmpty()) {
@@ -366,7 +369,7 @@ fun PlayerScreen(
             }
         }
 
-        // 3. Provjera koncerata (samo Archive.org .srt) vs filmova/serija
+        // 3. Pretraga i automatski prijevod titlova (podržava i filmove i epizode serija!)
         launch {
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             if (concertMode) {
@@ -375,6 +378,7 @@ fun PlayerScreen(
                     movieTitle = movieTitle,
                     movieYear = effectiveYear,
                     directVideoUrl = directVideoUrl,
+                    mediaTypeHint = sbMeta?.mediaType,
                     archiveOnly = true
                 )
                 subtitleList = archiveOnlySubs
@@ -428,7 +432,13 @@ fun PlayerScreen(
                     }
                 }
 
-                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear, directVideoUrl = directVideoUrl)
+                val extraSubs = searchAllSubtitles(
+                    identifier = cleanArchiveId,
+                    movieTitle = movieTitle,
+                    movieYear = effectiveYear,
+                    directVideoUrl = directVideoUrl,
+                    mediaTypeHint = sbMeta?.mediaType
+                )
                 subtitleList = listOf(dbOption) + extraSubs
                 return@launch
             }
@@ -454,13 +464,25 @@ fun PlayerScreen(
                 quickHudMessage = "💬 Titlovi učitani iz baze"
                 quickHudTick++
 
-                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear, directVideoUrl = directVideoUrl)
+                val extraSubs = searchAllSubtitles(
+                    identifier = cleanArchiveId,
+                    movieTitle = movieTitle,
+                    movieYear = effectiveYear,
+                    directVideoUrl = directVideoUrl,
+                    mediaTypeHint = sbMeta?.mediaType
+                )
                 subtitleList = listOf(dbOption) + extraSubs
                 return@launch
             }
 
             isLoadingSubtitles = true
-            val foundSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear, directVideoUrl = directVideoUrl)
+            val foundSubs = searchAllSubtitles(
+                identifier = cleanArchiveId,
+                movieTitle = movieTitle,
+                movieYear = effectiveYear,
+                directVideoUrl = directVideoUrl,
+                mediaTypeHint = sbMeta?.mediaType
+            )
             isLoadingSubtitles = false
 
             if (foundSubs.isEmpty()) {
@@ -930,8 +952,8 @@ fun PlayerScreen(
 
                         if (availableVersions.size > 1) {
                             PlayerChipButton(
-                                label = if (isEpisodicContent) "📺 Epizode" else "⚙ Verzije (${availableVersions.size})",
-                                isHighlighted = availableVersions.size > 1 && !isEpisodicContent,
+                                label = "⚙ Verzije (${availableVersions.size})",
+                                isHighlighted = true,
                                 onClick = {
                                     controlsInteractionTick++
                                     showQualityDialog = true
@@ -963,6 +985,7 @@ fun PlayerScreen(
                                             movieTitle = movieTitle,
                                             movieYear = resolvedMovieYear,
                                             directVideoUrl = directVideoUrl,
+                                            mediaTypeHint = sbMeta?.mediaType,
                                             archiveOnly = archiveOnly
                                         )
                                         isLoadingSubtitles = false
@@ -1114,12 +1137,10 @@ fun PlayerScreen(
         }
 
         if (showQualityDialog) {
-            val dialogTitle = if (isEpisodicContent) "Odaberi epizodu" else "Odaberi verziju / rezoluciju"
-
             AlertDialog(
                 onDismissRequest = { showQualityDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = { Text(dialogTitle, color = Color.White) },
+                title = { Text("Odaberi verziju / rezoluciju", color = Color.White) },
                 text = {
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 340.dp),
@@ -1153,7 +1174,7 @@ fun PlayerScreen(
         }
 
         if (showSubtitleDialog) {
-            val videoFpsHint = if (detectedVideoFps > 0f) " (Film: ${formatFpsShort(detectedVideoFps)} fps)" else ""
+            val videoFpsHint = if (detectedVideoFps > 0f) " (Video: ${formatFpsShort(detectedVideoFps)} fps)" else ""
             AlertDialog(
                 onDismissRequest = { showSubtitleDialog = false },
                 containerColor = Color(0xFF1A1A1A),
@@ -1201,7 +1222,7 @@ fun PlayerScreen(
                                                 quickHudTick++
                                                 val dbKey = buildSubtitleDbKey(identifier, directVideoUrl)
                                                 val safeSlug = dbKey.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
-                                                val cacheFile = File(context.cacheDir, "sub_hr_v4_$safeSlug.json")
+                                                val cacheFile = File(context.cacheDir, "sub_hr_v5_$safeSlug.json")
                                                 val translated = translateCuesToCroatian(cuesToTranslate, cacheFile, sourceFps)
                                                 isTranslatingSubtitles = false
                                                 if (translated.isNotEmpty()) {
@@ -1278,6 +1299,82 @@ fun PlayerScreen(
     }
 }
 
+private fun parseEpisodeContext(
+    identifier: String,
+    movieTitle: String,
+    directVideoUrl: String,
+    mediaTypeHint: String?
+): ParsedEpisodeContext {
+    val decodedUrl = try {
+        URLDecoder.decode(directVideoUrl, "UTF-8")
+    } catch (_: Exception) {
+        directVideoUrl
+    }
+    val combined = "$movieTitle $decodedUrl"
+
+    val seRegex = Regex("(?i)\\bS(\\d{1,2})\\s*[-_.]?\\s*E(\\d{1,3})\\b")
+    val xRegex = Regex("(?i)\\b(\\d{1,2})x(\\d{1,3})\\b")
+
+    val seMatch = seRegex.find(movieTitle) ?: seRegex.find(decodedUrl)
+    val xMatch = if (seMatch == null) (xRegex.find(movieTitle) ?: xRegex.find(decodedUrl)) else null
+
+    val season = when {
+        seMatch != null -> seMatch.groupValues[1].toIntOrNull() ?: 0
+        xMatch != null -> xMatch.groupValues[1].toIntOrNull() ?: 0
+        else -> 0
+    }
+    val episode = when {
+        seMatch != null -> seMatch.groupValues[2].toIntOrNull() ?: 0
+        xMatch != null -> xMatch.groupValues[2].toIntOrNull() ?: 0
+        else -> 0
+    }
+
+    val isSeries = mediaTypeHint == "series" ||
+        identifier.startsWith("tmdb-tv-") ||
+        (season > 0 && episode > 0)
+
+    if (!isSeries) {
+        return ParsedEpisodeContext(false, "", 0, 0, "")
+    }
+
+    // Izdvoji naziv serije (prije "- S01E01" ili "S01E01") i naziv epizode (nakon "S01E01 -")
+    val splitMatch = Regex("(?i)^(.*?)(?:\\s*[-–—]\\s*)?(?:\\bS\\d{1,2}\\s*[-_.]?\\s*E\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b)(?:\\s*[-–—:]\\s*(.*))?$")
+        .find(movieTitle.trim())
+
+    val rawSeriesTitle = splitMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+    val rawEpTitle = splitMatch?.groupValues?.getOrNull(2)?.trim().orEmpty()
+
+    val cleanSeries = cleanMovieTitleForSubtitleSearch(
+        rawSeriesTitle.ifBlank {
+            movieTitle.replace(Regex("(?i)\\b(S\\d{1,2}E\\d{1,3}|\\d{1,2}x\\d{1,3}).*$"), "").trim()
+        }
+    )
+    val cleanEp = cleanMovieTitleForSubtitleSearch(rawEpTitle)
+
+    return ParsedEpisodeContext(
+        isSeries = true,
+        seriesTitle = cleanSeries,
+        season = season,
+        episode = episode,
+        episodeTitle = cleanEp
+    )
+}
+
+private fun fileMatchesEpisode(filename: String, season: Int, episode: Int): Boolean {
+    if (season <= 0 || episode <= 0) return false
+    val seMatch = Regex("(?i)\\bS(\\d{1,2})\\s*[-_.]?\\s*E(\\d{1,3})\\b").find(filename)
+    if (seMatch != null) {
+        return seMatch.groupValues[1].toIntOrNull() == season &&
+            seMatch.groupValues[2].toIntOrNull() == episode
+    }
+    val xMatch = Regex("(?i)\\b(\\d{1,2})x(\\d{1,3})\\b").find(filename)
+    if (xMatch != null) {
+        return xMatch.groupValues[1].toIntOrNull() == season &&
+            xMatch.groupValues[2].toIntOrNull() == episode
+    }
+    return false
+}
+
 private fun urlsMatchArchiveFile(urlA: String, urlB: String): Boolean {
     if (urlA.isBlank() || urlB.isBlank()) return false
     if (urlA.equals(urlB, ignoreCase = true)) return true
@@ -1298,7 +1395,7 @@ private fun classifyVersionLanguageRank(text: String): Int {
     val isForeignDub = Regex(
         "\\b(latino|audio[\\s._-]?latino|castellano|espanol|español|spanish|dublado|dublagem|doblado|doblaje|" +
             "portugues|portuguese|truefrench|french[\\s._-]?dub|german[\\s._-]?dub|italian[\\s._-]?dub|" +
-            "russian[\\s._-]?dub|ozvuchka|hindi|arabic)\\b"
+            "russian[\\s._-]?dub|ozvuchka|hindi|arabic|lektor[\\s._-]*pl|lektor[\\s._-]*polski|dubbing[\\s._-]*pl|polish[\\s._-]*dub|pldub)\\b"
     ).containsMatchIn(lower)
     return if (isForeignDub) 2 else 1
 }
@@ -1353,6 +1450,7 @@ private suspend fun loadAllMovieVersions(
     movieTitle: String,
     movieYear: String,
     expectedRuntimeMins: Int,
+    episodeCtx: ParsedEpisodeContext,
     searchAlternativeItems: Boolean
 ): List<PlayerVersionOption> = withContext(Dispatchers.IO) {
     val collected = mutableListOf<PlayerVersionOption>()
@@ -1370,12 +1468,22 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 1. Sve video datoteke unutar trenutnog Archive.org zapisa
+    val cleanLocalized = cleanMovieTitleForSubtitleSearch(
+        if (episodeCtx.isSeries) episodeCtx.seriesTitle else movieTitle
+    )
+    val translatedEn = translateTitleToEnglish(cleanLocalized)
+    val targetMovieWords = normalizeTitleWordsForMatch(translatedEn.ifBlank { cleanLocalized })
+    val isAuthorOrMultiCollection = Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b")
+        .containsMatchIn(cleanArchiveId)
+
+    // 1. Video datoteke unutar trenutnog Archive.org zapisa (strogo filtrirane za TAJ film ili TU epizodu!)
     if (cleanArchiveId.isNotBlank() && !cleanArchiveId.startsWith("http")) {
         try {
             val metaJson = JSONObject(URL("https://archive.org/metadata/$cleanArchiveId").readText())
             val md = metaJson.optJSONObject("metadata")
             val itemMetaTitle = md?.opt("title")?.toString().orEmpty()
+            val itemIsCollection = isAuthorOrMultiCollection ||
+                Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b").containsMatchIn(itemMetaTitle)
             val itemLangBlob = "$cleanArchiveId $itemMetaTitle ${md?.opt("language")?.toString().orEmpty()}"
 
             val files = metaJson.optJSONArray("files")
@@ -1390,8 +1498,23 @@ private suspend fun loadAllMovieVersions(
                     val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
                     if (sizeBytes < 25_000_000L) continue
 
+                    // Ako je serija: prihvati ISKLJUČIVO datoteke te iste epizode (npr. S01E01), nikad S02E01 itd.
+                    if (episodeCtx.isSeries) {
+                        if (episodeCtx.season > 0 && episodeCtx.episode > 0) {
+                            if (!fileMatchesEpisode(name, episodeCtx.season, episodeCtx.episode)) continue
+                        } else if (!urlsMatchArchiveFile("https://archive.org/download/$cleanArchiveId/$name", currentUrl)) {
+                            continue
+                        }
+                    } else if (itemIsCollection) {
+                        // Ako je kolekcija autora: prihvati ISKLJUČIVO verzije tog konkretnog filma, nikad druge filmove autora!
+                        val fileCleanTitle = cleanMovieTitleForSubtitleSearch(name.substringAfterLast("/").substringBeforeLast("."))
+                        val matchesByTitle = titlesMatchStrictly(targetMovieWords, fileCleanTitle)
+                        val isCurrentFile = urlsMatchArchiveFile("https://archive.org/download/$cleanArchiveId/$name", currentUrl)
+                        if (!matchesByTitle && !isCurrentFile) continue
+                    }
+
                     val lenSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                    if (detectedPrimaryRuntimeSecs <= 0 && lenSecs > 1800) {
+                    if (detectedPrimaryRuntimeSecs <= 0 && lenSecs > 900) {
                         detectedPrimaryRuntimeSecs = lenSecs
                     }
 
@@ -1426,34 +1549,39 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 2. Dodaj rezultate iz ArchiveMetadataModule ako ih već nema
-    try {
-        for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
-            addUniqueVersion(
-                PlayerVersionOption(
-                    label = q.label,
-                    url = q.url,
-                    languageRank = classifyVersionLanguageRank("${q.label} ${q.url}")
+    // 2. Dodaj rezultate iz ArchiveMetadataModule samo ako se NE radi o kolekciji autora niti seriji (da ne ubaci tuđe epizode/filmove)
+    if (!isAuthorOrMultiCollection && !episodeCtx.isSeries) {
+        try {
+            for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
+                addUniqueVersion(
+                    PlayerVersionOption(
+                        label = q.label,
+                        url = q.url,
+                        languageRank = classifyVersionLanguageRank("${q.label} ${q.url}")
+                    )
                 )
-            )
+            }
+        } catch (_: Exception) {
         }
-    } catch (_: Exception) {
     }
 
-    // 3. Potraži sve dostupne Archive.org uploade istog filma kako bi gledatelj mogao birati između svih verzija
+    // 3. Potraži dodatne verzije tog konkretnog filma ili te konkretne epizode (npr. englesku verziju umjesto Lektor PL)
     if (searchAlternativeItems) {
-        val cleanLocalized = cleanMovieTitleForSubtitleSearch(movieTitle)
-        val translatedEn = translateTitleToEnglish(cleanLocalized)
         val searchTitle = translatedEn.ifBlank { cleanLocalized }
         val targetYear = movieYear.toIntOrNull() ?: 0
 
         if (searchTitle.length >= 3) {
             try {
                 val asciiQuery = searchTitle.replace(Regex("[^a-zA-Z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
-                val yearClause = if (targetYear > 0) " AND year:[${targetYear - 1} TO ${targetYear + 1}]" else ""
-                val q = "title:\"$asciiQuery\"$yearClause AND mediatype:movies AND -subject:trailer AND -subject:review"
+                val q = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
+                    val seTag = String.format(Locale.US, "S%02dE%02d", episodeCtx.season, episodeCtx.episode)
+                    "title:\"$asciiQuery\" AND \"$seTag\" AND mediatype:movies AND -subject:trailer"
+                } else {
+                    val yearClause = if (targetYear > 0) " AND year:[${targetYear - 1} TO ${targetYear + 1}]" else ""
+                    "title:\"$asciiQuery\"$yearClause AND mediatype:movies AND -subject:trailer AND -subject:review"
+                }
                 val encodedQ = URLEncoder.encode(q, "UTF-8")
-                val searchUrl = "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=downloads&sort[]=downloads+desc&rows=12&output=json"
+                val searchUrl = "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=downloads&sort[]=downloads+desc&rows=10&output=json"
                 val conn = URL(searchUrl).openConnection() as HttpURLConnection
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0")
                 conn.connectTimeout = 5000
@@ -1470,7 +1598,9 @@ private suspend fun loadAllMovieVersions(
                             val altId = doc.optString("identifier")
                             if (altId.isBlank() || altId == cleanArchiveId || altId.lowercase().startsWith("youtube-")) continue
                             val altTitle = doc.optString("title")
-                            if (!titlesMatchStrictly(strictWords, cleanMovieTitleForSubtitleSearch(altTitle))) continue
+                            if (!episodeCtx.isSeries && !titlesMatchStrictly(strictWords, cleanMovieTitleForSubtitleSearch(altTitle))) {
+                                continue
+                            }
 
                             val altMeta = JSONObject(URL("https://archive.org/metadata/$altId").readText())
                             if (altMeta.optBoolean("is_dark", false) || altMeta.optBoolean("is_restricted", false)) continue
@@ -1485,11 +1615,18 @@ private suspend fun loadAllMovieVersions(
                                 if (!afName.endsWith(".mp4") && !afName.endsWith(".mkv")) continue
                                 if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(afName)) continue
                                 val afSize = af.optString("size").toLongOrNull() ?: 0L
-                                if (afSize < 250_000_000L) continue
-                                val afSecs = af.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                                if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 600) {
-                                    if (afSecs < (detectedPrimaryRuntimeSecs * 0.85).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.18).toInt()) {
+                                if (afSize < (if (episodeCtx.isSeries) 80_000_000L else 250_000_000L)) continue
+
+                                if (episodeCtx.isSeries) {
+                                    if (!fileMatchesEpisode("$altTitle $rawName", episodeCtx.season, episodeCtx.episode)) {
                                         continue
+                                    }
+                                } else {
+                                    val afSecs = af.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                                    if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 600) {
+                                        if (afSecs < (detectedPrimaryRuntimeSecs * 0.85).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.18).toInt()) {
+                                            continue
+                                        }
                                     }
                                 }
 
@@ -2164,7 +2301,8 @@ private fun cleanMovieTitleForSubtitleSearch(raw: String): String {
             ),
             " "
         )
-        .replace(Regex("\\b(1080p|720p|480p|2160p|4k|bluray|blu-ray|bdrip|brrip|webrip|web-dl|dvdrip|hdrip|x264|x265|hevc|aac|ac3|mp4|mkv|avi|widescreen|fullscreen|remastered|full movie)\\b", RegexOption.IGNORE_CASE), " ")
+        .replace(Regex("(?i)\\b(S\\d{1,2}\\s*[-_.]?\\s*E\\d{1,3}|\\d{1,2}x\\d{1,3})\\b.*$"), " ")
+        .replace(Regex("\\b(1080p|720p|480p|2160p|4k|bluray|blu-ray|bdrip|brrip|webrip|web-dl|dvdrip|hdrip|x264|x265|hevc|aac|ac3|mp4|mkv|avi|widescreen|fullscreen|remastered|full movie|lektor|pl|dubbed)\\b", RegexOption.IGNORE_CASE), " ")
         .replace(Regex("\\b(19\\d{2}|20\\d{2})\\b\\s*$"), " ")
         .replace(Regex("[._]+"), " ")
         .replace(Regex("^\\s*\\d{1,3}\\s*[.\\-)\\]]+\\s*"), "")
@@ -2218,7 +2356,8 @@ private fun translateTitleToEnglish(croatianTitle: String): String {
 private fun resolveImdbIdAndEnglishTitle(
     englishQueries: List<String>,
     localizedQuery: String,
-    targetYear: Int
+    targetYear: Int,
+    isSeries: Boolean = false
 ): Pair<String, String> {
     var resolvedImdbId = ""
     var resolvedEnglishTitle = ""
@@ -2227,12 +2366,18 @@ private fun resolveImdbIdAndEnglishTitle(
         .filter { it.first.length >= 2 }
         .distinctBy { it.first.lowercase(Locale.ROOT) }
 
+    val allowedQids = if (isSeries) {
+        setOf("tvseries", "tvminiseries", "tvspecial", "series")
+    } else {
+        setOf("feature", "movie", "tvmovie", "video")
+    }
+
     for ((rawQuery, isEnglishCandidate) in orderedQueries) {
         val cleanQuery = cleanMovieTitleForSubtitleSearch(rawQuery)
         if (cleanQuery.length < 2) continue
         val queryWords = normalizeTitleWordsForMatch(cleanQuery)
 
-        // 1. IMDb javni suggestion API
+        // 1. IMDb javni suggestion API (podržava i filmove i TV serije)
         try {
             val slug = cleanQuery.lowercase(Locale.ROOT)
                 .replace(Regex("\\s+"), "_")
@@ -2255,7 +2400,7 @@ private fun resolveImdbIdAndEnglishTitle(
                             val id = item.optString("id")
                             if (!id.startsWith("tt")) continue
                             val qid = item.optString("qid").lowercase()
-                            if (qid !in setOf("feature", "movie", "tvmovie", "video")) continue
+                            if (qid !in allowedQids) continue
 
                             val label = item.optString("l")
                             if (isEnglishCandidate && !titlesMatchStrictly(queryWords, label)) {
@@ -2267,8 +2412,8 @@ private fun resolveImdbIdAndEnglishTitle(
 
                             val rank = item.optInt("rank", 999999)
                             var score = 0
-                            if (qid == "feature") score += 450
-                            else if (qid == "movie" || qid == "tvmovie") score += 200
+                            if (qid == "feature" || qid == "tvseries") score += 450
+                            else score += 200
 
                             if (targetYear > 0 && y > 0) {
                                 val diff = abs(y - targetYear)
@@ -2294,10 +2439,11 @@ private fun resolveImdbIdAndEnglishTitle(
 
         if (resolvedImdbId.isNotBlank()) break
 
-        // 2. Cinemeta katalog
+        // 2. Cinemeta katalog (movie ili series)
         try {
+            val catalogType = if (isSeries) "series" else "movie"
             val encodedQ = URLEncoder.encode(cleanQuery, "UTF-8").replace("+", "%20")
-            val conn = URL("https://v3-cinemeta.strem.io/catalog/movie/top/search=$encodedQ.json")
+            val conn = URL("https://v3-cinemeta.strem.io/catalog/$catalogType/top/search=$encodedQ.json")
                 .openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             conn.connectTimeout = 5000
@@ -2336,12 +2482,14 @@ private suspend fun searchAllSubtitles(
     movieTitle: String,
     movieYear: String,
     directVideoUrl: String = "",
+    mediaTypeHint: String? = null,
     archiveOnly: Boolean = false
 ): List<PlayerSubtitleOption> = withContext(Dispatchers.IO) {
     val results = mutableListOf<PlayerSubtitleOption>()
     var archiveEnglishTitle = ""
     var parsedYear = movieYear.toIntOrNull() ?: 0
     var detectedArchiveConcert = archiveOnly || isConcertTitleOrId(identifier, movieTitle)
+    val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, mediaTypeHint)
     val isCollectionStream = directVideoUrl.contains("archive.org/download/")
     val targetVideoStem = if (isCollectionStream) {
         URLDecoder.decode(directVideoUrl.substringAfterLast("/").substringBeforeLast("."), "UTF-8")
@@ -2368,7 +2516,7 @@ private suspend fun searchAllSubtitles(
                 }
                 val isCollectionMetaTitle = Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b")
                     .containsMatchIn(rawArchTitle)
-                if (rawArchTitle.isNotBlank() && !isCollectionStream && !isCollectionMetaTitle) {
+                if (rawArchTitle.isNotBlank() && !isCollectionStream && !isCollectionMetaTitle && !episodeCtx.isSeries) {
                     if (parsedYear == 0) {
                         parsedYear = Regex("(19\\d{2}|20\\d{2})").find(rawArchTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     }
@@ -2415,23 +2563,34 @@ private suspend fun searchAllSubtitles(
         return@withContext results.distinctBy { it.downloadUrl }
     }
 
-    val cleanLocalizedTitle = cleanMovieTitleForSubtitleSearch(movieTitle)
+    val cleanLocalizedTitle = cleanMovieTitleForSubtitleSearch(
+        if (episodeCtx.isSeries) episodeCtx.seriesTitle else movieTitle
+    )
     val translatedEnTitle = translateTitleToEnglish(cleanLocalizedTitle)
     val englishQueries = listOf(archiveEnglishTitle, translatedEnTitle)
         .filter { it.length >= 2 }
         .distinctBy { it.lowercase(Locale.ROOT) }
 
-    val (imdbId, resolvedEnTitle) = resolveImdbIdAndEnglishTitle(englishQueries, cleanLocalizedTitle, parsedYear)
+    val (imdbId, resolvedEnTitle) = resolveImdbIdAndEnglishTitle(
+        englishQueries = englishQueries,
+        localizedQuery = cleanLocalizedTitle,
+        targetYear = parsedYear,
+        isSeries = episodeCtx.isSeries
+    )
     val englishTitleForTextSearch = listOf(resolvedEnTitle, archiveEnglishTitle, translatedEnTitle, cleanLocalizedTitle)
         .firstOrNull { it.length >= 2 } ?: ""
 
     val allowedLangs = setOf("hrv", "srp", "bos", "eng", "hr", "sr", "bs", "en")
 
-    // 2. OpenSubtitles v3 po točnom IMDb ID-u
+    // 2. OpenSubtitles v3 po točnom IMDb ID-u (za filmove /movie/tt..., za serije /series/tt...:S:E.json)
     if (imdbId.startsWith("tt")) {
         try {
-            val conn = URL("https://opensubtitles-v3.strem.io/subtitles/movie/$imdbId.json")
-                .openConnection() as HttpURLConnection
+            val stremEndpoint = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
+                "https://opensubtitles-v3.strem.io/subtitles/series/$imdbId:${episodeCtx.season}:${episodeCtx.episode}.json"
+            } else {
+                "https://opensubtitles-v3.strem.io/subtitles/movie/$imdbId.json"
+            }
+            val conn = URL(stremEndpoint).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             conn.connectTimeout = 6500
             conn.readTimeout = 7500
@@ -2455,7 +2614,12 @@ private suspend fun searchAllSubtitles(
                             else -> "ENG"
                         }
                         val urlTail = URLDecoder.decode(dlUrl.substringAfterLast("/").substringBefore("?"), "UTF-8")
-                        val displayTitle = englishTitleForTextSearch.ifBlank { movieTitle }
+                        val seSuffix = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
+                            String.format(Locale.US, " S%02dE%02d", episodeCtx.season, episodeCtx.episode)
+                        } else {
+                            ""
+                        }
+                        val displayTitle = (englishTitleForTextSearch.ifBlank { movieTitle }) + seSuffix
                         val fileName = if (urlTail.endsWith(".srt", ignoreCase = true) && urlTail.length > 6) {
                             urlTail
                         } else {
@@ -2479,13 +2643,17 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 3. OpenSubtitles REST API po IMDb ID-u
+    // 3. OpenSubtitles REST API po IMDb ID-u (s season/episode za serije)
     val numericImdb = imdbId.removePrefix("tt").trimStart('0')
     val langs = listOf("hrv", "srp", "bos", "eng")
     if (numericImdb.isNotBlank() && numericImdb.all { it.isDigit() }) {
         for (lang in langs) {
             try {
-                val apiUrl = "https://rest.opensubtitles.org/search/imdbid-$numericImdb/sublanguageid-$lang"
+                val apiUrl = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
+                    "https://rest.opensubtitles.org/search/episode-${episodeCtx.episode}/imdbid-$numericImdb/season-${episodeCtx.season}/sublanguageid-$lang"
+                } else {
+                    "https://rest.opensubtitles.org/search/imdbid-$numericImdb/sublanguageid-$lang"
+                }
                 val conn = URL(apiUrl).openConnection() as HttpURLConnection
                 conn.setRequestProperty("User-Agent", "VLSub 0.10.2")
                 conn.setRequestProperty("X-User-Agent", "VLSub 0.10.2")
@@ -2519,10 +2687,15 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 4. Rezervna tekstualna pretraga uz strogu provjeru naziva datoteke (>= 60% riječi)
+    // 4. Rezervna tekstualna pretraga (uključuje S01E01 za serije)
     if (results.none { it.language in setOf("HRV", "SRP", "BOS", "ENG") } && englishTitleForTextSearch.length >= 2) {
         val strictWords = normalizeTitleWordsForMatch(englishTitleForTextSearch)
-        val asciiQuery = englishTitleForTextSearch
+        val seSuffix = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
+            String.format(Locale.US, " s%02de%02d", episodeCtx.season, episodeCtx.episode)
+        } else {
+            ""
+        }
+        val asciiQuery = (englishTitleForTextSearch + seSuffix)
             .replace(Regex("[^a-zA-Z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -2544,6 +2717,9 @@ private suspend fun searchAllSubtitles(
                             val subFile = obj.optString("SubFileName")
                             val dlLink = obj.optString("SubDownloadLink")
                             if (subFile.isBlank() || dlLink.isBlank()) continue
+                            if (episodeCtx.isSeries && !fileMatchesEpisode(subFile, episodeCtx.season, episodeCtx.episode)) {
+                                continue
+                            }
                             if (!titlesMatchStrictly(strictWords, cleanMovieTitleForSubtitleSearch(subFile))) continue
 
                             val apiFps = obj.optString("MovieFPS").toFloatOrNull()?.takeIf { it in 15f..120f } ?: 0f
