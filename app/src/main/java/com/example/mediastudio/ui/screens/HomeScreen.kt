@@ -15,7 +15,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -35,6 +38,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
@@ -56,6 +60,7 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -78,6 +83,8 @@ fun HomeScreen(
     val heroMovies by viewModel.heroMovies.collectAsState()
     val activeHeroIndex by viewModel.activeHeroIndex.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val lastFocusedMovieId by viewModel.lastFocusedMovieId.collectAsState()
+    val lastFocusedRowTitle by viewModel.lastFocusedRowTitle.collectAsState()
 
     val authorImages = viewModel.staticAuthorImages
 
@@ -302,14 +309,43 @@ fun HomeScreen(
                             Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 16.sp)
                         }
                     } else {
+                        val favGridState = rememberLazyGridState(
+                            initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
+                            initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
+                        )
+
+                        DisposableEffect(favGridState) {
+                            onDispose {
+                                viewModel.savedHomeScrollIndex = favGridState.firstVisibleItemIndex
+                                viewModel.savedHomeScrollOffset = favGridState.firstVisibleItemScrollOffset
+                            }
+                        }
+
+                        LaunchedEffect(favoriteMovies, lastFocusedMovieId) {
+                            val targetId = lastFocusedMovieId
+                            if (favoriteMovies.isNotEmpty() && !targetId.isNullOrBlank()) {
+                                val targetIdx = favoriteMovies.indexOfFirst { it.identifier == targetId }
+                                if (targetIdx >= 0) {
+                                    val isVisible = favGridState.layoutInfo.visibleItemsInfo.any { it.index == targetIdx }
+                                    if (!isVisible) {
+                                        favGridState.scrollToItem(targetIdx)
+                                    }
+                                }
+                            }
+                        }
+
                         LazyVerticalGrid(
+                            state = favGridState,
                             columns = GridCells.Adaptive(minSize = 120.dp),
                             contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 40.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp),
                             modifier = Modifier.fillMaxSize().padding(paddingValues)
                         ) {
-                            items(favoriteMovies) { movie ->
+                            items(
+                                items = favoriteMovies,
+                                key = { it.identifier }
+                            ) { movie ->
                                 val isDbSeries = SupabaseRepository.getCatalogItem(movie.identifier)?.mediaType == "series"
                                 val isProbablySeries = isDbSeries ||
                                     movie.identifier.startsWith("tmdb-tv-") ||
@@ -320,18 +356,52 @@ fun HomeScreen(
                                     isSeries = isProbablySeries,
                                     viewModel = viewModel,
                                     authorImages = authorImages,
-                                    onMovieClick = { item -> if (isProbablySeries) onSeriesClick(item) else onMovieClick(item) }
+                                    shouldRestoreFocus = movie.identifier == lastFocusedMovieId,
+                                    onFocusRestored = { viewModel.clearLastFocusedMovie() },
+                                    onMovieClick = { item ->
+                                        viewModel.savedHomeScrollIndex = favGridState.firstVisibleItemIndex
+                                        viewModel.savedHomeScrollOffset = favGridState.firstVisibleItemScrollOffset
+                                        viewModel.rememberSelectedItem(item, "FAVORITES")
+                                        if (isProbablySeries) onSeriesClick(item) else onMovieClick(item)
+                                    }
                                 )
                             }
                         }
                     }
                 } else {
+                    val homeListState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
+                        initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
+                    )
+
+                    DisposableEffect(homeListState) {
+                        onDispose {
+                            viewModel.savedHomeScrollIndex = homeListState.firstVisibleItemIndex
+                            viewModel.savedHomeScrollOffset = homeListState.firstVisibleItemScrollOffset
+                        }
+                    }
+
+                    LaunchedEffect(activeCategories, lastFocusedRowTitle) {
+                        val targetRow = lastFocusedRowTitle
+                        if (activeCategories.isNotEmpty() && !targetRow.isNullOrBlank()) {
+                            val rowIdx = activeCategories.indexOfFirst { it.first.title == targetRow }
+                            if (rowIdx >= 0) {
+                                val lazyColIdx = rowIdx + 1
+                                val isVisible = homeListState.layoutInfo.visibleItemsInfo.any { it.index == lazyColIdx }
+                                if (!isVisible) {
+                                    homeListState.scrollToItem(lazyColIdx)
+                                }
+                            }
+                        }
+                    }
+
                     LazyColumn(
+                        state = homeListState,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(paddingValues)
                     ) {
-                        item {
+                        item(key = "hero_banner") {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -378,13 +448,19 @@ fun HomeScreen(
                                                 text = "Gledaj odmah",
                                                 icon = Icons.Default.PlayArrow,
                                                 isPrimary = true,
-                                                onClick = { if (isSeries) onSeriesClick(movie) else onMovieClick(movie) }
+                                                onClick = {
+                                                    viewModel.clearLastFocusedMovie()
+                                                    if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
+                                                }
                                             )
                                             HeroButton(
                                                 text = "Detalji",
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
-                                                onClick = { if (isSeries) onSeriesClick(movie) else onMovieClick(movie) }
+                                                onClick = {
+                                                    viewModel.clearLastFocusedMovie()
+                                                    if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
+                                                }
                                             )
                                         }
                                     }
@@ -410,7 +486,10 @@ fun HomeScreen(
                             }
                         }
 
-                        items(count = activeCategories.size) { index ->
+                        items(
+                            count = activeCategories.size,
+                            key = { idx -> activeCategories[idx].first.title }
+                        ) { index ->
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             val isRowSeries = isSeriesTab || genre.isSeriesCategory
@@ -421,13 +500,18 @@ fun HomeScreen(
                                 isSeries = isRowSeries,
                                 viewModel = viewModel,
                                 authorImages = authorImages,
+                                lastFocusedMovieId = lastFocusedMovieId,
+                                lastFocusedRowTitle = lastFocusedRowTitle,
                                 onMovieClick = { item ->
+                                    viewModel.savedHomeScrollIndex = homeListState.firstVisibleItemIndex
+                                    viewModel.savedHomeScrollOffset = homeListState.firstVisibleItemScrollOffset
+                                    viewModel.rememberSelectedItem(item, genre.title)
                                     if (isRowSeries) onSeriesClick(item) else onMovieClick(item)
                                 },
                                 onHeaderClick = { onGenreSelect(genre) }
                             )
                         }
-                        item { Spacer(modifier = Modifier.height(40.dp)) }
+                        item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(40.dp)) }
                     }
                 }
             }
@@ -695,6 +779,8 @@ fun MovieCategoryRow(
     isSeries: Boolean,
     viewModel: HomeViewModel,
     authorImages: Map<String, String>,
+    lastFocusedMovieId: String? = null,
+    lastFocusedRowTitle: String? = null,
     onMovieClick: (ArchiveMovie) -> Unit,
     onHeaderClick: () -> Unit
 ) {
@@ -702,6 +788,21 @@ fun MovieCategoryRow(
     val displayTitle = if (isNetflixTop10) "🔥 ${genre.title}" else genre.title
     val headerInteraction = remember { MutableInteractionSource() }
     val isHeaderFocused by headerInteraction.collectIsFocusedAsState()
+    val rowListState = rememberLazyListState()
+    val isTargetRow = lastFocusedRowTitle == genre.title
+
+    LaunchedEffect(movies, lastFocusedMovieId, isTargetRow) {
+        val targetId = lastFocusedMovieId
+        if (isTargetRow && !targetId.isNullOrBlank()) {
+            val targetIdx = movies.indexOfFirst { it.identifier == targetId }
+            if (targetIdx >= 0) {
+                val isVisible = rowListState.layoutInfo.visibleItemsInfo.any { it.index == targetIdx }
+                if (!isVisible) {
+                    rowListState.scrollToItem(targetIdx)
+                }
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         Row(
@@ -745,14 +846,34 @@ fun MovieCategoryRow(
         }
 
         LazyRow(
+            state = rowListState,
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp)
         ) {
-            itemsIndexed(movies) { index, movie ->
+            itemsIndexed(
+                items = movies,
+                key = { _, m -> m.identifier }
+            ) { index, movie ->
+                val shouldRestore = isTargetRow && movie.identifier == lastFocusedMovieId
                 if (isNetflixTop10) {
-                    NetflixTop10Card(movie = movie, rankNumber = index + 1, isSeries = isSeries, onMovieClick = onMovieClick)
+                    NetflixTop10Card(
+                        movie = movie,
+                        rankNumber = index + 1,
+                        isSeries = isSeries,
+                        shouldRestoreFocus = shouldRestore,
+                        onFocusRestored = { viewModel.clearLastFocusedMovie() },
+                        onMovieClick = onMovieClick
+                    )
                 } else {
-                    MovieCard(movie = movie, isSeries = isSeries, viewModel = viewModel, authorImages = authorImages, onMovieClick = onMovieClick)
+                    MovieCard(
+                        movie = movie,
+                        isSeries = isSeries,
+                        viewModel = viewModel,
+                        authorImages = authorImages,
+                        shouldRestoreFocus = shouldRestore,
+                        onFocusRestored = { viewModel.clearLastFocusedMovie() },
+                        onMovieClick = onMovieClick
+                    )
                 }
             }
         }
@@ -761,12 +882,31 @@ fun MovieCategoryRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
+fun NetflixTop10Card(
+    movie: ArchiveMovie,
+    rankNumber: Int,
+    isSeries: Boolean,
+    shouldRestoreFocus: Boolean = false,
+    onFocusRestored: () -> Unit = {},
+    onMovieClick: (ArchiveMovie) -> Unit
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val cardFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(shouldRestoreFocus) {
+        if (shouldRestoreFocus) {
+            delay(60L)
+            try {
+                cardFocusRequester.requestFocus()
+                onFocusRestored()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     val firstArchiveId = movie.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("") }
@@ -789,6 +929,7 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
                     .width(115.dp)
                     .height(170.dp)
                     .align(Alignment.CenterEnd)
+                    .focusRequester(cardFocusRequester)
                     .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 interactionSource = interactionSource,
@@ -868,22 +1009,60 @@ fun NetflixTop10Card(movie: ArchiveMovie, rankNumber: Int, isSeries: Boolean, on
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, authorImages: Map<String, String>, onMovieClick: (ArchiveMovie) -> Unit) {
+fun MovieCard(
+    movie: ArchiveMovie,
+    isSeries: Boolean,
+    viewModel: HomeViewModel,
+    authorImages: Map<String, String>,
+    shouldRestoreFocus: Boolean = false,
+    onFocusRestored: () -> Unit = {},
+    onMovieClick: (ArchiveMovie) -> Unit
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val cardFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(shouldRestoreFocus) {
+        if (shouldRestoreFocus) {
+            delay(60L)
+            try {
+                cardFocusRequester.requestFocus()
+                onFocusRestored()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
-    var posterUrl by remember { mutableStateOf("") }
+    var posterUrl by remember(movie.identifier) {
+        mutableStateOf(
+            if (isAuthor) {
+                val authorName = movie.identifier.removePrefix("AUTHOR|")
+                SupabaseRepository.getAuthors()
+                    .find { it.name.equals(authorName, ignoreCase = true) }
+                    ?.photoUrl
+                    ?.takeIf { it.isNotBlank() }
+                    ?: viewModel.staticAuthorImages[authorName]
+                    ?: authorImages[authorName].orEmpty()
+            } else {
+                ""
+            }
+        )
+    }
 
-    LaunchedEffect(movie.title) {
+    LaunchedEffect(movie.identifier, movie.title) {
         if (isAuthor) {
-            val authorName = movie.title
-            val archiveId = viewModel.getAuthorArchiveId(authorName)
-            val mappedImage = viewModel.staticAuthorImages[authorName] ?: ""
-            posterUrl = mappedImage.ifEmpty { "https://archive.org/services/img/$archiveId" }
+            val authorName = movie.identifier.removePrefix("AUTHOR|")
+            val resolved = SupabaseRepository.getAuthors()
+                .find { it.name.equals(authorName, ignoreCase = true) }
+                ?.photoUrl
+                ?.takeIf { it.isNotBlank() }
+                ?: viewModel.staticAuthorImages[authorName]
+                ?: authorImages[authorName].orEmpty()
+            posterUrl = resolved
         } else {
             val firstArchiveId = movie.identifier.split(",").first()
             val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
@@ -898,8 +1077,10 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
                 .width(120.dp)
                 .height(175.dp)
                 .scale(scale)
+                .focusRequester(cardFocusRequester)
                 .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C)),
             interactionSource = interactionSource,
             onClick = { onMovieClick(movie) }
         ) {
@@ -909,22 +1090,50 @@ fun MovieCard(movie: ArchiveMovie, isSeries: Boolean, viewModel: HomeViewModel, 
                     if (painter.state is AsyncImagePainter.State.Loading) {
                         CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
                     }
-                    Image(
-                        painter = painter,
-                        contentDescription = movie.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
                     if (painter.state is AsyncImagePainter.State.Error) {
-                        val fallbackId = if (isAuthor) viewModel.getAuthorArchiveId(movie.title) else movie.identifier.split(",").first()
-                        val fallback = "https://archive.org/services/img/$fallbackId"
+                        if (isAuthor) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().background(Color(0xFF1F1F1F)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = movie.title,
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(52.dp)
+                                )
+                            }
+                        } else {
+                            val fallbackId = movie.identifier.split(",").first()
+                            val fallback = "https://archive.org/services/img/$fallbackId"
+                            Image(
+                                painter = rememberAsyncImagePainter(fallback),
+                                contentDescription = movie.title,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    } else {
                         Image(
-                            painter = rememberAsyncImagePainter(fallback),
+                            painter = painter,
                             contentDescription = movie.title,
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
+                            contentScale = ContentScale.Crop,
+                            alignment = if (isAuthor) Alignment.TopCenter else Alignment.Center
                         )
                     }
+                }
+            } else if (isAuthor) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color(0xFF1F1F1F)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = movie.title,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(52.dp)
+                    )
                 }
             } else {
                 Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray))
