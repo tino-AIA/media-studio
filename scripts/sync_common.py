@@ -72,18 +72,19 @@ SPAM_OR_FAKE_KEYWORDS = [
 EXPLICIT_DUB_KEYWORDS = [
     "dublado", "dublagem", "doblado", "doblaje", "ozvuchka", "дубляж", "озвучка",
     "russian dub", "spanish dub", "portuguese dub", "portugues dub", "french dub",
-    "german dub", "italian dub", "hindi dubbed", "truefrench",
+    "german dub", "italian dub", "hindi dubbed", "truefrench", "vostfr",
     "audio latino", "latino", "castellano", "espanol", "español", "sub espanol", "sub español",
-    "lektor pl", "lektor polski", "polski lektor", "dubbing pl", "polski dubbing", "polish dub", "pldub"
+    "lektor pl", "lektor polski", "polski lektor", "dubbing pl", "polski dubbing", "polish dub", "pldub",
+    "staffel", "german audio", "deutsch dub"
 ]
 
 NON_ENGLISH_LANG_TOKENS = {
     "por", "portuguese", "portugues", "português",
-    "spa", "spanish", "espanol", "español", "castellano", "latino",
+    "spa", "spanish", "espanol", "español", "castellano", "latino", "temporada",
     "rus", "russian", "русский",
-    "fre", "fra", "french", "francais", "français",
-    "ger", "deu", "german", "deutsch",
-    "ita", "italian", "italiano",
+    "fre", "fra", "french", "francais", "français", "saison",
+    "ger", "deu", "german", "deutsch", "staffel", "folge",
+    "ita", "italian", "italiano", "stagione",
     "hin", "hindi", "ara", "arabic", "tur", "turkish",
     "pol", "polish", "polski", "lektor", "ind", "indonesian", "may", "malay"
 }
@@ -658,6 +659,18 @@ def has_multiple_tmdb_versions(orig_title):
     for r in (res or {}).get("results", []):
         if normalize_for_exact_title_compare(r.get("original_title") or r.get("title") or "") == target_norm:
             y = extract_year_from_text(r.get("release_date") or "")
+            if y > 0:
+                years.add(y)
+    return len(years) > 1
+
+
+def has_multiple_tmdb_tv_versions(orig_name):
+    res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": orig_name, "language": "en-US"})
+    target_norm = normalize_for_exact_title_compare(orig_name)
+    years = set()
+    for r in (res or {}).get("results", []):
+        if normalize_for_exact_title_compare(r.get("original_name") or r.get("name") or "") == target_norm:
+            y = extract_year_from_text(r.get("first_air_date") or "")
             if y > 0:
                 years.add(y)
     return len(years) > 1
