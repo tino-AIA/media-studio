@@ -95,6 +95,8 @@ RELEASE_TAG_PATTERN = re.compile(
     r"dvdrip|hdrip|vhs|vhdrip|laserdisc|ldrip|hdtv|x264|x265|h264|h265|hevc|avc|xvid|divx|"
     r"aac|ac3|dts|ddp5\s*1|ddp2\s*0|10bit|8bit|mp4|mkv|avi|mov|ia|remastered|restored|"
     r"colorized|extended|unrated|theatrical|directors\s*cut|director's\s*cut|uncut|"
+    r"alternative\s*edition|redux|fanedit|fan\s*edit|the\s*complete\s*saga|complete\s*saga|"
+    r"special\s*edition|tv\s*version|vimeo|flac|subs|"
     r"full\s*movie|movie|film|subtitles|subbed|dubbed|eng|english|multi|dual\s*audio|"
     r"yify|yts|rarbg|galaxyrg|galaxy-rg|etrg|sparks|fgt|evo|bone|sartre|anoxmous|juggs|"
     r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series|"
@@ -104,10 +106,19 @@ RELEASE_TAG_PATTERN = re.compile(
 
 VARIANT_TAG_RE = re.compile(
     r"(?i)[\(\[]\s*("
-    r"the\s+complete\s+novel|complete\s+novel|director'?s?\s*cut|theatrical\s*cut|theatrical|"
+    r"the\s+complete\s+novel|complete\s+novel|the\s+complete\s+saga|complete\s+saga|"
+    r"alternative\s+edition(?:\s+redux)?|redux|fanedit|fan\s+edit|special\s+edition|tv\s+version|"
+    r"director'?s?\s*cut|theatrical\s*cut|theatrical|vimeo|mkv-flac-subs|"
     r"extended\s*cut|extended|final\s*cut|workprint|unrated|uncut|tv\s*cut|us\s*cut|eu\s*cut|uk\s*cut|"
     r"restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+"
     r")\s*[\)\]]"
+)
+
+EXTENDED_CUT_TAG_RE = re.compile(
+    r"(?i)\b("
+    r"redux|extended|complete\s+saga|complete\s+novel|alternative\s+edition|"
+    r"director'?s?\s*cut|tv\s*cut|tv\s*version|uncut|special\s+edition|fanedit|fan\s*edit"
+    r")\b"
 )
 
 WIDESCREEN_TAG_RE = re.compile(
@@ -731,8 +742,8 @@ def validate_movie_match(
     if is_foreign_dub_without_english(archive_md, identifier, chosen_filename, orig_lang):
         return False, "foreign_dub_without_english"
 
-    combined_meta = f"{ident_lower} {raw_arch_title.lower()} {str(raw_arch_desc).lower()}"
-    if any(kw in combined_meta for kw in SPAM_OR_FAKE_KEYWORDS):
+    title_and_id_meta = f"{ident_lower} {raw_arch_title.lower()}"
+    if any(kw in title_and_id_meta for kw in SPAM_OR_FAKE_KEYWORDS):
         return False, "spam_or_non_movie_keyword"
 
     tmdb_runtime = tmdb_details["runtime"] if tmdb_details else 0
@@ -756,6 +767,7 @@ def validate_movie_match(
     ):
         return False, f"title_mismatch ('{arch_norm_title}' != {list(norm_candidates)})"
 
+    arch_year = 0
     if expected_year > 0:
         arch_year = (
             extract_year_from_text(raw_arch_title)
@@ -768,10 +780,13 @@ def validate_movie_match(
                 return False, f"year_mismatch (archive={arch_year} vs tmdb={expected_year})"
 
     is_anim = 16 in (tmdb_details.get("genre_ids") or []) if tmdb_details else False
+    is_extended_cut = bool(EXTENDED_CUT_TAG_RE.search(f"{ident_lower} {raw_arch_title.lower()} {chosen_filename.lower()}"))
+
     if tmdb_runtime > 0:
         if archive_mins > 0:
             min_allowed = int(tmdb_runtime * 0.85)
-            max_allowed = int(tmdb_runtime * 1.18)
+            max_multiplier = 1.45 if is_extended_cut else 1.18
+            max_allowed = int(tmdb_runtime * max_multiplier)
             if archive_mins < min_allowed or archive_mins > max_allowed:
                 return False, f"runtime_mismatch (archive={archive_mins}m vs tmdb={tmdb_runtime}m)"
         else:
@@ -784,7 +799,8 @@ def validate_movie_match(
         if archive_mins <= 0 and chosen_size_mb < 350:
             return False, f"too_small_no_runtime ({chosen_size_mb:.0f}MB)"
 
-    must_check_credits = require_credits or (expected_year >= 2024)
+    year_confirmed = (expected_year > 0 and arch_year > 0 and abs(arch_year - expected_year) <= 1)
+    must_check_credits = (require_credits and not year_confirmed) or (expected_year >= 2024)
     if must_check_credits and tmdb_details:
         if not credits_match_archive_metadata(
             archive_md, identifier, tmdb_details.get("directors", []), tmdb_details.get("cast", [])
