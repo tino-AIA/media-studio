@@ -139,19 +139,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     val exactAuthorOrder = listOf(
-        "Alfred Hitchcock", "Francis Ford Coppola", "Brian De Palma", "Sergio Leone", "Lars von Trier",
-        "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard", "David Cronenberg",
-        "John Cassavetes", "Mira Nair", "Takeshi Kitano", "Freddie Francis", "Elvis Presley",
-        "David Lean", "Ingmar Bergman", "Roger Corman", "David DeCoteau", "François Truffaut",
-        "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders", "Nicholas Roeg", "John Ford",
-        "Mario Bava", "Akira Kurosawa", "Jacques Rivette", "Costa-Gavras", "Louis Malle",
-        "Federico Fellini", "George A. Romero", "Otto Preminger", "Herschell Gordon Lewis",
-        "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
-        "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
+        "Alfred Hitchcock", "Francis Ford Coppola", "Woody Allen", "Brian De Palma", "Sergio Leone",
+        "Lars von Trier", "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard",
+        "David Cronenberg", "Robert Altman", "John Cassavetes", "Mira Nair", "Takeshi Kitano",
+        "Freddie Francis", "Elvis Presley", "David Lean", "Ingmar Bergman", "Roger Corman",
+        "David DeCoteau", "François Truffaut", "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders",
+        "Nicholas Roeg", "John Ford", "Mario Bava", "Akira Kurosawa", "Jacques Rivette",
+        "Costa-Gavras", "Louis Malle", "Federico Fellini", "George A. Romero", "Otto Preminger",
+        "Herschell Gordon Lewis", "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington",
+        "Bernardo Bertolucci", "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
         "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
         "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol", "Leos Carax",
         "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
-        "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé"
+        "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé",
+        "Sion Sono", "Peter Greenaway", "Alan Clarke"
     )
 
     private val authorArchiveIds = mapOf(
@@ -217,7 +218,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Errol Morris" to "filmography-errol-morris",
         "Gordon Hessler" to "filmography-gordon-hessler",
         "Russ Meyer" to "filmography-russ-meyer",
-        "Gaspar Noé" to "filmography-gaspar-noe"
+        "Gaspar Noé" to "filmography-gaspar-noe",
+        "Woody Allen" to "filmography-woody-allen",
+        "Robert Altman" to "filmography-robert-altman",
+        "Sion Sono" to "filmography-sion-sono",
+        "Peter Greenaway" to "filmography-peter-greenaway",
+        "Alan Clarke" to "filmography-alan-clarke"
     )
 
     fun getAuthorArchiveId(authorName: String): String {
@@ -230,6 +236,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val fallbackAuthorImages = mapOf(
         "Alfred Hitchcock" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg/400px-Alfred_Hitchcock_by_Jack_Mitchell_1965_-_restored_1.jpg",
         "Francis Ford Coppola" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Francis_Ford_Coppola_1976.jpg/400px-Francis_Ford_Coppola_1976.jpg",
+        "Woody Allen" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Woody_Allen_Cannes_2016.jpg/400px-Woody_Allen_Cannes_2016.jpg",
         "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
         "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
         "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg",
@@ -238,6 +245,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Werner Herzog" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Werner_Herzog_%282018%29.jpg/400px-Werner_Herzog_%282018%29.jpg",
         "Jean-Luc Godard" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Jean-Luc_Godard_1968.jpg/400px-Jean-Luc_Godard_1968.jpg",
         "David Cronenberg" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/David_Cronenberg_at_Cannes_2014.jpg/400px-David_Cronenberg_at_Cannes_2014.jpg",
+        "Robert Altman" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Robert_Altman_1983.jpg/400px-Robert_Altman_1983.jpg",
         "John Cassavetes" to "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/John_Cassavetes_%281969%29.jpg/400px-John_Cassavetes_%281969%29.jpg",
         "Mira Nair" to "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Mira_Nair.jpg/400px-Mira_Nair.jpg",
         "Takeshi Kitano" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Takeshi_Kitano.jpg/400px-Takeshi_Kitano.jpg",
@@ -256,7 +264,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Alejandro Jodorowsky" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Alejandro_Jodorowsky_at_Cannes.jpg/400px-Alejandro_Jodorowsky_at_Cannes.jpg",
         "Sean Baker" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sean_Baker_2017.jpg/400px-Sean_Baker_2017.jpg",
         "PTA Filmography" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/Paul_Thomas_Anderson_2018.jpg/400px-Paul_Thomas_Anderson_2018.jpg",
-        "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg"
+        "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg",
+        "Peter Greenaway" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Peter_Greenaway_2013.jpg/400px-Peter_Greenaway_2013.jpg"
     )
 
     var staticAuthorImages: Map<String, String> = fallbackAuthorImages
@@ -558,6 +567,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             sbAuthors.map { ArchiveMovie(identifier = "AUTHOR|${it.name}", title = it.name) }
         } else {
             exactAuthorOrder.map { ArchiveMovie(identifier = "AUTHOR|$it", title = it) }
+        }
+
+        if (_selectedGenre.value?.isAuthorCollection == true) {
+            _genreMovies.value = authorList.map { RatedMovie(it, "", 0.0) }
+            _totalGenreMoviesCount.value = authorList.size
+            _totalGenrePages.value = 1
         }
 
         val builtMovieCategories = movieGenreDefinitions.mapNotNull { genre ->
