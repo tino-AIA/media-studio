@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -358,6 +358,7 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                 "output": "json"
             }
         )
+        valid_candidates = []
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = doc.get("identifier")
             if not ident or ident in existing_archive_ids or ident.lower().startswith(("youtube-", "yt-")):
@@ -380,14 +381,26 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                 chosen_size_mb=best["size_mb"]
             )
             if ok and verify_stream_url_playable(best["stream_url"]):
-                pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
-                if save_verified_movie_row(
-                    ident, details, year, best["stream_url"], arch_mins, pop_score,
-                    seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre
-                ):
-                    with state_lock:
-                        added[0] += 1
-                break
+                aspect_tier = best.get("aspect_tier", 1)
+                downloads = float(doc.get("downloads") or 0)
+                valid_candidates.append((aspect_tier, best["size_mb"], downloads, ident, best, arch_mins))
+                if year < 1955 or aspect_tier == 2:
+                    break
+
+        if valid_candidates:
+            if year >= 1955:
+                valid_candidates.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+            else:
+                valid_candidates.sort(key=lambda x: (-x[2], -x[1]))
+
+            _, _, _, best_ident, best_file, best_mins = valid_candidates[0]
+            pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
+            if save_verified_movie_row(
+                best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
+                seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre
+            ):
+                with state_lock:
+                    added[0] += 1
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         list(pool.map(process_candidate, candidates.values()))
