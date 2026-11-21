@@ -219,13 +219,21 @@ private class ParallelStreamCacheManager(context: Context) {
         }
 
         for (idx in fromChunk..toChunk) {
-            synchronized(entry.lock) {
-                if (idx in entry.completedChunks || idx in entry.inFlightChunks) continue
-                if ((entry.failedChunks[idx] ?: 0) >= 3) continue
-                entry.inFlightChunks.add(idx)
+            val shouldSubmit = synchronized(entry.lock) {
+                if (idx !in entry.completedChunks &&
+                    idx !in entry.inFlightChunks &&
+                    (entry.failedChunks[idx] ?: 0) < 3
+                ) {
+                    entry.inFlightChunks.add(idx)
+                    true
+                } else {
+                    false
+                }
             }
-            workerPool.submit {
-                downloadSingleChunk(entry, idx)
+            if (shouldSubmit) {
+                workerPool.submit {
+                    downloadSingleChunk(entry, idx)
+                }
             }
         }
     }
@@ -264,11 +272,11 @@ private class ParallelStreamCacheManager(context: Context) {
                     conn.inputStream.use { input ->
                         FileOutputStream(tmpFile).use { out ->
                             val buf = ByteArray(32 * 1024)
-                            while (!isClosed) {
-                                val r = input.read(buf)
-                                if (r == -1) break
+                            var r = input.read(buf)
+                            while (!isClosed && r != -1) {
                                 out.write(buf, 0, r)
                                 totalRead += r
+                                r = input.read(buf)
                             }
                         }
                     }
