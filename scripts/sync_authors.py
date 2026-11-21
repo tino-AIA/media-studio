@@ -35,6 +35,7 @@ AUTHORS = [
     ("Francis Ford Coppola", "filmography-francis-ford-coppola"),
     ("Brian De Palma", "brian-de-palma-complete-filmography"),
     ("Sergio Leone", "filmography-sergio-leone"),
+    ("David Lynch", "filmography-david-lynch"),
     ("Lars von Trier", "lars-von-trier-filmography"),
     ("Paul Verhoeven", "filmography-paul-verhoeven"),
     ("Roman Polanski", "roman-polanski-filmography"),
@@ -100,6 +101,14 @@ AUTHORS = [
     ("Peter Greenaway", "filmography-peter-greenaway"),
     ("Alan Clarke", "filmography-alan-clarke"),
 ]
+
+CURATED_AUTHOR_EXTRAS = {
+    "David Lynch": [
+        ("identifier:dune-david-lynch-1984", 841, "", 115),
+        ("identifier:dune-1984-alternative-edition-redux-fanedit-m*", 841, "Dina - Alternative Edition Redux", 150),
+        ("identifier:DuneTheCompleteSagaVimeo", 841, "Dina - The Complete Saga", 150),
+    ]
+}
 
 
 def extract_variant_label(filename):
@@ -210,7 +219,6 @@ def tmdb_enrich_author_movie(title, year=0, author_name="", filmography_credits=
             best_match = candidate
             best_details = details
 
-    # Rezervna provjera izravno kroz autorovu TMDB filmografiju za stilizirane naslove (npr. Gas-s-s-s -> Gas! -Or-...)
     if not best_details and filmography_credits and year > 0:
         first_word = re.split(r"[^a-zA-Z0-9čćžšđ]+", cleaned_input.lower())[0]
         if len(first_word) >= 3:
@@ -535,7 +543,7 @@ def run_authors_sync():
         extra_found_count = 0
         valid_catalog_arch_ids = set()
 
-        # Korak A: Filmovi iz glavne Archive.org kolekcije autora (uvijek s točnim TMDB naslovom kad je prepoznat)
+        # Korak A: Filmovi iz glavne Archive.org kolekcije autora
         for item in sorted(deduped.values(), key=lambda x: x["year"], reverse=True):
             enriched = tmdb_enrich_author_movie(
                 item["title"],
@@ -601,7 +609,63 @@ def run_authors_sync():
                     if promote_movie_to_catalog(catalog_arch_id, mid, tmdb_det, final_year, item["stream_url"], file_rt):
                         promoted_for_author += 1
 
-        # Korak B: Pretraga nedostajućih filmova autora u postojećoj bazi i na Archive.org-u
+        # Korak B1: Ručno odobrena specijalna izdanja za autora (npr. sve 3 verzije Dine za Davida Lyncha)
+        for query_str, extra_tmdb_id, custom_title, min_mins in CURATED_AUTHOR_EXTRAS.get(author_name, []):
+            tmdb_det = get_tmdb_movie_details(extra_tmdb_id)
+            if not tmdb_det:
+                continue
+            final_year = extract_year_from_text(tmdb_det["release_date"]) or 1984
+            title_hr = custom_title.strip() or tmdb_det["hr_title"] or tmdb_det["orig_title"]
+            dedup_key = (title_hr.lower(), final_year)
+            if dedup_key in unique_movie_rows:
+                found_tmdb_ids.add(extra_tmdb_id)
+                continue
+
+            ident_prefix = query_str.replace("identifier:", "").rstrip("*").lower()
+            matched_row = next(
+                (
+                    r for r in all_rows
+                    if r.get("is_valid", True)
+                    and (r.get("archive_id") or "").lower().startswith(ident_prefix)
+                    and r.get("stream_url")
+                ),
+                None
+            )
+            stream_url = matched_row["stream_url"] if matched_row else ""
+
+            if not stream_url:
+                search_res = safe_get(
+                    "https://archive.org/advancedsearch.php",
+                    params={"q": query_str, "fl[]": ["identifier"], "rows": 2, "output": "json"}
+                )
+                docs = (search_res or {}).get("response", {}).get("docs", [])
+                if docs:
+                    ext_id = docs[0].get("identifier") or ""
+                    if ext_id:
+                        vids, _ = get_archive_item_details(ext_id, min_size_mb=250, allow_mkv=True)
+                        long_vids = [
+                            v for v in vids
+                            if v.get("duration_mins", 0) >= min_mins
+                            or (v.get("duration_mins", 0) == 0 and v.get("size_mb", 0) >= 900)
+                        ]
+                        if long_vids:
+                            best_v = pick_best_video_file(long_vids)
+                            if verify_stream_url_playable(best_v["stream_url"]):
+                                stream_url = best_v["stream_url"]
+
+            if stream_url:
+                found_tmdb_ids.add(extra_tmdb_id)
+                unique_movie_rows[dedup_key] = {
+                    "author_id": author_db_id,
+                    "title": title_hr,
+                    "release_year": final_year,
+                    "stream_url": stream_url,
+                    "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}" if tmdb_det["poster_path"] else "",
+                    "description_hr": tmdb_det["overview_hr"]
+                }
+                extra_found_count += 1
+
+        # Korak B2: Pretraga nedostajućih filmova autora u postojećoj bazi i na Archive.org-u
         for credit in prof.get("filmography_credits") or []:
             mid = int(credit.get("id") or 0)
             if mid <= 0 or mid in found_tmdb_ids:
