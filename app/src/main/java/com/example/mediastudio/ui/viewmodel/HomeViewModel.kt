@@ -140,19 +140,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val exactAuthorOrder = listOf(
         "Alfred Hitchcock", "Francis Ford Coppola", "Woody Allen", "Brian De Palma", "Sergio Leone",
-        "Lars von Trier", "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard",
-        "David Cronenberg", "Robert Altman", "John Cassavetes", "Mira Nair", "Takeshi Kitano",
-        "Freddie Francis", "Elvis Presley", "David Lean", "Ingmar Bergman", "Roger Corman",
-        "David DeCoteau", "François Truffaut", "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders",
-        "Nicholas Roeg", "John Ford", "Mario Bava", "Akira Kurosawa", "Jacques Rivette",
-        "Costa-Gavras", "Louis Malle", "Federico Fellini", "George A. Romero", "Otto Preminger",
-        "Herschell Gordon Lewis", "Harmony Korine", "Orson Welles", "Norman Jewison", "Curtis Harrington",
-        "Bernardo Bertolucci", "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
-        "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
-        "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol", "Leos Carax",
-        "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg", "Jackie Collins",
-        "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer", "Gaspar Noé",
-        "Sion Sono", "Peter Greenaway", "Alan Clarke"
+        "David Lynch", "Lars von Trier", "Paul Verhoeven", "Roman Polanski", "Werner Herzog",
+        "Jean-Luc Godard", "David Cronenberg", "Robert Altman", "John Cassavetes", "Mira Nair",
+        "Takeshi Kitano", "Freddie Francis", "Elvis Presley", "David Lean", "Ingmar Bergman",
+        "Roger Corman", "David DeCoteau", "François Truffaut", "Pier Paolo Pasolini", "Budd Boetticher",
+        "Wim Wenders", "Nicholas Roeg", "John Ford", "Mario Bava", "Akira Kurosawa",
+        "Jacques Rivette", "Costa-Gavras", "Louis Malle", "Federico Fellini", "George A. Romero",
+        "Otto Preminger", "Herschell Gordon Lewis", "Harmony Korine", "Orson Welles", "Norman Jewison",
+        "Curtis Harrington", "Bernardo Bertolucci", "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky",
+        "Ruggero Deodato", "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer",
+        "Greydon Clark", "Bill Zebub", "Sean Baker", "PTA Filmography", "Andy Warhol",
+        "Leos Carax", "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg",
+        "Jackie Collins", "Rick Sloane", "Errol Morris", "Gordon Hessler", "Russ Meyer",
+        "Gaspar Noé", "Sion Sono", "Peter Greenaway", "Alan Clarke"
     )
 
     private val authorArchiveIds = mapOf(
@@ -160,6 +160,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Francis Ford Coppola" to "filmography-francis-ford-coppola",
         "Brian De Palma" to "brian-de-palma-complete-filmography",
         "Sergio Leone" to "filmography-sergio-leone",
+        "David Lynch" to "filmography-david-lynch",
         "Lars von Trier" to "lars-von-trier-filmography",
         "Paul Verhoeven" to "filmography-paul-verhoeven",
         "Roman Polanski" to "roman-polanski-filmography",
@@ -239,6 +240,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Woody Allen" to "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Woody_Allen_Cannes_2016.jpg/400px-Woody_Allen_Cannes_2016.jpg",
         "Brian De Palma" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Brian_De_Palma_Venice_2007.jpg/400px-Brian_De_Palma_Venice_2007.jpg",
         "Sergio Leone" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Sergio_Leone_1984.jpg/400px-Sergio_Leone_1984.jpg",
+        "David Lynch" to "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/David_Lynch_Cannes_2017.jpg/400px-David_Lynch_Cannes_2017.jpg",
         "Lars von Trier" to "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg/400px-Lars_von_Trier_-_2011_Cannes_Film_Festival.jpg",
         "Paul Verhoeven" to "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Paul_Verhoeven_%282016%29.jpg/400px-Paul_Verhoeven_%282016%29.jpg",
         "Roman Polanski" to "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Roman_Polanski_at_Cannes_2013.jpg/400px-Roman_Polanski_at_Cannes_2013.jpg",
