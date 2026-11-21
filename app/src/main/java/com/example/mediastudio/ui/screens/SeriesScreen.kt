@@ -33,6 +33,7 @@ import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SeriesEpisode
 import com.example.mediastudio.data.api.SeriesSeason
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 
@@ -40,7 +41,7 @@ import com.example.mediastudio.ui.viewmodel.HomeViewModel
 @Composable
 fun SeriesScreen(
     series: ArchiveMovie,
-    viewModel: HomeViewModel, // Dodano za upravljanje favoritima
+    viewModel: HomeViewModel,
     onEpisodeClick: (SeriesEpisode) -> Unit,
     onBackClick: () -> Unit
 ) {
@@ -52,11 +53,16 @@ fun SeriesScreen(
     val firstArchiveId = series.identifier.split(",").first()
     var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
 
-    // Interakcija za gumb Favorita
+    val resolvedYear = remember(series.identifier, series.year, series.title) {
+        series.year?.takeIf { it.isNotBlank() && it != "0" }
+            ?: SupabaseRepository.getCatalogItem(series.identifier)?.releaseYear?.takeIf { it > 0 }?.toString()
+            ?: Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)").find(series.title)?.groupValues?.get(1)
+            ?: ""
+    }
+
     val favInteractionSource = remember { MutableInteractionSource() }
     val isFavFocused by favInteractionSource.collectIsFocusedAsState()
 
-    // Stanje favorita
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == series.identifier }
 
     BackHandler {
@@ -90,10 +96,11 @@ fun SeriesScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         if (!isLoading) {
+                            val yearPrefix = if (resolvedYear.isNotBlank()) "$resolvedYear • " else ""
                             val totalEps = seasons.sumOf { it.episodes.size }
                             val seasonInfo = if (seasons.size > 1) "${seasons.size} sezona • " else ""
                             Text(
-                                text = "${seasonInfo}Ukupno $totalEps epizoda",
+                                text = "${yearPrefix}${seasonInfo}Ukupno $totalEps epizoda",
                                 color = Color.Gray,
                                 fontSize = 12.sp
                             )
@@ -150,6 +157,15 @@ fun SeriesScreen(
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                                if (resolvedYear.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Godina: $resolvedYear",
+                                        color = Color(0xFFFFC107),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
                                     text = if (visibleEpisodes.isNotEmpty())
@@ -159,10 +175,9 @@ fun SeriesScreen(
                                     color = Color.LightGray,
                                     fontSize = 13.sp
                                 )
-                                
+
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // GUMB "DODAJ U FAVORITE" ZA SERIJE
                                 Box(
                                     modifier = Modifier
                                         .height(44.dp)
