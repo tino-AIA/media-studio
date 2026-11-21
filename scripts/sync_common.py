@@ -91,8 +91,16 @@ RELEASE_TAG_PATTERN = re.compile(
     r"full\s*movie|movie|film|subtitles|subbed|dubbed|eng|english|multi|dual\s*audio|"
     r"yify|yts|rarbg|galaxyrg|galaxy-rg|etrg|sparks|fgt|evo|bone|sartre|anoxmous|juggs|"
     r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series|"
-    r"the\s*original\s*series|original\s*series|tos|no\s*subs"
+    r"the\s*original\s*series|original\s*series|tos|no\s*subs|widescreen|fullscreen"
     r")\b"
+)
+
+WIDESCREEN_TAG_RE = re.compile(
+    r"(?i)\b(widescreen|16x9|16_9|16-9|1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip)\b"
+)
+
+FULLSCREEN_4_3_TAG_RE = re.compile(
+    r"(?i)\b(fullscreen|full[\s._-]*screen|4x3|4_3|4-3|pan[\s._-]*(?:and|&)[\s._-]*scan|vhs|vhdrip|laserdisc|ldrip)\b"
 )
 
 TMDB_MOVIE_GENRE_MAP = {
@@ -312,18 +320,36 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
     return False
 
 
+def compute_aspect_tier(filename, width=0, height=0):
+    """2 = potvrđeni 16:9 / widescreen / HD, 1 = nepoznat omjer, 0 = potvrđeni 4:3 / fullscreen / VHS."""
+    if width > 0 and height > 0:
+        ratio = width / float(height)
+        if ratio >= 1.55:
+            return 2
+        if ratio < 1.48:
+            return 0
+
+    lower = (filename or "").lower()
+    if WIDESCREEN_TAG_RE.search(lower):
+        return 2
+    if FULLSCREEN_4_3_TAG_RE.search(lower):
+        return 0
+    return 1
+
+
 def pick_best_video_file(video_files):
-    """Daje prednost izvornim .mp4 i .mkv datotekama (više audio traka) i automatski pada na .ia.mp4."""
+    """Daje snažan prioritet 16:9 / widescreen verzijama, zatim izvornim .mp4/.mkv datotekama."""
     def sort_key(f):
         fname_lower = f["filename"].lower()
         is_deriv = f.get("is_derivative", False)
+        aspect_tier = f.get("aspect_tier", compute_aspect_tier(fname_lower, f.get("width", 0), f.get("height", 0)))
         if not is_deriv and fname_lower.endswith(".mp4"):
-            tier = 0
+            format_tier = 0
         elif not is_deriv:
-            tier = 1
+            format_tier = 1
         else:
-            tier = 2
-        return (tier, -f["size_mb"])
+            format_tier = 2
+        return (-aspect_tier, format_tier, -f["size_mb"])
 
     ordered = sorted(video_files, key=sort_key)
     for candidate in ordered:
@@ -472,6 +498,16 @@ def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
         if size_mb < min_size_mb:
             continue
 
+        try:
+            width = int(float(f.get("width") or 0))
+        except (ValueError, TypeError):
+            width = 0
+        try:
+            height = int(float(f.get("height") or 0))
+        except (ValueError, TypeError):
+            height = 0
+        aspect_ratio = round(width / float(height), 3) if (width > 0 and height > 0) else 0.0
+
         file_mins = parse_duration_minutes(f.get("length")) or meta_runtime
         encoded_name = "/".join(urllib.parse.quote(p) for p in fname.split("/"))
         stream_url = f"https://archive.org/download/{identifier}/{encoded_name}"
@@ -480,7 +516,11 @@ def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
             "size_mb": size_mb,
             "duration_mins": file_mins,
             "stream_url": stream_url,
-            "is_derivative": ".ia.mp4" in fname.lower() or f.get("source") == "derivative"
+            "is_derivative": ".ia.mp4" in fname.lower() or f.get("source") == "derivative",
+            "width": width,
+            "height": height,
+            "aspect_ratio": aspect_ratio,
+            "aspect_tier": compute_aspect_tier(fname, width, height)
         })
 
     return videos, md
