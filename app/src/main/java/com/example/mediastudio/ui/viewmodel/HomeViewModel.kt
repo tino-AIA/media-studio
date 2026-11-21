@@ -382,6 +382,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _totalGenreMoviesCount = MutableStateFlow(0)
     val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
 
+    // Pamćenje pozicije pomicanja i D-pad fokusa pri povratku iz detalja filma/serije
+    private val _lastFocusedMovieId = MutableStateFlow<String?>(null)
+    val lastFocusedMovieId: StateFlow<String?> = _lastFocusedMovieId
+
+    private val _lastFocusedRowTitle = MutableStateFlow<String?>(null)
+    val lastFocusedRowTitle: StateFlow<String?> = _lastFocusedRowTitle
+
+    var savedGenreScrollIndex: Int = 0
+    var savedGenreScrollOffset: Int = 0
+    var savedHomeScrollIndex: Int = 0
+    var savedHomeScrollOffset: Int = 0
+
+    fun rememberSelectedItem(movie: ArchiveMovie, rowTitle: String? = null) {
+        _lastFocusedMovieId.value = movie.identifier
+        if (rowTitle != null) {
+            _lastFocusedRowTitle.value = rowTitle
+        }
+    }
+
+    fun clearLastFocusedMovie() {
+        _lastFocusedMovieId.value = null
+    }
+
     val pageSize = 60
 
     private var isAdultCategoryUnlocked = false
@@ -431,6 +454,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectTab(tab: ContentTab) {
+        savedHomeScrollIndex = 0
+        savedHomeScrollOffset = 0
+        _lastFocusedMovieId.value = null
+        _lastFocusedRowTitle.value = null
         _selectedTab.value = tab
     }
 
@@ -880,6 +907,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (genre.isAdultCategory) {
             isAdultCategoryUnlocked = true
         }
+        savedGenreScrollIndex = 0
+        savedGenreScrollOffset = 0
+        _lastFocusedMovieId.value = null
         _genreMovies.value = emptyList()
         loadGenrePage(1)
     }
