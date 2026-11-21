@@ -1,0 +1,407 @@
+import re
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from sync_common import (
+    TMDB_API_KEY,
+    TMDB_BASE,
+    TMDB_IMG_BACKDROP,
+    TMDB_IMG_POSTER,
+    clean_filename_to_title,
+    contains_blocked_regional_or_arabic,
+    contains_hentai_or_adult,
+    determine_primary_genres,
+    fetch_existing_catalog_state,
+    get_archive_item_details,
+    get_tmdb_movie_details,
+    is_foreign_dub_without_english,
+    is_future_release,
+    normalize_for_exact_title_compare,
+    safe_get,
+    state_lock,
+    supabase_delete_author_movies,
+    supabase_patch_row,
+    supabase_upsert,
+    verify_stream_url_playable,
+)
+
+author_enrich_cache = {}
+
+AUTHORS = [
+    ("Alfred Hitchcock", "filmography-alfred-hitchcock"),
+    ("Francis Ford Coppola", "filmography-francis-ford-coppola"),
+    ("Brian De Palma", "brian-de-palma-complete-filmography"),
+    ("Sergio Leone", "filmography-sergio-leone"),
+    ("Lars von Trier", "lars-von-trier-filmography"),
+    ("Paul Verhoeven", "filmography-paul-verhoeven"),
+    ("Roman Polanski", "roman-polanski-filmography"),
+    ("Werner Herzog", "filmography-werner-herzog"),
+    ("Jean-Luc Godard", "jean-luc-godard-the-complete-filmography"),
+    ("David Cronenberg", "filmography-david-cronenberg"),
+    ("John Cassavetes", "filmography-john-cassavetes"),
+    ("Mira Nair", "filmography-mira-nair"),
+    ("Takeshi Kitano", "filmography-takeshi-kitano"),
+    ("Freddie Francis", "1987.-dark-tower"),
+    ("Elvis Presley", "filmography-elvis-presley"),
+    ("David Lean", "lawrence.of.-arabia.-1962.1080p.-remastered.-blu-ray.-hevc.-eac-3-sartre"),
+    ("Ingmar Bergman", "filmography-ingmar-bergman"),
+    ("Roger Corman", "filmography-roger-corman"),
+    ("David DeCoteau", "filmography-david-decoteau"),
+    ("François Truffaut", "filmography-francois-truffaut"),
+    ("Pier Paolo Pasolini", "filmography-pier-paolo-pasolini"),
+    ("Budd Boetticher", "filmography-budd-boetticher"),
+    ("Wim Wenders", "filmography-wim-wenders"),
+    ("Nicholas Roeg", "walkabout-1971-remastered-1080p-blu-ray-hevc-h-265-bone"),
+    ("John Ford", "3-bad-men-1926_202607"),
+    ("Mario Bava", "filmography-mario-bava"),
+    ("Akira Kurosawa", "filmography-akira-kurosawa"),
+    ("Jacques Rivette", "jacques-rivette-the-complete-filmography"),
+    ("Costa-Gavras", "filmography-costa-gavras"),
+    ("Louis Malle", "filmography-louis-malle"),
+    ("Federico Fellini", "filmography-federico-fellini"),
+    ("George A. Romero", "filmography-george-a-romero"),
+    ("Otto Preminger", "filmography-otto-preminger"),
+    ("Herschell Gordon Lewis", "filmography-herschell-gordon-lewis"),
+    ("Harmony Korine", "filmography-harmony-korine"),
+    ("Orson Welles", "filmography-orson-welles"),
+    ("Norman Jewison", "filmography-norman-jewison"),
+    ("Curtis Harrington", "filmography-curtis-harrington"),
+    ("Bernardo Bertolucci", "1987.-the-last-emperor"),
+    ("Ken Russell", "filmography-ken-russell-no-features"),
+    ("Krzysztof Kieślowski", "filmography-krzysztof-kieslowski"),
+    ("Alejandro Jodorowsky", "filmography-alejandro-jodorowsky"),
+    ("Ruggero Deodato", "filmography-ruggero-deodato"),
+    ("Andy Milligan", "filmography-andy-milligan"),
+    ("Ted V. Mikels", "filmography-ted-v-mikels"),
+    ("Lina Wertmüller", "filmography-lina-wertmuller"),
+    ("Carl Theodor Dreyer", "filmography-carl-theodor-dreyer"),
+    ("Greydon Clark", "filmography-greydon-clark"),
+    ("Bill Zebub", "filmography-bill-zebub"),
+    ("Sean Baker", "the.-florida.-project.-2017.2160p.-webrip.-3500-mb.-ddp-5.1.x-264-galaxy-rg"),
+    ("PTA Filmography", "boogie-nights-1997_202604"),
+    ("Andy Warhol", "andy-warhol-complete-films-collection"),
+    ("Leos Carax", "filmography-leos-carax"),
+    ("Volker Schlöndorff", "filmography-volker-schlondorff"),
+    ("Albert Pyun", "nemesis.-1992.1080p.-blu-ray.-ddp-2.0.x-265.10bit-galaxy-rg-265"),
+    ("Giuseppe Tornatore", "filmography-giuseppe-tornatore"),
+    ("Bo Widerberg", "filmography-bo-widerberg"),
+    ("Jackie Collins", "filmography-jackie-collins"),
+    ("Rick Sloane", "filmography-rick-sloane"),
+    ("Errol Morris", "filmography-errol-morris"),
+    ("Gordon Hessler", "filmography-gordon-hessler"),
+    ("Russ Meyer", "filmography-russ-meyer"),
+    ("Gaspar Noé", "filmography-gaspar-noe"),
+]
+
+
+def extract_variant_label(filename, enriched_title):
+    base = filename.rsplit("/", 1)[-1]
+    name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
+    m = re.search(
+        r"(?i)\b(us\s*cut|eu\s*cut|uk\s*cut|director'?s\s*cut|extended|theatrical|unrated|uncut|restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+|1080p|720p|480p)\b",
+        name
+    )
+    if m:
+        return m.group(1).strip()
+    clean_stem, _ = clean_filename_to_title(filename, fallback_to_stem=True)
+    if clean_stem and clean_stem.lower() != enriched_title.lower():
+        return clean_stem[:32].strip()
+    return ""
+
+
+def author_matches_tmdb_credits(author_name, details):
+    if not details:
+        return False
+    search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    tokens = [t for t in re.sub(r"[^\w\s]", " ", search_person.lower()).split() if len(t) >= 4]
+    if not tokens:
+        return False
+    surname = tokens[-1]
+    people = (details.get("directors") or []) + (details.get("all_crew") or []) + (details.get("cast") or [])
+    for p in people:
+        p_words = set(re.sub(r"[^\w\s]", " ", str(p).lower()).split())
+        if surname in p_words:
+            return True
+    return False
+
+
+def title_closely_matches(clean_title, orig_title, hr_title):
+    c_norm = normalize_for_exact_title_compare(clean_title)
+    if len(c_norm) < 2:
+        return False
+    for target in (orig_title, hr_title):
+        t_norm = normalize_for_exact_title_compare(target)
+        if not t_norm:
+            continue
+        if c_norm == t_norm:
+            return True
+        if len(c_norm) >= 4 and len(t_norm) >= 4 and (c_norm in t_norm or t_norm in c_norm):
+            return True
+    return False
+
+
+def tmdb_enrich_author_movie(title, year=0, author_name=""):
+    letters_only = re.sub(r"[^a-zA-Zčćžšđа-яА-Я]", "", title)
+    if len(letters_only) < 2:
+        return None
+
+    cache_key = (title.lower().strip(), year, author_name)
+    with state_lock:
+        if cache_key in author_enrich_cache:
+            return author_enrich_cache[cache_key]
+
+    params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR", "include_adult": "false"}
+    if year > 0:
+        params["year"] = year
+    res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+    results = (res or {}).get("results", [])
+
+    if not results and year > 0:
+        params.pop("year")
+        res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+        results = (res or {}).get("results", [])
+
+    if not results:
+        with state_lock:
+            author_enrich_cache[cache_key] = None
+        return None
+
+    best_match = None
+    best_details = None
+
+    for candidate in results[:3]:
+        rel_date = candidate.get("release_date") or ""
+        cand_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
+        if year > 0 and cand_year > 0 and abs(cand_year - year) > 2:
+            continue
+
+        details = get_tmdb_movie_details(candidate["id"])
+        if not details:
+            continue
+
+        orig_t = details["orig_title"]
+        hr_t = details["hr_title"]
+        credit_ok = author_matches_tmdb_credits(author_name, details)
+        title_ok = title_closely_matches(title, orig_t, hr_t)
+
+        if credit_ok and (title_ok or (year > 0 and cand_year > 0 and abs(cand_year - year) <= 1)):
+            best_match = candidate
+            best_details = details
+            break
+
+        if title_ok and year > 0 and cand_year > 0 and abs(cand_year - year) <= 1 and best_match is None:
+            best_match = candidate
+            best_details = details
+
+    if not best_match or not best_details:
+        with state_lock:
+            author_enrich_cache[cache_key] = None
+        return None
+
+    rel_date = best_details["release_date"] or best_match.get("release_date") or ""
+    rel_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else year
+    poster_path = best_details["poster_path"] or best_match.get("poster_path") or ""
+
+    enriched_obj = {
+        "tmdb_id": best_match["id"],
+        "title": best_details["hr_title"] or best_match.get("title") or title,
+        "release_year": rel_year,
+        "description_hr": best_details["overview_hr"],
+        "poster_url": f"{TMDB_IMG_POSTER}{poster_path}" if poster_path else "",
+        "details": best_details
+    }
+    with state_lock:
+        author_enrich_cache[cache_key] = enriched_obj
+    return enriched_obj
+
+
+def fetch_wiki_bio(author_name):
+    search_name = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    encoded = urllib.parse.quote(search_name.replace(" ", "_"))
+    for lang in ["hr", "en"]:
+        data = safe_get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{encoded}")
+        if data and data.get("extract"):
+            return data["extract"].strip()
+    return ""
+
+
+def run_authors_sync():
+    print("=== [AUTORI] Sinkronizacija 63 kolekcije autora i promocija u žanrove ===", flush=True)
+    existing_archive_ids, seen_tmdb_movies, _, all_rows = fetch_existing_catalog_state("movie")
+    author_promoted_rows = [r for r in all_rows if r.get("is_valid", True) and ",tmdb-" in (r.get("archive_id") or "")]
+    promoted_counter = [0]
+
+    def process_single_author(idx_author):
+        idx, (author_name, archive_id) = idx_author
+        search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+        person_res = safe_get(f"{TMDB_BASE}/search/person", {"api_key": TMDB_API_KEY, "query": search_person, "language": "hr-HR"})
+        person = ((person_res or {}).get("results") or [None])[0]
+
+        photo_url = ""
+        bio_hr = ""
+        if person:
+            if person.get("profile_path"):
+                photo_url = f"{TMDB_IMG_POSTER}{person['profile_path']}"
+            details = safe_get(f"{TMDB_BASE}/person/{person['id']}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
+            bio_hr = ((details or {}).get("biography") or "").strip()
+
+        if not bio_hr:
+            bio_hr = fetch_wiki_bio(author_name)
+
+        saved_authors = supabase_upsert(
+            "authors",
+            [{
+                "name": author_name,
+                "archive_id": archive_id,
+                "bio_hr": bio_hr,
+                "photo_url": photo_url,
+                "sort_order": idx
+            }],
+            "name"
+        )
+        if not saved_authors:
+            return f"  [{idx}/{len(AUTHORS)}] {author_name}: greška upisa autora"
+        author_db_id = saved_authors[0]["id"]
+
+        videos, arch_md = get_archive_item_details(archive_id, min_size_mb=15, allow_mkv=True)
+        if not videos:
+            return f"  [{idx}/{len(AUTHORS)}] {author_name}: kolekcija nedostupna/ograničena"
+
+        deduped = {}
+        for m in videos:
+            clean_t, year = clean_filename_to_title(m["filename"], fallback_to_stem=True)
+            if not clean_t:
+                continue
+            stem_key = re.sub(r"(?i)\.ia$", "", m["filename"].rsplit("/", 1)[-1].rsplit(".", 1)[0]).lower()
+            is_mp4 = m["filename"].lower().endswith(".mp4")
+            orig_bonus = 2000.0 if (not m["is_derivative"] and is_mp4) else (1500.0 if not m["is_derivative"] else 500.0)
+            score = m["size_mb"] + orig_bonus
+            if stem_key not in deduped or score > deduped[stem_key]["score"]:
+                deduped[stem_key] = {
+                    "title": clean_t,
+                    "year": year,
+                    "filename": m["filename"],
+                    "stream_url": m["stream_url"],
+                    "size_mb": m["size_mb"],
+                    "duration_mins": m["duration_mins"],
+                    "score": score
+                }
+
+        unique_movie_rows = {}
+        promoted_for_author = 0
+        valid_catalog_arch_ids = set()
+
+        for item in sorted(deduped.values(), key=lambda x: x["year"], reverse=True):
+            enriched = tmdb_enrich_author_movie(item["title"], item["year"], author_name)
+            base_title = enriched["title"] if enriched else item["title"]
+            final_year = enriched["release_year"] if (enriched and enriched["release_year"]) else item["year"]
+
+            final_title = base_title
+            dedup_key = (final_title.lower(), final_year)
+            if dedup_key in unique_movie_rows:
+                if unique_movie_rows[dedup_key]["stream_url"] == item["stream_url"]:
+                    continue
+                variant_tag = extract_variant_label(item["filename"], base_title)
+                final_title = f"{base_title} ({variant_tag})" if variant_tag else f"{base_title} (verzija {len(unique_movie_rows) + 1})"
+                dedup_key = (final_title.lower(), final_year)
+
+            if dedup_key not in unique_movie_rows:
+                unique_movie_rows[dedup_key] = {
+                    "author_id": author_db_id,
+                    "title": final_title,
+                    "release_year": final_year,
+                    "stream_url": item["stream_url"],
+                    "poster_url": enriched["poster_url"] if enriched else "",
+                    "description_hr": enriched["description_hr"] if enriched else ""
+                }
+
+            tmdb_det = enriched.get("details") if enriched else None
+            mid = enriched["tmdb_id"] if enriched else 0
+            if tmdb_det and mid > 0:
+                catalog_arch_id = f"{archive_id},tmdb-{mid}"
+                tmdb_rt = tmdb_det["runtime"]
+                file_rt = item["duration_mins"]
+                is_feature_length = (file_rt >= 60) or (file_rt == 0 and tmdb_rt >= 60 and item["size_mb"] >= 120)
+                runtime_consistent = (
+                    file_rt == 0 or tmdb_rt == 0 or (int(tmdb_rt * 0.85) <= file_rt <= int(tmdb_rt * 1.18))
+                )
+                year_consistent = (
+                    item["year"] == 0 or final_year == 0 or abs(item["year"] - final_year) <= 1
+                )
+                not_adult_or_dub = (
+                    not tmdb_det["adult"]
+                    and tmdb_det["status"] == "Released"
+                    and not is_future_release(tmdb_det["release_date"])
+                    and not contains_hentai_or_adult(tmdb_det["orig_title"], tmdb_det["hr_title"], tmdb_det["overview_hr"])
+                    and not contains_blocked_regional_or_arabic(tmdb_det["orig_title"], tmdb_det["hr_title"], orig_lang=tmdb_det["original_language"])
+                    and not is_foreign_dub_without_english(arch_md, archive_id, item["filename"], tmdb_det["original_language"])
+                )
+
+                if (
+                    is_feature_length
+                    and runtime_consistent
+                    and year_consistent
+                    and not_adult_or_dub
+                    and tmdb_det["poster_path"]
+                    and verify_stream_url_playable(item["stream_url"])
+                ):
+                    valid_catalog_arch_ids.add(catalog_arch_id)
+                    should_insert = False
+                    with state_lock:
+                        if mid not in seen_tmdb_movies:
+                            seen_tmdb_movies.add(mid)
+                            existing_archive_ids.add(catalog_arch_id)
+                            should_insert = True
+
+                    if should_insert:
+                        genres = determine_primary_genres(
+                            tmdb_det["genre_ids"],
+                            tmdb_det["companies"],
+                            tmdb_det["orig_title"],
+                            tmdb_det["hr_title"],
+                            tmdb_det["overview_hr"]
+                        )
+                        cat_row = {
+                            "archive_id": catalog_arch_id,
+                            "tmdb_id": mid,
+                            "title": tmdb_det["hr_title"],
+                            "media_type": "movie",
+                            "genres": genres,
+                            "release_year": final_year,
+                            "rating": round(tmdb_det["vote_average"], 1),
+                            "popularity_score": tmdb_det["popularity"] * 100.0 + (final_year * 2),
+                            "description_hr": tmdb_det["overview_hr"],
+                            "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}",
+                            "backdrop_url": f"{TMDB_IMG_BACKDROP}{tmdb_det['backdrop_path']}" if tmdb_det["backdrop_path"] else "",
+                            "stream_url": item["stream_url"],
+                            "is_featured": tmdb_det["vote_average"] >= 8.0 and 16 not in tmdb_det["genre_ids"],
+                            "is_valid": True,
+                            "tmdb_runtime": tmdb_rt,
+                            "archive_runtime": file_rt
+                        }
+                        supabase_upsert("catalog_items", [cat_row], "archive_id")
+                        promoted_for_author += 1
+                        with state_lock:
+                            promoted_counter[0] += 1
+
+        for old_row in author_promoted_rows:
+            if old_row["archive_id"].startswith(f"{archive_id},tmdb-") and old_row["archive_id"] not in valid_catalog_arch_ids:
+                supabase_patch_row("catalog_items", old_row["id"], {"is_valid": False})
+
+        supabase_delete_author_movies(author_db_id)
+        movie_rows = list(unique_movie_rows.values())
+        if movie_rows:
+            supabase_upsert("author_movies", movie_rows, "author_id,title,release_year")
+
+        return f"  [{idx}/{len(AUTHORS)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} u žanrove)"
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(process_single_author, item) for item in enumerate(AUTHORS, start=1)]
+        for fut in as_completed(futures):
+            print(fut.result(), flush=True)
+
+    print(f"=== [AUTORI] Završeno! Promovirano {promoted_counter[0]} filmova u glavne žanrove. ===", flush=True)
+
+
+if __name__ == "__main__":
+    run_authors_sync()
