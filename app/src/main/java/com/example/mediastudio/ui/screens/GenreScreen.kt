@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +40,7 @@ import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import com.example.mediastudio.ui.viewmodel.RatedMovie
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -53,16 +55,36 @@ fun GenreScreen(
     val currentPage by viewModel.currentGenrePage.collectAsState()
     val totalPages by viewModel.totalGenrePages.collectAsState()
     val totalCount by viewModel.totalGenreMoviesCount.collectAsState()
+    val lastFocusedMovieId by viewModel.lastFocusedMovieId.collectAsState()
 
     val isSeries = selectedGenre?.isSeriesCategory == true
-    val gridState = rememberLazyGridState()
+    val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = viewModel.savedGenreScrollIndex,
+        initialFirstVisibleItemScrollOffset = viewModel.savedGenreScrollOffset
+    )
+
+    DisposableEffect(gridState) {
+        onDispose {
+            viewModel.savedGenreScrollIndex = gridState.firstVisibleItemIndex
+            viewModel.savedGenreScrollOffset = gridState.firstVisibleItemScrollOffset
+        }
+    }
 
     BackHandler {
         onBackClick()
     }
 
-    LaunchedEffect(currentPage) {
-        gridState.scrollToItem(0)
+    LaunchedEffect(movies, lastFocusedMovieId) {
+        val targetId = lastFocusedMovieId
+        if (movies.isNotEmpty() && !targetId.isNullOrBlank()) {
+            val targetIndex = movies.indexOfFirst { it.movie.identifier == targetId }
+            if (targetIndex >= 0) {
+                val isAlreadyVisible = gridState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                if (!isAlreadyVisible) {
+                    gridState.scrollToItem(targetIndex)
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -111,7 +133,12 @@ fun GenreScreen(
                         text = "◀ Prethodna",
                         enabled = currentPage > 1 && !isLoading,
                         isPrimary = false,
-                        onClick = { viewModel.loadGenrePage(currentPage - 1) }
+                        onClick = {
+                            viewModel.savedGenreScrollIndex = 0
+                            viewModel.savedGenreScrollOffset = 0
+                            viewModel.clearLastFocusedMovie()
+                            viewModel.loadGenrePage(currentPage - 1)
+                        }
                     )
 
                     Text(
@@ -125,7 +152,12 @@ fun GenreScreen(
                         text = "Sljedeća ▶",
                         enabled = currentPage < totalPages && !isLoading,
                         isPrimary = true,
-                        onClick = { viewModel.loadGenrePage(currentPage + 1) }
+                        onClick = {
+                            viewModel.savedGenreScrollIndex = 0
+                            viewModel.savedGenreScrollOffset = 0
+                            viewModel.clearLastFocusedMovie()
+                            viewModel.loadGenrePage(currentPage + 1)
+                        }
                     )
                 }
             }
@@ -155,7 +187,10 @@ fun GenreScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
-                items(movies) { ratedMovie ->
+                items(
+                    items = movies,
+                    key = { it.movie.identifier }
+                ) { ratedMovie ->
                     val authorPhoto = if (ratedMovie.movie.identifier.startsWith("AUTHOR|")) {
                         val authorName = ratedMovie.movie.identifier.removePrefix("AUTHOR|")
                         SupabaseRepository.getAuthors()
@@ -171,7 +206,14 @@ fun GenreScreen(
                         ratedMovie = ratedMovie,
                         isSeries = isSeries,
                         authorPhotoUrl = authorPhoto,
-                        onMovieClick = onMovieClick
+                        shouldRestoreFocus = ratedMovie.movie.identifier == lastFocusedMovieId,
+                        onFocusRestored = { viewModel.clearLastFocusedMovie() },
+                        onMovieClick = { clickedMovie ->
+                            viewModel.savedGenreScrollIndex = gridState.firstVisibleItemIndex
+                            viewModel.savedGenreScrollOffset = gridState.firstVisibleItemScrollOffset
+                            viewModel.rememberSelectedItem(clickedMovie)
+                            onMovieClick(clickedMovie)
+                        }
                     )
                 }
             }
@@ -224,6 +266,8 @@ fun RatedMovieGridCard(
     ratedMovie: RatedMovie,
     isSeries: Boolean,
     authorPhotoUrl: String = "",
+    shouldRestoreFocus: Boolean = false,
+    onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
 ) {
     val movie = ratedMovie.movie
@@ -232,6 +276,18 @@ fun RatedMovieGridCard(
     val scale by animateFloatAsState(if (isFocused) 1.07f else 1f, label = "grid_card_scale")
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val cardFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(shouldRestoreFocus) {
+        if (shouldRestoreFocus) {
+            delay(60L)
+            try {
+                cardFocusRequester.requestFocus()
+                onFocusRestored()
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
     val firstArchiveId = movie.identifier.split(",").first()
@@ -266,6 +322,7 @@ fun RatedMovieGridCard(
             Card(
                 modifier = Modifier
                     .fillMaxSize()
+                    .focusRequester(cardFocusRequester)
                     .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C)),
