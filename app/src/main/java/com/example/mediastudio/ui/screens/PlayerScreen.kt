@@ -1396,7 +1396,8 @@ private fun classifyVersionLanguageRank(text: String): Int {
     val isForeignDub = Regex(
         "\\b(latino|audio[\\s._-]?latino|castellano|espanol|español|spanish|dublado|dublagem|doblado|doblaje|" +
             "portugues|portuguese|truefrench|french[\\s._-]?dub|german[\\s._-]?dub|italian[\\s._-]?dub|" +
-            "russian[\\s._-]?dub|ozvuchka|hindi|arabic|lektor[\\s._-]*pl|lektor[\\s._-]*polski|dubbing[\\s._-]*pl|polish[\\s._-]*dub|pldub)\\b"
+            "russian[\\s._-]?dub|ozvuchka|hindi|arabic|lektor[\\s._-]*pl|lektor[\\s._-]*polski|dubbing[\\s._-]*pl|polish[\\s._-]*dub|pldub|" +
+            "staffel|german[\\s._-]*audio|deutsch[\\s._-]*dub)\\b"
     ).containsMatchIn(lower)
     return if (isForeignDub) 2 else 1
 }
@@ -1419,7 +1420,12 @@ private fun buildVersionDisplayLabel(
     langRank: Int,
     extraTag: String = ""
 ): String {
-    val cleanName = filename.substringAfterLast("/").substringBeforeLast(".")
+    val decoded = try {
+        URLDecoder.decode(filename, "UTF-8")
+    } catch (_: Exception) {
+        filename
+    }
+    val cleanName = decoded.substringAfterLast("/").substringBeforeLast(".")
         .replace(Regex("[._]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
@@ -1566,7 +1572,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 3. Potraži dodatne verzije tog konkretnog filma ili te konkretne epizode (npr. englesku verziju umjesto Lektor PL)
+    // 3. Potraži dodatne verzije tog konkretnog filma ili te konkretne epizode (npr. englesku verziju umjesto sinkronizacije)
     if (searchAlternativeItems) {
         val searchTitle = translatedEn.ifBlank { cleanLocalized }
         val targetYear = movieYear.toIntOrNull() ?: 0
@@ -1599,6 +1605,10 @@ private suspend fun loadAllMovieVersions(
                             val altId = doc.optString("identifier")
                             if (altId.isBlank() || altId == cleanArchiveId || altId.lowercase().startsWith("youtube-")) continue
                             val altTitle = doc.optString("title")
+                            val altYear = Regex("(19\\d{2}|20\\d{2})").find(altTitle)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                            if (targetYear > 0 && altYear > 0 && abs(altYear - targetYear) > 5) {
+                                continue
+                            }
                             if (!episodeCtx.isSeries && !titlesMatchStrictly(strictWords, cleanMovieTitleForSubtitleSearch(altTitle))) {
                                 continue
                             }
@@ -1606,6 +1616,13 @@ private suspend fun loadAllMovieVersions(
                             val altMeta = JSONObject(URL("https://archive.org/metadata/$altId").readText())
                             if (altMeta.optBoolean("is_dark", false) || altMeta.optBoolean("is_restricted", false)) continue
                             val altMd = altMeta.optJSONObject("metadata")
+                            val altMetaYear = Regex("(19\\d{2}|20\\d{2})").find(
+                                "${altMd?.optString("year").orEmpty()} ${altMd?.optString("date").orEmpty()} ${altMd?.opt("title")?.toString().orEmpty()}"
+                            )?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                            if (targetYear > 0 && altMetaYear > 0 && abs(altMetaYear - targetYear) > 5) {
+                                continue
+                            }
+
                             val altBlob = "$altId $altTitle ${altMd?.opt("language")?.toString().orEmpty()}"
                             val altFiles = altMeta.optJSONArray("files") ?: continue
 
@@ -1617,6 +1634,11 @@ private suspend fun loadAllMovieVersions(
                                 if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(afName)) continue
                                 val afSize = af.optString("size").toLongOrNull() ?: 0L
                                 if (afSize < (if (episodeCtx.isSeries) 80_000_000L else 250_000_000L)) continue
+
+                                val fileYear = Regex("(19\\d{2}|20\\d{2})").find(rawName)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                                if (targetYear > 0 && fileYear > 0 && abs(fileYear - targetYear) > 5) {
+                                    continue
+                                }
 
                                 if (episodeCtx.isSeries) {
                                     if (!fileMatchesEpisode("$altTitle $rawName", episodeCtx.season, episodeCtx.episode)) {
