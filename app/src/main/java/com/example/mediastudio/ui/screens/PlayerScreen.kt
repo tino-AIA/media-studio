@@ -49,7 +49,6 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.SupabaseRepository
-import com.example.mediastudio.data.api.VideoQualityOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -91,6 +90,13 @@ data class PlayerSubtitleOption(
     val downloads: Int = 0
 )
 
+data class PlayerVersionOption(
+    val label: String,
+    val url: String,
+    val languageRank: Int = 1, // 0 = Engleski / Multi-audio, 1 = Standardno, 2 = Strana sinkronizacija (Španjolski itd.)
+    val sizeBytes: Long = 0L
+)
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -124,8 +130,8 @@ fun PlayerScreen(
     var quickHudTick by remember { mutableIntStateOf(0) }
     var isContinuousSeeking by remember { mutableStateOf(false) }
 
-    var availableQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
-    var selectedQuality by remember { mutableStateOf<VideoQualityOption?>(null) }
+    var availableVersions by remember { mutableStateOf<List<PlayerVersionOption>>(emptyList()) }
+    var selectedVersion by remember { mutableStateOf<PlayerVersionOption?>(null) }
     var showQualityDialog by remember { mutableStateOf(false) }
 
     var showSubtitleDialog by remember { mutableStateOf(false) }
@@ -146,8 +152,8 @@ fun PlayerScreen(
     var hasMultipleAudioTracks by remember { mutableStateOf(false) }
     var hasNotifiedMultiAudio by remember { mutableStateOf(false) }
 
-    val isEpisodicContent = remember(availableQualities) {
-        availableQualities.any {
+    val isEpisodicContent = remember(availableVersions) {
+        availableVersions.any {
             it.label.contains(
                 Regex("(?i)(\\bs\\d{1,2}\\s*e\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b|\\bepisode\\b|\\bepizoda\\b|\\bseason\\b|\\bsezona\\b)")
             )
@@ -245,6 +251,9 @@ fun PlayerScreen(
         playbackErrorMessage = ""
         isBuffering = true
 
+        availableVersions = emptyList()
+        selectedVersion = null
+
         activeSubtitleName = null
         activeSubtitleFps = 0f
         rawActiveCues = emptyList()
@@ -259,6 +268,10 @@ fun PlayerScreen(
 
         val cleanArchiveId = if (identifier.startsWith("http")) {
             identifier.substringAfter("archive.org/download/", "").substringBefore("/").ifBlank { identifier }
+        } else if (directVideoUrl.contains("archive.org/download/")) {
+            directVideoUrl.substringAfter("archive.org/download/").substringBefore("/").ifBlank {
+                identifier.substringBefore(",tmdb-").trim()
+            }
         } else {
             identifier.substringBefore(",tmdb-").trim()
         }
@@ -273,16 +286,21 @@ fun PlayerScreen(
         }
         resolvedMovieYear = effectiveYear
 
-        // 1. Pokreni video stream
+        // 1. Pokreni početni video stream odmah
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
-            availableQualities = emptyList()
-            selectedQuality = null
             directVideoUrl
         } else {
-            val qualities = ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)
-            availableQualities = qualities
-            val bestQuality = qualities.firstOrNull()
-            selectedQuality = bestQuality
+            val moduleQualities = ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)
+            val mapped = moduleQualities.map {
+                PlayerVersionOption(
+                    label = it.label,
+                    url = it.url,
+                    languageRank = classifyVersionLanguageRank("${it.label} ${it.url}")
+                )
+            }.sortedWith(compareBy<PlayerVersionOption> { it.languageRank })
+            availableVersions = mapped
+            val bestQuality = mapped.firstOrNull()
+            selectedVersion = bestQuality
             bestQuality?.url ?: fallbackVideoUrl
         }
 
@@ -292,18 +310,55 @@ fun PlayerScreen(
             null
         }
 
-        if (upgradedOriginalUrl != null && upgradedOriginalUrl != initialUrl) {
+        val streamToStart = if (upgradedOriginalUrl != null && upgradedOriginalUrl != initialUrl) {
             mp4FallbackUrlOverride = initialUrl
-            activeStreamUrl = upgradedOriginalUrl
-            exoPlayer.setMediaItem(MediaItem.fromUri(upgradedOriginalUrl), 0L)
+            upgradedOriginalUrl
         } else {
-            activeStreamUrl = initialUrl
-            exoPlayer.setMediaItem(MediaItem.fromUri(initialUrl), 0L)
+            initialUrl
         }
+        activeStreamUrl = streamToStart
+        exoPlayer.setMediaItem(MediaItem.fromUri(streamToStart), 0L)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
-        // 2. Provjera koncerata (samo Archive.org .srt) vs filmova/serija (predmemorija -> Supabase -> IMDb/OpenSubtitles)
+        // 2. U pozadini učitaj sve verzije videa (rezolucija, veličina, jezik) i prebaci na ENG ako je trenutni španjolska sinkronizacija
+        launch {
+            val concertMode = isConcertTitleOrId(identifier, movieTitle)
+            val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
+            val discoveredVersions = loadAllMovieVersions(
+                cleanArchiveId = cleanArchiveId,
+                currentUrl = activeStreamUrl,
+                movieTitle = movieTitle,
+                movieYear = effectiveYear,
+                expectedRuntimeMins = expectedRuntimeMins,
+                searchAlternativeItems = !concertMode && !identifier.startsWith("tmdb-tv-")
+            )
+
+            if (discoveredVersions.isNotEmpty()) {
+                availableVersions = discoveredVersions
+                val currentMatched = discoveredVersions.find {
+                    urlsMatchArchiveFile(it.url, activeStreamUrl)
+                }
+                val bestOption = discoveredVersions.first()
+                val currentRank = currentMatched?.languageRank ?: classifyVersionLanguageRank("$cleanArchiveId $activeStreamUrl")
+
+                if (currentRank >= 2 && bestOption.languageRank < currentRank && !urlsMatchArchiveFile(bestOption.url, activeStreamUrl)) {
+                    val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    selectedVersion = bestOption
+                    activeStreamUrl = bestOption.url
+                    detectedVideoFps = 0f
+                    exoPlayer.setMediaItem(MediaItem.fromUri(bestOption.url), resumePos)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                    quickHudMessage = "🔊 Odabrana engleska verzija (ostale u ⚙ Verzije)"
+                    quickHudTick++
+                } else {
+                    selectedVersion = currentMatched ?: bestOption
+                }
+            }
+        }
+
+        // 3. Provjera koncerata (samo Archive.org .srt) vs filmova/serija (predmemorija -> Supabase -> IMDb/OpenSubtitles)
         launch {
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             if (concertMode) {
@@ -865,9 +920,10 @@ fun PlayerScreen(
                             )
                         }
 
-                        if (availableQualities.size > 1) {
+                        if (availableVersions.size > 1) {
                             PlayerChipButton(
-                                label = if (isEpisodicContent) "📺 Epizode" else "⚙ Verzije",
+                                label = if (isEpisodicContent) "📺 Epizode" else "⚙ Verzije (${availableVersions.size})",
+                                isHighlighted = availableVersions.size > 1 && !isEpisodicContent,
                                 onClick = {
                                     controlsInteractionTick++
                                     showQualityDialog = true
@@ -1057,17 +1113,21 @@ fun PlayerScreen(
                 containerColor = Color(0xFF1A1A1A),
                 title = { Text(dialogTitle, color = Color.White) },
                 text = {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(availableQualities) { quality ->
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 340.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(availableVersions) { version ->
+                            val isSelected = version == selectedVersion || urlsMatchArchiveFile(version.url, activeStreamUrl)
                             DialogFocusableRow(
-                                label = quality.label,
-                                isSelected = quality == selectedQuality,
+                                label = version.label,
+                                isSelected = isSelected,
                                 onClick = {
                                     val savedPos = exoPlayer.currentPosition
-                                    selectedQuality = quality
-                                    activeStreamUrl = quality.url
+                                    selectedVersion = version
+                                    activeStreamUrl = version.url
                                     detectedVideoFps = 0f
-                                    exoPlayer.setMediaItem(MediaItem.fromUri(quality.url), savedPos)
+                                    exoPlayer.setMediaItem(MediaItem.fromUri(version.url), savedPos)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
                                     showQualityDialog = false
@@ -1208,6 +1268,283 @@ fun PlayerScreen(
             )
         }
     }
+}
+
+private fun urlsMatchArchiveFile(urlA: String, urlB: String): Boolean {
+    if (urlA.isBlank() || urlB.isBlank()) return false
+    if (urlA.equals(urlB, ignoreCase = true)) return true
+    return try {
+        val decA = URLDecoder.decode(urlA.substringAfter("archive.org/download/", urlA), "UTF-8").lowercase(Locale.ROOT)
+        val decB = URLDecoder.decode(urlB.substringAfter("archive.org/download/", urlB), "UTF-8").lowercase(Locale.ROOT)
+        decA == decB
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun classifyVersionLanguageRank(text: String): Int {
+    val lower = text.lowercase(Locale.ROOT)
+    val hasEnglishOrDual = Regex("\\b(eng|english|dual[\\s._-]?audio|multi[\\s._-]?audio|original)\\b").containsMatchIn(lower)
+    if (hasEnglishOrDual) return 0
+
+    val isForeignDub = Regex(
+        "\\b(latino|audio[\\s._-]?latino|castellano|espanol|español|spanish|dublado|dublagem|doblado|doblaje|" +
+            "portugues|portuguese|truefrench|french[\\s._-]?dub|german[\\s._-]?dub|italian[\\s._-]?dub|" +
+            "russian[\\s._-]?dub|ozvuchka|hindi|arabic)\\b"
+    ).containsMatchIn(lower)
+    return if (isForeignDub) 2 else 1
+}
+
+private fun formatFileSizeHuman(bytes: Long): String {
+    if (bytes <= 0L) return ""
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024.0) {
+        String.format(Locale.US, "%.2f GB", mb / 1024.0)
+    } else {
+        String.format(Locale.US, "%.0f MB", mb)
+    }
+}
+
+private fun buildVersionDisplayLabel(
+    filename: String,
+    width: Int,
+    height: Int,
+    sizeBytes: Long,
+    langRank: Int,
+    extraTag: String = ""
+): String {
+    val cleanName = filename.substringAfterLast("/").substringBeforeLast(".")
+        .replace(Regex("[._]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(42)
+    val resTag = when {
+        height >= 2000 || width >= 3800 -> "4K"
+        height >= 1000 || width >= 1900 -> "1080p"
+        height >= 700 || width >= 1260 -> "720p"
+        height >= 460 -> "480p"
+        else -> ""
+    }
+    val sizeTag = formatFileSizeHuman(sizeBytes)
+    val langTag = when (langRank) {
+        0 -> "ENG"
+        2 -> "STRANI AUDIO"
+        else -> ""
+    }
+    val metaParts = listOf(langTag, resTag, sizeTag, extraTag).filter { it.isNotBlank() }
+    return if (metaParts.isNotEmpty()) {
+        "$cleanName (${metaParts.joinToString(" • ")})"
+    } else {
+        cleanName
+    }
+}
+
+private suspend fun loadAllMovieVersions(
+    cleanArchiveId: String,
+    currentUrl: String,
+    movieTitle: String,
+    movieYear: String,
+    expectedRuntimeMins: Int,
+    searchAlternativeItems: Boolean
+): List<PlayerVersionOption> = withContext(Dispatchers.IO) {
+    val collected = mutableListOf<PlayerVersionOption>()
+    val seenUrls = mutableSetOf<String>()
+    var detectedPrimaryRuntimeSecs = expectedRuntimeMins * 60
+
+    fun addUniqueVersion(opt: PlayerVersionOption) {
+        val normKey = try {
+            URLDecoder.decode(opt.url.substringAfter("archive.org/download/", opt.url), "UTF-8").lowercase(Locale.ROOT)
+        } catch (_: Exception) {
+            opt.url.lowercase(Locale.ROOT)
+        }
+        if (seenUrls.add(normKey)) {
+            collected.add(opt)
+        }
+    }
+
+    // 1. Sve video datoteke unutar trenutnog Archive.org zapisa
+    if (cleanArchiveId.isNotBlank() && !cleanArchiveId.startsWith("http")) {
+        try {
+            val metaJson = JSONObject(URL("https://archive.org/metadata/$cleanArchiveId").readText())
+            val md = metaJson.optJSONObject("metadata")
+            val itemMetaTitle = md?.opt("title")?.toString().orEmpty()
+            val itemLangBlob = "$cleanArchiveId $itemMetaTitle ${md?.opt("language")?.toString().orEmpty()}"
+
+            val files = metaJson.optJSONArray("files")
+            if (files != null) {
+                for (i in 0 until files.length()) {
+                    val f = files.optJSONObject(i) ?: continue
+                    val name = f.optString("name")
+                    val lower = name.lowercase(Locale.ROOT)
+                    if (!lower.endsWith(".mp4") && !lower.endsWith(".mkv") && !lower.endsWith(".avi")) continue
+                    if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(lower)) continue
+
+                    val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
+                    if (sizeBytes < 25_000_000L) continue
+
+                    val lenSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                    if (detectedPrimaryRuntimeSecs <= 0 && lenSecs > 1800) {
+                        detectedPrimaryRuntimeSecs = lenSecs
+                    }
+
+                    val width = f.optString("width").toDoubleOrNull()?.toInt() ?: 0
+                    val height = f.optString("height").toDoubleOrNull()?.toInt() ?: 0
+                    val isDeriv = lower.endsWith(".ia.mp4") || f.optString("source") == "derivative"
+                    val langRank = classifyVersionLanguageRank("$itemLangBlob $name")
+                    val encoded = name.split("/").joinToString("/") { part ->
+                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                    }
+                    val streamUrl = "https://archive.org/download/$cleanArchiveId/$encoded"
+                    val label = buildVersionDisplayLabel(
+                        filename = name,
+                        width = width,
+                        height = height,
+                        sizeBytes = sizeBytes,
+                        langRank = langRank,
+                        extraTag = if (isDeriv) "IA" else ""
+                    )
+                    addUniqueVersion(
+                        PlayerVersionOption(
+                            label = label,
+                            url = streamUrl,
+                            languageRank = langRank,
+                            sizeBytes = sizeBytes
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    // 2. Dodaj rezultate iz ArchiveMetadataModule ako ih već nema
+    try {
+        for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
+            addUniqueVersion(
+                PlayerVersionOption(
+                    label = q.label,
+                    url = q.url,
+                    languageRank = classifyVersionLanguageRank("${q.label} ${q.url}")
+                )
+            )
+        }
+    } catch (_: Exception) {
+    }
+
+    // 3. Ako trenutni zapis ima strani audio ili samo 1 verziju, potraži i druge Archive.org uploade istog filma (s prednošću za ENG)
+    val needsAlternativeSearch = searchAlternativeItems && (
+        collected.none { it.languageRank == 0 } ||
+            collected.any { it.languageRank == 2 } ||
+            collected.size <= 1
+        )
+
+    if (needsAlternativeSearch) {
+        val cleanLocalized = cleanMovieTitleForSubtitleSearch(movieTitle)
+        val translatedEn = translateTitleToEnglish(cleanLocalized)
+        val searchTitle = translatedEn.ifBlank { cleanLocalized }
+        val targetYear = movieYear.toIntOrNull() ?: 0
+
+        if (searchTitle.length >= 3) {
+            try {
+                val asciiQuery = searchTitle.replace(Regex("[^a-zA-Z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+                val yearClause = if (targetYear > 0) " AND year:[${targetYear - 1} TO ${targetYear + 1}]" else ""
+                val q = "title:\"$asciiQuery\"$yearClause AND mediatype:movies AND -subject:trailer AND -subject:review"
+                val encodedQ = URLEncoder.encode(q, "UTF-8")
+                val searchUrl = "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=downloads&sort[]=downloads+desc&rows=6&output=json"
+                val conn = URL(searchUrl).openConnection() as HttpURLConnection
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 6000
+                if (conn.responseCode == 200) {
+                    val docs = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                        .optJSONObject("response")
+                        ?.optJSONArray("docs")
+                    val strictWords = normalizeTitleWordsForMatch(searchTitle)
+
+                    if (docs != null) {
+                        for (i in 0 until docs.length()) {
+                            val doc = docs.optJSONObject(i) ?: continue
+                            val altId = doc.optString("identifier")
+                            if (altId.isBlank() || altId == cleanArchiveId || altId.lowercase().startsWith("youtube-")) continue
+                            val altTitle = doc.optString("title")
+                            if (!titlesMatchStrictly(strictWords, cleanMovieTitleForSubtitleSearch(altTitle))) continue
+
+                            val altMeta = JSONObject(URL("https://archive.org/metadata/$altId").readText())
+                            if (altMeta.optBoolean("is_dark", false) || altMeta.optBoolean("is_restricted", false)) continue
+                            val altMd = altMeta.optJSONObject("metadata")
+                            val altBlob = "$altId $altTitle ${altMd?.opt("language")?.toString().orEmpty()}"
+                            val altFiles = altMeta.optJSONArray("files") ?: continue
+
+                            var bestAltFile: JSONObject? = null
+                            var bestAltSize = 0L
+                            for (j in 0 until altFiles.length()) {
+                                val af = altFiles.optJSONObject(j) ?: continue
+                                val afName = af.optString("name").lowercase(Locale.ROOT)
+                                if (!afName.endsWith(".mp4") && !afName.endsWith(".mkv")) continue
+                                if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(afName)) continue
+                                val afSize = af.optString("size").toLongOrNull() ?: 0L
+                                if (afSize < 150_000_000L) continue
+                                val afSecs = af.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                                if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 600) {
+                                    if (afSecs < (detectedPrimaryRuntimeSecs * 0.85).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.18).toInt()) {
+                                        continue
+                                    }
+                                }
+                                if (afSize > bestAltSize) {
+                                    bestAltSize = afSize
+                                    bestAltFile = af
+                                }
+                            }
+
+                            if (bestAltFile != null) {
+                                val rawName = bestAltFile.optString("name")
+                                val width = bestAltFile.optString("width").toDoubleOrNull()?.toInt() ?: 0
+                                val height = bestAltFile.optString("height").toDoubleOrNull()?.toInt() ?: 0
+                                val langRank = classifyVersionLanguageRank("$altBlob $rawName")
+                                val encoded = rawName.split("/").joinToString("/") { part ->
+                                    URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                                }
+                                val altStreamUrl = "https://archive.org/download/$altId/$encoded"
+                                val label = buildVersionDisplayLabel(
+                                    filename = rawName,
+                                    width = width,
+                                    height = height,
+                                    sizeBytes = bestAltSize,
+                                    langRank = langRank,
+                                    extraTag = "Archive"
+                                )
+                                addUniqueVersion(
+                                    PlayerVersionOption(
+                                        label = label,
+                                        url = altStreamUrl,
+                                        languageRank = langRank,
+                                        sizeBytes = bestAltSize
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    if (currentUrl.isNotBlank() && collected.none { urlsMatchArchiveFile(it.url, currentUrl) }) {
+        val rank = classifyVersionLanguageRank("$cleanArchiveId $currentUrl")
+        addUniqueVersion(
+            PlayerVersionOption(
+                label = buildVersionDisplayLabel(currentUrl, 0, 0, 0L, rank, "Trenutna"),
+                url = currentUrl,
+                languageRank = rank
+            )
+        )
+    }
+
+    collected.sortedWith(
+        compareBy<PlayerVersionOption> { it.languageRank }
+            .thenByDescending { it.sizeBytes }
+    )
 }
 
 private fun buildSubtitleDbKey(identifier: String, directVideoUrl: String): String {
@@ -1897,7 +2234,7 @@ private fun resolveImdbIdAndEnglishTitle(
         if (cleanQuery.length < 2) continue
         val queryWords = normalizeTitleWordsForMatch(cleanQuery)
 
-        // 1. IMDb javni suggestion API (glavni dugometražni filmovi imaju qid = "feature")
+        // 1. IMDb javni suggestion API
         try {
             val slug = cleanQuery.lowercase(Locale.ROOT)
                 .replace(Regex("\\s+"), "_")
@@ -1959,7 +2296,7 @@ private fun resolveImdbIdAndEnglishTitle(
 
         if (resolvedImdbId.isNotBlank()) break
 
-        // 2. Cinemeta katalog (isključivo igrani filmovi)
+        // 2. Cinemeta katalog
         try {
             val encodedQ = URLEncoder.encode(cleanQuery, "UTF-8").replace("+", "%20")
             val conn = URL("https://v3-cinemeta.strem.io/catalog/movie/top/search=$encodedQ.json")
@@ -2144,7 +2481,7 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 3. OpenSubtitles REST API po IMDb ID-u (vraća točan MovieFPS i broj preuzimanja)
+    // 3. OpenSubtitles REST API po IMDb ID-u
     val numericImdb = imdbId.removePrefix("tt").trimStart('0')
     val langs = listOf("hrv", "srp", "bos", "eng")
     if (numericImdb.isNotBlank() && numericImdb.all { it.isDigit() }) {
