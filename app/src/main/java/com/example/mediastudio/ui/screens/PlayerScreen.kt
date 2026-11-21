@@ -1,7 +1,9 @@
 package com.example.mediastudio.ui.screens
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -41,10 +43,16 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.BaseDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultAllocator
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
@@ -62,18 +70,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToLong
 
 private const val SUBTITLES_SUPABASE_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
 private const val SUBTITLES_SUPABASE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
+private const val STREAM_USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 data class SrtCue(
     val startMs: Long,
@@ -105,6 +120,350 @@ private data class ParsedEpisodeContext(
     val episode: Int,
     val episodeTitle: String
 )
+
+/**
+ * Ubrzava reprodukciju velikih HD datoteka s Archive.org-a:
+ * - Jednokratno razrješava 302 preusmjeravanje na ciljni storage poslužitelj
+ * - Preuzima 20 MB unaprijed u blokovima od 1 MB kroz 4 paralelne Range HTTP veze
+ * - Poslužuje ExoPlayer iz RAM/disk kliznog spremnika bez mrežnih zastoja
+ */
+private class ParallelStreamCacheManager(context: Context) {
+    companion object {
+        const val CHUNK_SIZE = 1_048_576L // 1 MB po bloku
+        const val PREFETCH_AHEAD_CHUNKS = 20 // 20 MB unaprijed
+        const val KEEP_BEHIND_CHUNKS = 4 // 4 MB iza pozicije gledanja
+    }
+
+    private val cacheRoot = File(context.cacheDir, "parallel_stream_${System.nanoTime()}").apply {
+        mkdirs()
+    }
+    private val workerPool = Executors.newFixedThreadPool(4)
+    private val entries = ConcurrentHashMap<String, StreamEntry>()
+    private val ramChunkCache = ConcurrentHashMap<String, ByteArray>()
+
+    @Volatile
+    private var isClosed = false
+
+    class StreamEntry(
+        val id: String,
+        val originalUrl: String
+    ) {
+        @Volatile
+        var resolvedUrl: String = originalUrl
+
+        @Volatile
+        var totalSize: Long = -1L // -1 = nije još provjereno, -2 = Range nije podržan (koristi fallback)
+
+        val lock = Object()
+        val completedChunks = HashSet<Long>()
+        val inFlightChunks = HashSet<Long>()
+        val failedChunks = HashMap<Long, Int>()
+    }
+
+    fun getOrProbeEntry(url: String): StreamEntry? {
+        if (isClosed || !url.contains("archive.org/download/", ignoreCase = true)) return null
+        val entry = entries.computeIfAbsent(url) {
+            StreamEntry(id = abs(url.hashCode()).toString(), originalUrl = url)
+        }
+        if (entry.totalSize >= 0L) return entry
+        if (entry.totalSize == -2L) return null
+
+        synchronized(entry.lock) {
+            if (entry.totalSize >= 0L) return entry
+            if (entry.totalSize == -2L) return null
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = true
+                conn.requestMethod = "GET"
+                conn.setRequestProperty("User-Agent", STREAM_USER_AGENT)
+                conn.setRequestProperty("Range", "bytes=0-1")
+                conn.setRequestProperty("Accept-Encoding", "identity")
+                conn.connectTimeout = 10_000
+                conn.readTimeout = 12_000
+                val code = conn.responseCode
+                val contentRange = conn.getHeaderField("Content-Range").orEmpty()
+                val finalUrl = conn.url?.toString()?.takeIf { it.startsWith("http") } ?: url
+                conn.inputStream?.close()
+                conn.disconnect()
+
+                val total = contentRange.substringAfter("/", "").trim().toLongOrNull() ?: -1L
+                if (code == 206 && total > CHUNK_SIZE) {
+                    entry.resolvedUrl = finalUrl
+                    entry.totalSize = total
+                    return entry
+                }
+            } catch (_: Exception) {
+            }
+            entry.totalSize = -2L
+            return null
+        }
+    }
+
+    fun scheduleWindow(entry: StreamEntry, currentChunk: Long) {
+        if (isClosed || entry.totalSize <= 0L) return
+        val maxChunk = (entry.totalSize - 1L) / CHUNK_SIZE
+        val fromChunk = currentChunk.coerceIn(0L, maxChunk)
+        val toChunk = min(maxChunk, fromChunk + PREFETCH_AHEAD_CHUNKS)
+
+        // Očisti stare blokove iza trenutne pozicije gledanja
+        val pruneBefore = fromChunk - KEEP_BEHIND_CHUNKS
+        if (pruneBefore > 0L) {
+            synchronized(entry.lock) {
+                val toRemove = entry.completedChunks.filter { it < pruneBefore }
+                for (oldIdx in toRemove) {
+                    entry.completedChunks.remove(oldIdx)
+                    ramChunkCache.remove("${entry.id}_$oldIdx")
+                    File(cacheRoot, "${entry.id}_$oldIdx.bin").delete()
+                }
+            }
+        }
+
+        for (idx in fromChunk..toChunk) {
+            synchronized(entry.lock) {
+                if (idx in entry.completedChunks || idx in entry.inFlightChunks) continue
+                if ((entry.failedChunks[idx] ?: 0) >= 3) continue
+                entry.inFlightChunks.add(idx)
+            }
+            workerPool.submit {
+                downloadSingleChunk(entry, idx)
+            }
+        }
+    }
+
+    private fun downloadSingleChunk(entry: StreamEntry, chunkIdx: Long) {
+        if (isClosed) return
+        val startByte = chunkIdx * CHUNK_SIZE
+        val endByte = min(entry.totalSize - 1L, startByte + CHUNK_SIZE - 1L)
+        val expectedLen = (endByte - startByte + 1L).toInt()
+        val finalFile = File(cacheRoot, "${entry.id}_$chunkIdx.bin")
+        val tmpFile = File(cacheRoot, "${entry.id}_$chunkIdx.tmp")
+
+        var success = false
+        for (attempt in 0 until 3) {
+            if (isClosed) break
+            var conn: HttpURLConnection? = null
+            try {
+                val targetUrl = if (attempt == 2) entry.originalUrl else entry.resolvedUrl
+                conn = URL(targetUrl).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = true
+                conn.requestMethod = "GET"
+                conn.setRequestProperty("User-Agent", STREAM_USER_AGENT)
+                conn.setRequestProperty("Range", "bytes=$startByte-$endByte")
+                conn.setRequestProperty("Accept-Encoding", "identity")
+                conn.setRequestProperty("Connection", "keep-alive")
+                conn.connectTimeout = 12_000
+                conn.readTimeout = 25_000
+
+                val code = conn.responseCode
+                if (code == 206 || code == 200) {
+                    val newResolved = conn.url?.toString()
+                    if (!newResolved.isNullOrBlank() && newResolved.startsWith("http")) {
+                        entry.resolvedUrl = newResolved
+                    }
+                    var totalRead = 0
+                    conn.inputStream.use { input ->
+                        FileOutputStream(tmpFile).use { out ->
+                            val buf = ByteArray(32 * 1024)
+                            while (!isClosed) {
+                                val r = input.read(buf)
+                                if (r == -1) break
+                                out.write(buf, 0, r)
+                                totalRead += r
+                            }
+                        }
+                    }
+                    if (totalRead >= expectedLen && tmpFile.exists()) {
+                        if (finalFile.exists()) finalFile.delete()
+                        if (tmpFile.renameTo(finalFile)) {
+                            success = true
+                            break
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                try {
+                    Thread.sleep(150L * (attempt + 1))
+                } catch (_: InterruptedException) {
+                    break
+                }
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        if (!success) {
+            tmpFile.delete()
+        }
+
+        synchronized(entry.lock) {
+            entry.inFlightChunks.remove(chunkIdx)
+            if (success) {
+                entry.completedChunks.add(chunkIdx)
+            } else {
+                entry.failedChunks[chunkIdx] = (entry.failedChunks[chunkIdx] ?: 0) + 1
+            }
+            entry.lock.notifyAll()
+        }
+    }
+
+    fun getChunkBytesBlocking(entry: StreamEntry, chunkIdx: Long): ByteArray? {
+        val ramKey = "${entry.id}_$chunkIdx"
+        ramChunkCache[ramKey]?.let { return it }
+
+        scheduleWindow(entry, chunkIdx)
+
+        while (!isClosed) {
+            var shouldWait = false
+            synchronized(entry.lock) {
+                if (chunkIdx in entry.completedChunks) {
+                    shouldWait = false
+                } else if ((entry.failedChunks[chunkIdx] ?: 0) >= 3) {
+                    return null
+                } else {
+                    shouldWait = true
+                    try {
+                        entry.lock.wait(250L)
+                    } catch (_: InterruptedException) {
+                        return null
+                    }
+                }
+            }
+            if (!shouldWait) break
+        }
+
+        if (isClosed) return null
+        val file = File(cacheRoot, "${entry.id}_$chunkIdx.bin")
+        return try {
+            if (!file.exists()) return null
+            val bytes = file.readBytes()
+            if (ramChunkCache.size > 6) {
+                ramChunkCache.clear()
+            }
+            ramChunkCache[ramKey] = bytes
+            bytes
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun shutdown() {
+        isClosed = true
+        entries.values.forEach { entry ->
+            synchronized(entry.lock) {
+                entry.lock.notifyAll()
+            }
+        }
+        workerPool.shutdownNow()
+        ramChunkCache.clear()
+        try {
+            cacheRoot.deleteRecursively()
+        } catch (_: Exception) {
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+private class ParallelArchiveDataSource(
+    private val cacheManager: ParallelStreamCacheManager,
+    private val fallbackDataSource: HttpDataSource
+) : BaseDataSource(/* isNetwork = */ true) {
+
+    private var currentUri: Uri? = null
+    private var activeEntry: ParallelStreamCacheManager.StreamEntry? = null
+    private var readPosition: Long = 0L
+    private var bytesRemaining: Long = 0L
+    private var usingFallback: Boolean = false
+    private var opened: Boolean = false
+
+    override fun open(dataSpec: DataSpec): Long {
+        transferInitializing(dataSpec)
+        currentUri = dataSpec.uri
+        val url = dataSpec.uri.toString()
+
+        val entry = cacheManager.getOrProbeEntry(url)
+        if (entry != null && entry.totalSize > 0L) {
+            usingFallback = false
+            activeEntry = entry
+            readPosition = dataSpec.position
+            val available = (entry.totalSize - readPosition).coerceAtLeast(0L)
+            bytesRemaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
+                min(dataSpec.length, available)
+            } else {
+                available
+            }
+            cacheManager.scheduleWindow(entry, readPosition / ParallelStreamCacheManager.CHUNK_SIZE)
+            opened = true
+            transferStarted(dataSpec)
+            return bytesRemaining
+        } else {
+            usingFallback = true
+            activeEntry = null
+            opened = true
+            val len = fallbackDataSource.open(dataSpec)
+            transferStarted(dataSpec)
+            return len
+        }
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        if (usingFallback) {
+            val read = fallbackDataSource.read(buffer, offset, length)
+            if (read > 0) bytesTransferred(read)
+            return read
+        }
+
+        if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
+        val entry = activeEntry ?: return C.RESULT_END_OF_INPUT
+
+        val chunkIdx = readPosition / ParallelStreamCacheManager.CHUNK_SIZE
+        val offsetInChunk = (readPosition % ParallelStreamCacheManager.CHUNK_SIZE).toInt()
+        val chunkBytes = cacheManager.getChunkBytesBlocking(entry, chunkIdx)
+            ?: throw IOException("Prekid preuzimanja bloka $chunkIdx s Archive.org-a")
+
+        val availableInChunk = (chunkBytes.size - offsetInChunk).coerceAtLeast(0)
+        if (availableInChunk == 0) return C.RESULT_END_OF_INPUT
+
+        val toCopy = min(min(length.toLong(), bytesRemaining), availableInChunk.toLong()).toInt()
+        System.arraycopy(chunkBytes, offsetInChunk, buffer, offset, toCopy)
+
+        readPosition += toCopy
+        bytesRemaining -= toCopy
+        bytesTransferred(toCopy)
+        return toCopy
+    }
+
+    override fun getUri(): Uri? = currentUri
+
+    override fun close() {
+        currentUri = null
+        activeEntry = null
+        if (usingFallback) {
+            try {
+                fallbackDataSource.close()
+            } catch (_: Exception) {
+            }
+            usingFallback = false
+        }
+        if (opened) {
+            opened = false
+            transferEnded()
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+private class ParallelArchiveDataSourceFactory(
+    private val cacheManager: ParallelStreamCacheManager,
+    private val fallbackFactory: HttpDataSource.Factory
+) : DataSource.Factory {
+    override fun createDataSource(): DataSource {
+        return ParallelArchiveDataSource(cacheManager, fallbackFactory.createDataSource())
+    }
+}
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -165,20 +524,23 @@ fun PlayerScreen(
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
+    val streamCacheManager = remember { ParallelStreamCacheManager(context.applicationContext) }
+
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
+            .setAllocator(DefaultAllocator(true, 64 * 1024))
             .setBufferDurationsMs(
-                30_000,
+                25_000,
                 90_000,
-                3_500,
-                7_500
+                2_500,
+                5_000
             )
             .setBackBuffer(15_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            .setUserAgent(STREAM_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(30_000)
@@ -189,9 +551,17 @@ fun PlayerScreen(
                 )
             )
 
-        val player = ExoPlayer.Builder(context)
+        val parallelDataSourceFactory = ParallelArchiveDataSourceFactory(
+            cacheManager = streamCacheManager,
+            fallbackFactory = httpDataSourceFactory
+        )
+
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+
+        val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(parallelDataSourceFactory))
             .build()
 
         player.trackSelectionParameters = player.trackSelectionParameters
@@ -296,7 +666,7 @@ fun PlayerScreen(
         }
         resolvedMovieYear = effectiveYear
 
-        // 1. Pokreni video stream odmah
+        // 1. Pokreni video stream odmah (100% mrežnog kapaciteta za početni buffer)
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             directVideoUrl
         } else {
@@ -331,8 +701,9 @@ fun PlayerScreen(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
-        // 2. U pozadini učitaj samo verzije TOG KONKRETNOG filma ili epizode (nikad druge filmove/epizode)
+        // 2. Daj videu 2.5s prednosti da napuni početni buffer prije ostalih mrežnih upita
         launch {
+            delay(2500L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, sbMeta?.mediaType)
             val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
@@ -371,8 +742,9 @@ fun PlayerScreen(
             }
         }
 
-        // 3. Pretraga i automatski prijevod titlova (podržava i filmove i epizode serija!)
+        // 3. Pretraga i automatski prijevod titlova (nakon 2.5s kako ne bi gušilo početno učitavanje videa)
         launch {
+            delay(2500L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             if (concertMode) {
                 val archiveOnlySubs = searchAllSubtitles(
@@ -665,6 +1037,7 @@ fun PlayerScreen(
         onDispose {
             exoPlayer.removeListener(listener)
             exoPlayer.release()
+            streamCacheManager.shutdown()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -1338,7 +1711,6 @@ private fun parseEpisodeContext(
         return ParsedEpisodeContext(false, "", 0, 0, "")
     }
 
-    // Izdvoji naziv serije (prije "- S01E01" ili "S01E01") i naziv epizode (nakon "S01E01 -")
     val splitMatch = Regex("(?i)^(.*?)(?:\\s*[-–—]\\s*)?(?:\\bS\\d{1,2}\\s*[-_.]?\\s*E\\d{1,3}\\b|\\b\\d{1,2}x\\d{1,3}\\b)(?:\\s*[-–—:]\\s*(.*))?$")
         .find(movieTitle.trim())
 
@@ -1505,7 +1877,6 @@ private suspend fun loadAllMovieVersions(
                     val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
                     if (sizeBytes < 25_000_000L) continue
 
-                    // Ako je serija: prihvati ISKLJUČIVO datoteke te iste epizode (npr. S01E01), nikad S02E01 itd.
                     if (episodeCtx.isSeries) {
                         if (episodeCtx.season > 0 && episodeCtx.episode > 0) {
                             if (!fileMatchesEpisode(name, episodeCtx.season, episodeCtx.episode)) continue
@@ -1513,7 +1884,6 @@ private suspend fun loadAllMovieVersions(
                             continue
                         }
                     } else if (itemIsCollection) {
-                        // Ako je kolekcija autora: prihvati ISKLJUČIVO verzije tog konkretnog filma, nikad druge filmove autora!
                         val fileCleanTitle = cleanMovieTitleForSubtitleSearch(name.substringAfterLast("/").substringBeforeLast("."))
                         val matchesByTitle = titlesMatchStrictly(targetMovieWords, fileCleanTitle)
                         val isCurrentFile = urlsMatchArchiveFile("https://archive.org/download/$cleanArchiveId/$name", currentUrl)
@@ -1556,7 +1926,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 2. Dodaj rezultate iz ArchiveMetadataModule samo ako se NE radi o kolekciji autora niti seriji (da ne ubaci tuđe epizode/filmove)
+    // 2. Dodaj rezultate iz ArchiveMetadataModule samo ako se NE radi o kolekciji autora niti seriji
     if (!isAuthorOrMultiCollection && !episodeCtx.isSeries) {
         try {
             for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
@@ -1572,7 +1942,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 3. Potraži dodatne verzije tog konkretnog filma ili te konkretne epizode (npr. englesku verziju umjesto sinkronizacije)
+    // 3. Potraži dodatne verzije tog konkretnog filma ili te konkretne epizode
     if (searchAlternativeItems) {
         val searchTitle = translatedEn.ifBlank { cleanLocalized }
         val targetYear = movieYear.toIntOrNull() ?: 0
@@ -2404,7 +2774,6 @@ private fun resolveImdbIdAndEnglishTitle(
         if (cleanQuery.length < 2) continue
         val queryWords = normalizeTitleWordsForMatch(cleanQuery)
 
-        // 1. IMDb javni suggestion API (podržava i filmove i TV serije)
         try {
             val slug = cleanQuery.lowercase(Locale.ROOT)
                 .replace(Regex("\\s+"), "_")
@@ -2466,7 +2835,6 @@ private fun resolveImdbIdAndEnglishTitle(
 
         if (resolvedImdbId.isNotBlank()) break
 
-        // 2. Cinemeta katalog (movie ili series)
         try {
             val catalogType = if (isSeries) "series" else "movie"
             val encodedQ = URLEncoder.encode(cleanQuery, "UTF-8").replace("+", "%20")
@@ -2525,7 +2893,6 @@ private suspend fun searchAllSubtitles(
         ""
     }
 
-    // 1. Dohvati Archive.org .srt datoteke i provjeri radi li se o koncertu
     if (identifier.isNotBlank() && !identifier.startsWith("http")) {
         try {
             val metaJson = JSONObject(URL("https://archive.org/metadata/$identifier").readText())
@@ -2609,7 +2976,6 @@ private suspend fun searchAllSubtitles(
 
     val allowedLangs = setOf("hrv", "srp", "bos", "eng", "hr", "sr", "bs", "en")
 
-    // 2. OpenSubtitles v3 po točnom IMDb ID-u (za filmove /movie/tt..., za serije /series/tt...:S:E.json)
     if (imdbId.startsWith("tt")) {
         try {
             val stremEndpoint = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
@@ -2670,7 +3036,6 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 3. OpenSubtitles REST API po IMDb ID-u (s season/episode za serije)
     val numericImdb = imdbId.removePrefix("tt").trimStart('0')
     val langs = listOf("hrv", "srp", "bos", "eng")
     if (numericImdb.isNotBlank() && numericImdb.all { it.isDigit() }) {
@@ -2714,7 +3079,6 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 4. Rezervna tekstualna pretraga (uključuje S01E01 za serije)
     if (results.none { it.language in setOf("HRV", "SRP", "BOS", "ENG") } && englishTitleForTextSearch.length >= 2) {
         val strictWords = normalizeTitleWordsForMatch(englishTitleForTextSearch)
         val seSuffix = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
