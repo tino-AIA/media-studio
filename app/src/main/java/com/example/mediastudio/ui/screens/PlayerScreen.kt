@@ -70,6 +70,8 @@ import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
 import java.util.zip.GZIPInputStream
+import kotlin.math.abs
+import kotlin.math.roundToLong
 
 private const val SUBTITLES_SUPABASE_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
 private const val SUBTITLES_SUPABASE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
@@ -84,7 +86,9 @@ data class PlayerSubtitleOption(
     val fileName: String,
     val language: String,
     val downloadUrl: String,
-    val isGzipped: Boolean = false
+    val isGzipped: Boolean = false,
+    val fps: Float = 0f,
+    val downloads: Int = 0
 )
 
 @OptIn(UnstableApi::class)
@@ -108,6 +112,7 @@ fun PlayerScreen(
     var controlsInteractionTick by remember { mutableIntStateOf(0) }
 
     var videoResizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var detectedVideoFps by remember { mutableFloatStateOf(0f) }
 
     var activeStreamUrl by remember { mutableStateOf("") }
     var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
@@ -127,7 +132,11 @@ fun PlayerScreen(
     var isLoadingSubtitles by remember { mutableStateOf(false) }
     var isTranslatingSubtitles by remember { mutableStateOf(false) }
     var activeSubtitleName by remember { mutableStateOf<String?>(null) }
+    var activeSubtitleFps by remember { mutableFloatStateOf(0f) }
+    var rawActiveCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
+    var appliedFpsConversionLabel by remember { mutableStateOf("") }
+    var lastNotifiedFpsKey by remember { mutableStateOf("") }
     var currentSubtitleText by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableLongStateOf(0L) }
     var cachedAutoTranslatedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
@@ -177,6 +186,31 @@ fun PlayerScreen(
         player
     }
 
+    // Automatska konverzija vremenskih oznaka titla čim se znaju FPS titla i FPS videa
+    LaunchedEffect(rawActiveCues, activeSubtitleFps, detectedVideoFps, duration, activeSubtitleName) {
+        if (rawActiveCues.isEmpty()) {
+            parsedCues = emptyList()
+            appliedFpsConversionLabel = ""
+            return@LaunchedEffect
+        }
+        val (converted, convLabel) = convertCuesForVideoFps(
+            cues = rawActiveCues,
+            subFps = activeSubtitleFps,
+            videoFps = detectedVideoFps,
+            videoDurationMs = duration
+        )
+        parsedCues = converted
+        appliedFpsConversionLabel = convLabel
+        if (convLabel.isNotEmpty()) {
+            val notifyKey = "${activeSubtitleName.orEmpty()}|$convLabel"
+            if (notifyKey != lastNotifiedFpsKey) {
+                lastNotifiedFpsKey = notifyKey
+                quickHudMessage = "🎞️ Titl prilagođen: $convLabel"
+                quickHudTick++
+            }
+        }
+    }
+
     BackHandler {
         when {
             showQualityDialog -> showQualityDialog = false
@@ -203,6 +237,7 @@ fun PlayerScreen(
 
     LaunchedEffect(identifier, directVideoUrl) {
         videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        detectedVideoFps = 0f
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedMp4Fallback = false
@@ -211,7 +246,11 @@ fun PlayerScreen(
         isBuffering = true
 
         activeSubtitleName = null
+        activeSubtitleFps = 0f
+        rawActiveCues = emptyList()
         parsedCues = emptyList()
+        appliedFpsConversionLabel = ""
+        lastNotifiedFpsKey = ""
         currentSubtitleText = ""
         subtitleOffsetMs = 0L
         subtitleList = emptyList()
@@ -236,115 +275,7 @@ fun PlayerScreen(
             sbMeta?.releaseYear?.takeIf { it > 0 }?.toString() ?: ""
         }
 
-        // 1. Automatska provjera lokalne predmemorije -> Supabase baze -> pretrage i prijevoda
-        launch {
-            val localCachedCues = readCachedTranslatedCues(localCacheFile)
-            if (localCachedCues.isNotEmpty()) {
-                val dbOptionName = "🇭🇷 Baza titlova ($movieTitle)"
-                val dbOption = PlayerSubtitleOption(
-                    fileName = dbOptionName,
-                    language = "HR-DB",
-                    downloadUrl = "cached://$safeCacheSlug"
-                )
-                cachedAutoTranslatedCues = localCachedCues
-                activeSubtitleName = dbOptionName
-                parsedCues = localCachedCues
-                subtitleList = listOf(dbOption)
-                quickHudMessage = "💬 Titlovi učitani iz baze"
-                quickHudTick++
-
-                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
-                subtitleList = listOf(dbOption) + extraSubs
-                return@launch
-            }
-
-            val cloudSub = fetchSubtitleFromSupabase(subtitleDbKey)
-            if (cloudSub != null && cloudSub.second.isNotEmpty()) {
-                val (sourceName, dbCues) = cloudSub
-                writeCachedTranslatedCues(localCacheFile, dbCues)
-                val dbOptionName = "🇭🇷 Baza titlova ($sourceName)"
-                val dbOption = PlayerSubtitleOption(
-                    fileName = dbOptionName,
-                    language = "HR-DB",
-                    downloadUrl = "cached://$safeCacheSlug"
-                )
-                cachedAutoTranslatedCues = dbCues
-                activeSubtitleName = dbOptionName
-                parsedCues = dbCues
-                subtitleList = listOf(dbOption)
-                quickHudMessage = "💬 Titlovi učitani iz baze"
-                quickHudTick++
-
-                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
-                subtitleList = listOf(dbOption) + extraSubs
-                return@launch
-            }
-
-            isLoadingSubtitles = true
-            val foundSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
-            isLoadingSubtitles = false
-
-            if (foundSubs.isEmpty()) {
-                subtitleList = emptyList()
-                quickHudMessage = "💬 Nema pronađenih titlova"
-                quickHudTick++
-                return@launch
-            }
-
-            val bestSub = pickBestSubtitleOption(foundSubs)
-            val rawSrt = downloadSubtitleText(bestSub)
-            val initialCues = parseSrtContent(rawSrt)
-
-            if (initialCues.isEmpty()) {
-                subtitleList = foundSubs
-                quickHudMessage = "💬 Nema ispravnih titlova"
-                quickHudTick++
-                return@launch
-            }
-
-            if (isCroatianOrRegionalSubtitle(bestSub, initialCues)) {
-                subtitleList = foundSubs
-                activeSubtitleName = bestSub.fileName
-                parsedCues = initialCues
-                quickHudMessage = "💬 Titlovi: [${bestSub.language}] ${bestSub.fileName}"
-                quickHudTick++
-            } else {
-                val autoOptionName = "🇭🇷 Baza titlova (${bestSub.fileName})"
-                val autoOption = PlayerSubtitleOption(
-                    fileName = autoOptionName,
-                    language = "HR-DB",
-                    downloadUrl = "cached://$safeCacheSlug"
-                )
-
-                // Odmah prikaži engleske titlove dok u pozadini prevodimo i spremamo u Supabase
-                subtitleList = foundSubs
-                activeSubtitleName = bestSub.fileName
-                parsedCues = initialCues
-                isTranslatingSubtitles = true
-                quickHudMessage = "🌐 Prevodim titlove na hrvatski..."
-                quickHudTick++
-
-                val translatedCues = translateCuesToCroatian(initialCues, localCacheFile)
-                isTranslatingSubtitles = false
-
-                if (translatedCues.isNotEmpty()) {
-                    cachedAutoTranslatedCues = translatedCues
-                    subtitleList = listOf(autoOption) + foundSubs
-                    launch {
-                        saveSubtitleToSupabase(subtitleDbKey, bestSub.fileName, translatedCues)
-                    }
-
-                    if (activeSubtitleName == bestSub.fileName) {
-                        activeSubtitleName = autoOptionName
-                        parsedCues = translatedCues
-                        quickHudMessage = "✅ Prevedeno i spremljeno u bazu"
-                        quickHudTick++
-                    }
-                }
-            }
-        }
-
-        // 2. Učitavanje najboljeg video streama (izvorni multi-audio .mp4/.mkv ili fallback)
+        // 1. Pokreni video stream i dohvati Archive.org FPS metapodatke
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             availableQualities = emptyList()
             selectedQuality = null
@@ -373,13 +304,146 @@ fun PlayerScreen(
         }
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+
+        // 2. Automatska provjera lokalne predmemorije -> Supabase baze -> pametni odabir po FPS-u i prijevod
+        launch {
+            val archiveFpsHint = fetchArchiveVideoFps(cleanArchiveId)
+            if (detectedVideoFps <= 0f && archiveFpsHint > 0f) {
+                detectedVideoFps = archiveFpsHint
+            }
+            val targetFpsForPick = if (detectedVideoFps > 0f) detectedVideoFps else archiveFpsHint
+
+            val localCached = readCachedTranslatedCues(localCacheFile)
+            if (localCached != null && localCached.first.isNotEmpty()) {
+                val (cachedCues, cachedFps) = localCached
+                val dbOptionName = "🇭🇷 Baza titlova ($movieTitle)"
+                val dbOption = PlayerSubtitleOption(
+                    fileName = dbOptionName,
+                    language = "HR-DB",
+                    downloadUrl = "cached://$safeCacheSlug",
+                    fps = cachedFps
+                )
+                cachedAutoTranslatedCues = cachedCues
+                activeSubtitleName = dbOptionName
+                activeSubtitleFps = cachedFps
+                rawActiveCues = cachedCues
+                subtitleList = listOf(dbOption)
+                quickHudMessage = "💬 Titlovi učitani iz baze"
+                quickHudTick++
+
+                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
+                subtitleList = listOf(dbOption) + extraSubs
+                return@launch
+            }
+
+            val cloudSub = fetchSubtitleFromSupabase(subtitleDbKey)
+            if (cloudSub != null && cloudSub.second.isNotEmpty()) {
+                val (sourceName, dbCues) = cloudSub
+                val dbFps = extractFpsFromText(sourceName)
+                writeCachedTranslatedCues(localCacheFile, dbCues, dbFps)
+                val cleanDisplaySource = sourceName.replace(Regex("\\s*\\[\\d+(?:\\.\\d+)?fps\\]"), "").trim()
+                val dbOptionName = "🇭🇷 Baza titlova ($cleanDisplaySource)"
+                val dbOption = PlayerSubtitleOption(
+                    fileName = dbOptionName,
+                    language = "HR-DB",
+                    downloadUrl = "cached://$safeCacheSlug",
+                    fps = dbFps
+                )
+                cachedAutoTranslatedCues = dbCues
+                activeSubtitleName = dbOptionName
+                activeSubtitleFps = dbFps
+                rawActiveCues = dbCues
+                subtitleList = listOf(dbOption)
+                quickHudMessage = "💬 Titlovi učitani iz baze"
+                quickHudTick++
+
+                val extraSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
+                subtitleList = listOf(dbOption) + extraSubs
+                return@launch
+            }
+
+            isLoadingSubtitles = true
+            val foundSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
+            isLoadingSubtitles = false
+
+            if (foundSubs.isEmpty()) {
+                subtitleList = emptyList()
+                quickHudMessage = "💬 Nema pronađenih titlova"
+                quickHudTick++
+                return@launch
+            }
+
+            val latestVideoFps = if (detectedVideoFps > 0f) detectedVideoFps else targetFpsForPick
+            val bestSub = pickBestSubtitleOption(foundSubs, latestVideoFps)
+            val rawSrt = downloadSubtitleText(bestSub)
+            val initialCues = parseSrtContent(rawSrt)
+
+            if (initialCues.isEmpty()) {
+                subtitleList = foundSubs
+                quickHudMessage = "💬 Nema ispravnih titlova"
+                quickHudTick++
+                return@launch
+            }
+
+            val fpsTag = if (bestSub.fps > 0f) " • ${formatFpsShort(bestSub.fps)} fps" else ""
+
+            if (isCroatianOrRegionalSubtitle(bestSub, initialCues)) {
+                subtitleList = foundSubs
+                activeSubtitleName = bestSub.fileName
+                activeSubtitleFps = bestSub.fps
+                rawActiveCues = initialCues
+                quickHudMessage = "💬 Titlovi: [${bestSub.language}$fpsTag] ${bestSub.fileName}"
+                quickHudTick++
+            } else {
+                val autoOptionName = "🇭🇷 Baza titlova (${bestSub.fileName})"
+                val autoOption = PlayerSubtitleOption(
+                    fileName = autoOptionName,
+                    language = "HR-DB",
+                    downloadUrl = "cached://$safeCacheSlug",
+                    fps = bestSub.fps
+                )
+
+                subtitleList = foundSubs
+                activeSubtitleName = bestSub.fileName
+                activeSubtitleFps = bestSub.fps
+                rawActiveCues = initialCues
+                isTranslatingSubtitles = true
+                quickHudMessage = "🌐 Prevodim titlove na hrvatski..."
+                quickHudTick++
+
+                val translatedCues = translateCuesToCroatian(initialCues, localCacheFile, bestSub.fps)
+                isTranslatingSubtitles = false
+
+                if (translatedCues.isNotEmpty()) {
+                    cachedAutoTranslatedCues = translatedCues
+                    subtitleList = listOf(autoOption) + foundSubs
+                    val storedSourceName = if (bestSub.fps > 0f) {
+                        "${bestSub.fileName} [${formatFpsShort(bestSub.fps)}fps]"
+                    } else {
+                        bestSub.fileName
+                    }
+                    launch {
+                        saveSubtitleToSupabase(subtitleDbKey, storedSourceName, translatedCues)
+                    }
+
+                    if (activeSubtitleName == bestSub.fileName) {
+                        activeSubtitleName = autoOptionName
+                        activeSubtitleFps = bestSub.fps
+                        rawActiveCues = translatedCues
+                        quickHudMessage = "✅ Prevedeno i spremljeno u bazu"
+                        quickHudTick++
+                    }
+                }
+            }
+        }
     }
 
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
             val durationMs = when {
                 quickHudMessage.startsWith("🔊") -> 4500L
-                quickHudMessage.startsWith("💬") || quickHudMessage.startsWith("🌐") || quickHudMessage.startsWith("✅") -> 3500L
+                quickHudMessage.startsWith("💬") || quickHudMessage.startsWith("🌐") ||
+                    quickHudMessage.startsWith("✅") || quickHudMessage.startsWith("🎞️") -> 3500L
                 else -> 2000L
             }
             delay(durationMs)
@@ -420,6 +484,10 @@ fun PlayerScreen(
                 if (playbackState == Player.STATE_READY) {
                     playbackErrorMessage = ""
                     duration = exoPlayer.duration.coerceAtLeast(0L)
+                    val formatFps = exoPlayer.videoFormat?.frameRate ?: 0f
+                    if (formatFps in 15f..120f) {
+                        detectedVideoFps = formatFps
+                    }
                 }
             }
 
@@ -446,6 +514,18 @@ fun PlayerScreen(
             }
 
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+                for (vg in videoGroups) {
+                    for (i in 0 until vg.length) {
+                        if (vg.isTrackSelected(i)) {
+                            val fps = vg.getTrackFormat(i).frameRate
+                            if (fps in 15f..120f) {
+                                detectedVideoFps = fps
+                            }
+                        }
+                    }
+                }
+
                 val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                 val totalAudioTracks = audioGroups.sumOf { it.length }
                 hasMultipleAudioTracks = totalAudioTracks > 1
@@ -863,8 +943,13 @@ fun PlayerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val syncText = if (subtitleOffsetMs != 0L) "  |  Titl pomak: ${subtitleOffsetMs / 1000.0}s" else ""
+                        val fpsText = when {
+                            appliedFpsConversionLabel.isNotEmpty() -> "  |  Titl FPS: $appliedFpsConversionLabel"
+                            detectedVideoFps > 0f -> "  |  Video: ${formatFpsShort(detectedVideoFps)} fps"
+                            else -> ""
+                        }
                         Text(
-                            text = "${formatTime(currentPosition)} / ${formatTime(duration)}$syncText",
+                            text = "${formatTime(currentPosition)} / ${formatTime(duration)}$syncText$fpsText",
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
@@ -933,6 +1018,7 @@ fun PlayerScreen(
                                     val savedPos = exoPlayer.currentPosition
                                     selectedQuality = quality
                                     activeStreamUrl = quality.url
+                                    detectedVideoFps = 0f
                                     exoPlayer.setMediaItem(MediaItem.fromUri(quality.url), savedPos)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
@@ -951,10 +1037,11 @@ fun PlayerScreen(
         }
 
         if (showSubtitleDialog) {
+            val videoFpsHint = if (detectedVideoFps > 0f) " (Film: ${formatFpsShort(detectedVideoFps)} fps)" else ""
             AlertDialog(
                 onDismissRequest = { showSubtitleDialog = false },
                 containerColor = Color(0xFF1A1A1A),
-                title = { Text("Odaberi titlove (.srt)", color = Color.White) },
+                title = { Text("Odaberi titlove$videoFpsHint", color = Color.White) },
                 text = {
                     if (isLoadingSubtitles) {
                         Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
@@ -971,7 +1058,10 @@ fun PlayerScreen(
                                     isSelected = activeSubtitleName == null,
                                     onClick = {
                                         activeSubtitleName = null
+                                        activeSubtitleFps = 0f
+                                        rawActiveCues = emptyList()
                                         parsedCues = emptyList()
+                                        appliedFpsConversionLabel = ""
                                         currentSubtitleText = ""
                                         subtitleOffsetMs = 0L
                                         showSubtitleDialog = false
@@ -979,14 +1069,15 @@ fun PlayerScreen(
                                 )
                             }
 
-                            if (parsedCues.isNotEmpty() && activeSubtitleName != null && !activeSubtitleName!!.startsWith("🇭🇷 Baza titlova") && !isTranslatingSubtitles) {
+                            if (rawActiveCues.isNotEmpty() && activeSubtitleName != null && !activeSubtitleName!!.startsWith("🇭🇷 Baza titlova") && !isTranslatingSubtitles) {
                                 item {
                                     DialogFocusableRow(
                                         label = "🌐 Prevedi na hrvatski i spremi u bazu",
                                         isSelected = false,
                                         onClick = {
                                             val sourceName = activeSubtitleName ?: "titl"
-                                            val cuesToTranslate = parsedCues
+                                            val sourceFps = activeSubtitleFps
+                                            val cuesToTranslate = rawActiveCues
                                             showSubtitleDialog = false
                                             coroutineScope.launch {
                                                 isTranslatingSubtitles = true
@@ -999,7 +1090,7 @@ fun PlayerScreen(
                                                 }
                                                 val safeSlug = dbKey.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
                                                 val cacheFile = File(context.cacheDir, "sub_hr_$safeSlug.json")
-                                                val translated = translateCuesToCroatian(cuesToTranslate, cacheFile)
+                                                val translated = translateCuesToCroatian(cuesToTranslate, cacheFile, sourceFps)
                                                 isTranslatingSubtitles = false
                                                 if (translated.isNotEmpty()) {
                                                     val autoName = "🇭🇷 Baza titlova ($sourceName)"
@@ -1008,13 +1099,20 @@ fun PlayerScreen(
                                                         PlayerSubtitleOption(
                                                             fileName = autoName,
                                                             language = "HR-DB",
-                                                            downloadUrl = "cached://$safeSlug"
+                                                            downloadUrl = "cached://$safeSlug",
+                                                            fps = sourceFps
                                                         )
                                                     ) + subtitleList.filterNot { it.fileName == autoName }
                                                     activeSubtitleName = autoName
-                                                    parsedCues = translated
+                                                    activeSubtitleFps = sourceFps
+                                                    rawActiveCues = translated
+                                                    val storedSourceName = if (sourceFps > 0f) {
+                                                        "$sourceName [${formatFpsShort(sourceFps)}fps]"
+                                                    } else {
+                                                        sourceName
+                                                    }
                                                     launch {
-                                                        saveSubtitleToSupabase(dbKey, sourceName, translated)
+                                                        saveSubtitleToSupabase(dbKey, storedSourceName, translated)
                                                     }
                                                     quickHudMessage = "✅ Prevedeno i spremljeno u bazu"
                                                     quickHudTick++
@@ -1031,19 +1129,22 @@ fun PlayerScreen(
                                 }
                             } else {
                                 items(subtitleList) { sub ->
+                                    val fpsBadge = if (sub.fps > 0f) " • ${formatFpsShort(sub.fps)} fps" else ""
                                     DialogFocusableRow(
-                                        label = "[${sub.language}] ${sub.fileName}",
+                                        label = "[${sub.language}$fpsBadge] ${sub.fileName}",
                                         isSelected = activeSubtitleName == sub.fileName,
                                         onClick = {
                                             activeSubtitleName = sub.fileName
+                                            activeSubtitleFps = sub.fps
                                             subtitleOffsetMs = 0L
+                                            lastNotifiedFpsKey = ""
                                             showSubtitleDialog = false
                                             if (sub.downloadUrl.startsWith("cached://") && cachedAutoTranslatedCues.isNotEmpty()) {
-                                                parsedCues = cachedAutoTranslatedCues
+                                                rawActiveCues = cachedAutoTranslatedCues
                                             } else {
                                                 coroutineScope.launch {
                                                     val srtContent = downloadSubtitleText(sub)
-                                                    parsedCues = parseSrtContent(srtContent)
+                                                    rawActiveCues = parseSrtContent(srtContent)
                                                 }
                                             }
                                         }
@@ -1061,6 +1162,111 @@ fun PlayerScreen(
             )
         }
     }
+}
+
+private suspend fun fetchArchiveVideoFps(archiveId: String): Float = withContext(Dispatchers.IO) {
+    if (archiveId.isBlank()) return@withContext 0f
+    try {
+        val metaJson = JSONObject(URL("https://archive.org/metadata/$archiveId").readText())
+        val files = metaJson.optJSONArray("files") ?: return@withContext 0f
+        var bestFps = 0f
+        var bestSize = 0L
+        for (i in 0 until files.length()) {
+            val f = files.optJSONObject(i) ?: continue
+            val name = f.optString("name").lowercase()
+            if (!name.endsWith(".mp4") && !name.endsWith(".mkv") && !name.endsWith(".avi")) continue
+            val fps = f.optString("fps").toFloatOrNull() ?: 0f
+            val size = f.optString("size").toLongOrNull() ?: 0L
+            if (fps in 15f..120f && size >= bestSize) {
+                bestSize = size
+                bestFps = fps
+            }
+        }
+        bestFps
+    } catch (_: Exception) {
+        0f
+    }
+}
+
+private fun extractFpsFromText(text: String): Float {
+    if (text.isBlank()) return 0f
+    val bracketMatch = Regex("\\[(\\d{2}(?:\\.\\d+)?)\\s*fps\\]", RegexOption.IGNORE_CASE).find(text)
+    if (bracketMatch != null) {
+        val v = bracketMatch.groupValues[1].toFloatOrNull() ?: 0f
+        if (v in 15f..120f) return v
+    }
+    val lower = text.lowercase()
+    return when {
+        Regex("23[.,]976|23[.,]98").containsMatchIn(lower) -> 23.976f
+        Regex("\\b24(?:[.,]000?)?\\s*fps\\b|\\b24p\\b").containsMatchIn(lower) -> 24.0f
+        Regex("\\b25(?:[.,]000?)?\\s*fps\\b|\\b25p\\b|\\bpal\\b").containsMatchIn(lower) -> 25.0f
+        Regex("29[.,]97(?:0)?|\\bntsc\\b").containsMatchIn(lower) -> 29.97f
+        Regex("\\b30(?:[.,]000?)?\\s*fps\\b").containsMatchIn(lower) -> 30.0f
+        Regex("\\b50(?:[.,]000?)?\\s*fps\\b").containsMatchIn(lower) -> 50.0f
+        Regex("59[.,]94").containsMatchIn(lower) -> 59.94f
+        Regex("\\b60(?:[.,]000?)?\\s*fps\\b").containsMatchIn(lower) -> 60.0f
+        else -> 0f
+    }
+}
+
+private fun normalizeRuntimeFps(fps: Float): Float {
+    if (fps <= 0f) return 0f
+    return when {
+        abs(fps - 23.976f) < 0.15f || abs(fps - 29.97f) < 0.15f || abs(fps - 59.94f) < 0.2f -> 23.976f
+        abs(fps - 24.0f) < 0.15f || abs(fps - 30.0f) < 0.15f || abs(fps - 60.0f) < 0.2f -> 24.0f
+        abs(fps - 25.0f) < 0.15f || abs(fps - 50.0f) < 0.2f -> 25.0f
+        else -> fps
+    }
+}
+
+private fun formatFpsShort(fps: Float): String {
+    if (fps <= 0f) return ""
+    return when {
+        abs(fps - 23.976f) < 0.05f -> "23.98"
+        abs(fps - 29.97f) < 0.05f -> "29.97"
+        abs(fps % 1f) < 0.05f -> fps.toInt().toString()
+        else -> String.format(Locale.US, "%.2f", fps)
+    }
+}
+
+private fun convertCuesForVideoFps(
+    cues: List<SrtCue>,
+    subFps: Float,
+    videoFps: Float,
+    videoDurationMs: Long
+): Pair<List<SrtCue>, String> {
+    if (cues.isEmpty()) return emptyList<SrtCue>() to ""
+
+    val normSub = normalizeRuntimeFps(subFps)
+    val normVid = normalizeRuntimeFps(videoFps)
+
+    if (normSub > 0f && normVid > 0f && abs(normSub - normVid) >= 0.5f) {
+        val factor = normSub.toDouble() / normVid.toDouble()
+        val scaled = cues.map { cue ->
+            cue.copy(
+                startMs = (cue.startMs * factor).roundToLong(),
+                endMs = (cue.endMs * factor).roundToLong()
+            )
+        }
+        return scaled to "${formatFpsShort(normSub)} → ${formatFpsShort(normVid)} fps"
+    }
+
+    // Rezervna detekcija: 23.98 fps titl bez oznake FPS-a koji prelazi trajanje 25 fps videa
+    if (normSub == 0f && normVid == 25.0f && videoDurationMs > 600_000L) {
+        val lastEnd = cues.last().endMs
+        if (lastEnd > (videoDurationMs * 1.025).toLong() && lastEnd < (videoDurationMs * 1.055).toLong()) {
+            val factor = 23.976 / 25.0
+            val scaled = cues.map { cue ->
+                cue.copy(
+                    startMs = (cue.startMs * factor).roundToLong(),
+                    endMs = (cue.endMs * factor).roundToLong()
+                )
+            }
+            return scaled to "23.98 → 25 fps"
+        }
+    }
+
+    return cues to ""
 }
 
 private suspend fun fetchSubtitleFromSupabase(archiveId: String): Pair<String, List<SrtCue>>? = withContext(Dispatchers.IO) {
@@ -1152,24 +1358,41 @@ private fun jsonArrayToCues(arr: JSONArray): List<SrtCue> {
     return list
 }
 
-private fun readCachedTranslatedCues(cacheFile: File): List<SrtCue> {
+private fun readCachedTranslatedCues(cacheFile: File): Pair<List<SrtCue>, Float>? {
     return try {
-        if (!cacheFile.exists() || cacheFile.length() < 10L) return emptyList()
-        jsonArrayToCues(JSONArray(cacheFile.readText(Charsets.UTF_8)))
+        if (!cacheFile.exists() || cacheFile.length() < 10L) return null
+        val raw = cacheFile.readText(Charsets.UTF_8).trim()
+        if (raw.startsWith("{")) {
+            val root = JSONObject(raw)
+            val fps = root.optDouble("fps", 0.0).toFloat()
+            val arr = root.optJSONArray("cues") ?: return null
+            jsonArrayToCues(arr) to fps
+        } else {
+            jsonArrayToCues(JSONArray(raw)) to 0f
+        }
     } catch (_: Exception) {
-        emptyList()
+        null
     }
 }
 
-private fun writeCachedTranslatedCues(cacheFile: File, cues: List<SrtCue>) {
+private fun writeCachedTranslatedCues(cacheFile: File, cues: List<SrtCue>, fps: Float = 0f) {
     try {
-        cacheFile.writeText(cuesToJsonArray(cues).toString(), Charsets.UTF_8)
+        val root = JSONObject().apply {
+            put("fps", fps.toDouble())
+            put("cues", cuesToJsonArray(cues))
+        }
+        cacheFile.writeText(root.toString(), Charsets.UTF_8)
     } catch (_: Exception) {
     }
 }
 
-private fun pickBestSubtitleOption(subs: List<PlayerSubtitleOption>): PlayerSubtitleOption {
-    fun priority(sub: PlayerSubtitleOption): Int {
+private fun pickBestSubtitleOption(
+    subs: List<PlayerSubtitleOption>,
+    targetVideoFps: Float
+): PlayerSubtitleOption {
+    val normVideoFps = normalizeRuntimeFps(targetVideoFps)
+
+    fun languageTier(sub: PlayerSubtitleOption): Int {
         val lang = sub.language.uppercase()
         val fname = sub.fileName.lowercase()
         return when {
@@ -1180,7 +1403,25 @@ private fun pickBestSubtitleOption(subs: List<PlayerSubtitleOption>): PlayerSubt
             else -> 4
         }
     }
-    return subs.minByOrNull { priority(it) } ?: subs.first()
+
+    fun fpsMatchScore(sub: PlayerSubtitleOption): Int {
+        val normSubFps = normalizeRuntimeFps(sub.fps)
+        if (normVideoFps <= 0f) {
+            return if (normSubFps > 0f) 500 else 300
+        }
+        if (normSubFps <= 0f) return 400
+        return when {
+            abs(normSubFps - normVideoFps) < 0.15f -> 1000
+            abs(normSubFps - normVideoFps) < 0.5f -> 850
+            else -> 200
+        }
+    }
+
+    return subs.minWithOrNull(
+        compareBy<PlayerSubtitleOption> { languageTier(it) }
+            .thenByDescending { fpsMatchScore(it) }
+            .thenByDescending { it.downloads }
+    ) ?: subs.first()
 }
 
 private fun isCroatianOrRegionalSubtitle(sub: PlayerSubtitleOption, cues: List<SrtCue>): Boolean {
@@ -1198,7 +1439,8 @@ private fun isCroatianOrRegionalSubtitle(sub: PlayerSubtitleOption, cues: List<S
 
 private suspend fun translateCuesToCroatian(
     cues: List<SrtCue>,
-    cacheFile: File
+    cacheFile: File,
+    sourceFps: Float = 0f
 ): List<SrtCue> = withContext(Dispatchers.IO) {
     if (cues.isEmpty()) return@withContext emptyList()
     val translatedTexts = MutableList(cues.size) { cues[it].text }
@@ -1233,7 +1475,7 @@ private suspend fun translateCuesToCroatian(
         cue.copy(text = translatedTexts[index])
     }
 
-    writeCachedTranslatedCues(cacheFile, result)
+    writeCachedTranslatedCues(cacheFile, result, sourceFps)
     result
 }
 
@@ -1505,12 +1747,15 @@ private suspend fun searchAllSubtitles(
                     val encoded = name.split("/").joinToString("/") { part ->
                         URLEncoder.encode(part, "UTF-8").replace("+", "%20")
                     }
+                    val shortName = name.substringAfterLast("/")
                     results.add(
                         PlayerSubtitleOption(
-                            fileName = name.substringAfterLast("/"),
+                            fileName = shortName,
                             language = "Archive",
                             downloadUrl = "https://archive.org/download/$identifier/$encoded",
-                            isGzipped = false
+                            isGzipped = false,
+                            fps = extractFpsFromText(shortName),
+                            downloads = 500
                         )
                     )
                 }
@@ -1539,17 +1784,22 @@ private suspend fun searchAllSubtitles(
                 conn.readTimeout = 5000
                 if (conn.responseCode == 200) {
                     val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
-                    for (i in 0 until arr.length().coerceAtMost(5)) {
+                    for (i in 0 until arr.length().coerceAtMost(8)) {
                         val obj = arr.optJSONObject(i) ?: continue
                         val subFile = obj.optString("SubFileName")
                         val dlLink = obj.optString("SubDownloadLink")
+                        val apiFps = obj.optString("MovieFPS").toFloatOrNull()?.takeIf { it in 15f..120f } ?: 0f
+                        val resolvedFps = if (apiFps > 0f) apiFps else extractFpsFromText(subFile)
+                        val dlCount = obj.optString("SubDownloadsCnt").toIntOrNull() ?: 0
                         if (subFile.isNotBlank() && dlLink.isNotBlank()) {
                             results.add(
                                 PlayerSubtitleOption(
                                     fileName = subFile,
                                     language = lang.uppercase(),
                                     downloadUrl = dlLink,
-                                    isGzipped = dlLink.endsWith(".gz", ignoreCase = true)
+                                    isGzipped = dlLink.endsWith(".gz", ignoreCase = true),
+                                    fps = resolvedFps,
+                                    downloads = dlCount
                                 )
                             )
                         }
