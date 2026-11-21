@@ -1,10 +1,10 @@
 package com.example.mediastudio.data.api
 
 import android.content.Context
-import android.content.SharedPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -60,7 +60,7 @@ object SupabaseRepository {
     private const val SUPABASE_REST_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
     private const val SUPABASE_PUBLISHABLE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
 
-    private var prefs: SharedPreferences? = null
+    private var cacheDir: File? = null
 
     @Volatile
     private var catalogItems: List<SupabaseCatalogItem> = emptyList()
@@ -78,51 +78,71 @@ object SupabaseRepository {
     private val authorMovieByStreamUrl = mutableMapOf<String, SupabaseAuthorMovie>()
 
     fun init(context: Context) {
-        if (prefs == null) {
-            prefs = context.applicationContext.getSharedPreferences("SupabaseCatalogCache", Context.MODE_PRIVATE)
+        if (cacheDir == null) {
+            cacheDir = context.applicationContext.filesDir
             loadFromDiskCache()
         }
     }
 
+    private fun readCacheFile(fileName: String): String? {
+        val dir = cacheDir ?: return null
+        val file = File(dir, fileName)
+        return try {
+            if (file.exists() && file.length() > 2) file.readText(Charsets.UTF_8) else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun writeCacheFile(fileName: String, content: String) {
+        val dir = cacheDir ?: return
+        try {
+            File(dir, fileName).writeText(content, Charsets.UTF_8)
+        } catch (_: Exception) {
+        }
+    }
+
     private fun loadFromDiskCache() {
-        val p = prefs ?: return
-        p.getString("catalog_json", null)?.let { jsonStr ->
+        readCacheFile("supabase_catalog_cache.json")?.let { jsonStr ->
             try {
                 updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr)))
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
-        p.getString("authors_json", null)?.let { jsonStr ->
+        readCacheFile("supabase_authors_cache.json")?.let { jsonStr ->
             try {
                 authors = parseAuthorsArray(JSONArray(jsonStr))
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
-        p.getString("author_movies_json", null)?.let { jsonStr ->
+        readCacheFile("supabase_author_movies_cache.json")?.let { jsonStr ->
             try {
                 updateAuthorMoviesMemory(parseAuthorMoviesArray(JSONArray(jsonStr)))
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
 
     suspend fun syncFromSupabase(): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
 
-        val catalogArr = fetchJsonArray("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc&limit=3000")
+        val catalogArr = fetchAllPaginated("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc")
         if (catalogArr != null && catalogArr.length() > 0) {
-            prefs?.edit()?.putString("catalog_json", catalogArr.toString())?.apply()
+            writeCacheFile("supabase_catalog_cache.json", catalogArr.toString())
             updateCatalogMemory(parseCatalogArray(catalogArr))
             anySuccess = true
         }
 
-        val authorsArr = fetchJsonArray("authors?select=*&order=sort_order.asc&limit=200")
+        val authorsArr = fetchAllPaginated("authors?select=*&order=sort_order.asc")
         if (authorsArr != null && authorsArr.length() > 0) {
-            prefs?.edit()?.putString("authors_json", authorsArr.toString())?.apply()
+            writeCacheFile("supabase_authors_cache.json", authorsArr.toString())
             authors = parseAuthorsArray(authorsArr)
             anySuccess = true
         }
 
-        val authorMoviesArr = fetchJsonArray("author_movies?select=*&order=release_year.desc&limit=3000")
+        val authorMoviesArr = fetchAllPaginated("author_movies?select=*&order=release_year.desc")
         if (authorMoviesArr != null && authorMoviesArr.length() > 0) {
-            prefs?.edit()?.putString("author_movies_json", authorMoviesArr.toString())?.apply()
+            writeCacheFile("supabase_author_movies_cache.json", authorMoviesArr.toString())
             updateAuthorMoviesMemory(parseAuthorMoviesArray(authorMoviesArr))
             anySuccess = true
         }
@@ -139,11 +159,19 @@ object SupabaseRepository {
 
         for (item in validItems) {
             itemByArchiveId[item.archiveId] = item
+            val baseId = item.archiveId.substringBefore(",tmdb-").trim()
+            if (baseId.isNotEmpty() && !itemByArchiveId.containsKey(baseId)) {
+                itemByArchiveId[baseId] = item
+            }
+
             if (item.streamUrl.isNotBlank()) {
                 itemByStreamUrl[item.streamUrl] = item
             }
             if (item.posterUrl.isNotBlank()) {
                 posterByArchiveId[item.archiveId] = item.posterUrl
+                if (baseId.isNotEmpty() && !posterByArchiveId.containsKey(baseId)) {
+                    posterByArchiveId[baseId] = item.posterUrl
+                }
                 posterByTitle[item.title.lowercase().trim()] = item.posterUrl
             }
         }
@@ -151,6 +179,7 @@ object SupabaseRepository {
 
     private fun updateAuthorMoviesMemory(movies: List<SupabaseAuthorMovie>) {
         authorMovies = movies
+        authorMovieByStreamUrl.clear()
         for (m in movies) {
             if (m.streamUrl.isNotBlank()) {
                 authorMovieByStreamUrl[m.streamUrl] = m
@@ -177,7 +206,8 @@ object SupabaseRepository {
     }
 
     fun getCatalogItem(archiveId: String): SupabaseCatalogItem? {
-        val cleanId = archiveId.split(",").first().trim()
+        itemByArchiveId[archiveId]?.let { return it }
+        val cleanId = archiveId.substringBefore(",tmdb-").trim()
         return itemByArchiveId[cleanId]
     }
 
@@ -192,7 +222,9 @@ object SupabaseRepository {
     }
 
     fun getCachedPoster(archiveId: String, title: String): String? {
-        val cleanId = archiveId.split(",").first().trim()
+        posterByArchiveId[archiveId]?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val cleanId = archiveId.substringBefore(",tmdb-").trim()
         posterByArchiveId[cleanId]?.takeIf { it.isNotBlank() }?.let { return it }
 
         val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").lowercase().trim()
@@ -201,16 +233,40 @@ object SupabaseRepository {
         return null
     }
 
-    private fun fetchJsonArray(endpointWithQuery: String): JSONArray? {
+    private fun fetchAllPaginated(endpointWithQuery: String): JSONArray? {
+        val combined = JSONArray()
+        val pageSize = 1000
+        var offset = 0
+        var anyRequestSucceeded = false
+
+        while (true) {
+            val batch = fetchJsonArrayPage(endpointWithQuery, offset, offset + pageSize - 1) ?: break
+            anyRequestSucceeded = true
+            for (i in 0 until batch.length()) {
+                combined.put(batch.get(i))
+            }
+            if (batch.length() < pageSize) {
+                break
+            }
+            offset += pageSize
+            if (offset >= 20000) break
+        }
+        return if (anyRequestSucceeded) combined else null
+    }
+
+    private fun fetchJsonArrayPage(endpointWithQuery: String, rangeStart: Int, rangeEnd: Int): JSONArray? {
         return try {
             val url = URL("$SUPABASE_REST_URL/$endpointWithQuery")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.setRequestProperty("apikey", SUPABASE_PUBLISHABLE_KEY)
             conn.setRequestProperty("Accept", "application/json")
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            if (conn.responseCode == 200) {
+            conn.setRequestProperty("Range-Unit", "items")
+            conn.setRequestProperty("Range", "$rangeStart-$rangeEnd")
+            conn.connectTimeout = 10000
+            conn.readTimeout = 12000
+            val code = conn.responseCode
+            if (code == 200 || code == 206) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 JSONArray(body)
             } else {
