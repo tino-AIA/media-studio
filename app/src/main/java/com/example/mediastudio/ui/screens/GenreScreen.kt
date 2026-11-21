@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import com.example.mediastudio.data.api.PosterFetcher
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import com.example.mediastudio.ui.viewmodel.RatedMovie
@@ -66,7 +68,6 @@ fun GenreScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // OVO RJEŠAVA IZLAZAK GORE NA GENRE EKRANU
                 modifier = Modifier.focusProperties { up = FocusRequester.Cancel },
                 title = {
                     Column {
@@ -149,16 +150,27 @@ fun GenreScreen(
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
-                // ZNAČAJNO POVEĆAN BOTTOM PADDING KAKO BI PAGINACIJA BILA ISPOD NASLOVA
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
                 items(movies) { ratedMovie ->
+                    val authorPhoto = if (ratedMovie.movie.identifier.startsWith("AUTHOR|")) {
+                        val authorName = ratedMovie.movie.identifier.removePrefix("AUTHOR|")
+                        SupabaseRepository.getAuthors()
+                            .find { it.name.equals(authorName, ignoreCase = true) }
+                            ?.photoUrl
+                            ?.takeIf { it.isNotBlank() }
+                            ?: viewModel.staticAuthorImages[authorName].orEmpty()
+                    } else {
+                        ""
+                    }
+
                     RatedMovieGridCard(
                         ratedMovie = ratedMovie,
                         isSeries = isSeries,
+                        authorPhotoUrl = authorPhoto,
                         onMovieClick = onMovieClick
                     )
                 }
@@ -208,7 +220,12 @@ private fun PaginationNavButton(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: (ArchiveMovie) -> Unit) {
+fun RatedMovieGridCard(
+    ratedMovie: RatedMovie,
+    isSeries: Boolean,
+    authorPhotoUrl: String = "",
+    onMovieClick: (ArchiveMovie) -> Unit
+) {
     val movie = ratedMovie.movie
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -216,13 +233,27 @@ fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: 
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
 
+    val isAuthor = movie.identifier.startsWith("AUTHOR|")
     val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("") }
-    val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
+    var posterUrl by remember(movie.identifier, authorPhotoUrl) {
+        mutableStateOf(if (isAuthor) authorPhotoUrl else "")
+    }
+    val fallbackUrl = if (isAuthor) "" else "https://archive.org/services/img/$firstArchiveId"
 
-    LaunchedEffect(movie.title) {
-        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+    LaunchedEffect(movie.identifier, movie.title, authorPhotoUrl) {
+        if (isAuthor) {
+            val authorName = movie.identifier.removePrefix("AUTHOR|")
+            val resolved = authorPhotoUrl.ifBlank {
+                SupabaseRepository.getAuthors()
+                    .find { it.name.equals(authorName, ignoreCase = true) }
+                    ?.photoUrl
+                    .orEmpty()
+            }
+            posterUrl = resolved
+        } else {
+            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
+            posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+        }
     }
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -237,30 +268,59 @@ fun RatedMovieGridCard(ratedMovie: RatedMovie, isSeries: Boolean, onMovieClick: 
                     .fillMaxSize()
                     .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C)),
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
             ) {
-                val painter = rememberAsyncImagePainter(
-                    model = posterUrl.ifBlank { fallbackUrl }
-                )
-                
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
-                    }
-                    Image(
-                        painter = painter,
-                        contentDescription = movie.title,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    if (painter.state is AsyncImagePainter.State.Error) {
-                        Image(
-                            painter = rememberAsyncImagePainter(fallbackUrl),
+                val activeImageUrl = posterUrl.ifBlank { fallbackUrl }
+                if (activeImageUrl.isBlank()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color(0xFF1F1F1F)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
                             contentDescription = movie.title,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
+                            tint = Color.Gray,
+                            modifier = Modifier.size(56.dp)
                         )
+                    }
+                } else {
+                    val painter = rememberAsyncImagePainter(model = activeImageUrl)
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (painter.state is AsyncImagePainter.State.Loading) {
+                            CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                        }
+                        if (painter.state is AsyncImagePainter.State.Error) {
+                            if (isAuthor || fallbackUrl.isBlank()) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize().background(Color(0xFF1F1F1F)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = movie.title,
+                                        tint = Color.Gray,
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                }
+                            } else {
+                                Image(
+                                    painter = rememberAsyncImagePainter(fallbackUrl),
+                                    contentDescription = movie.title,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        } else {
+                            Image(
+                                painter = painter,
+                                contentDescription = movie.title,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                                alignment = if (isAuthor) Alignment.TopCenter else Alignment.Center
+                            )
+                        }
                     }
                 }
             }
