@@ -292,7 +292,10 @@ fun RatedMovieGridCard(
     val isAuthor = movie.identifier.startsWith("AUTHOR|")
     val firstArchiveId = movie.identifier.split(",").first()
     var posterUrl by remember(movie.identifier, authorPhotoUrl) {
-        mutableStateOf(if (isAuthor) authorPhotoUrl else "")
+        mutableStateOf(
+            if (isAuthor) authorPhotoUrl
+            else SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
+        )
     }
     val fallbackUrl = if (isAuthor) "" else "https://archive.org/services/img/$firstArchiveId"
 
@@ -307,8 +310,13 @@ fun RatedMovieGridCard(
             }
             posterUrl = resolved
         } else {
-            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-            posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+            val sbPoster = SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
+            if (sbPoster.isNotBlank()) {
+                posterUrl = sbPoster
+            } else {
+                val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+            }
         }
     }
 
