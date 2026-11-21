@@ -9,7 +9,6 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -24,21 +23,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -51,9 +45,9 @@ fun SearchScreen(
     val searchResults by viewModel.globalSearchResults.collectAsState()
     val isSearching by viewModel.isSearchingGlobal.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
-    
-    val query by viewModel.currentSearchQuery.collectAsState() 
-    
+
+    val query by viewModel.currentSearchQuery.collectAsState()
+
     val focusManager = LocalFocusManager.current
     val firstKeyFocusRequester = remember { FocusRequester() }
     val resultsFocusRequester = remember { FocusRequester() }
@@ -69,7 +63,7 @@ fun SearchScreen(
 
     BackHandler {
         if (query.isNotEmpty()) {
-            viewModel.updateSearchQuery("") 
+            viewModel.updateSearchQuery("")
         } else {
             onBackClick()
         }
@@ -87,7 +81,7 @@ fun SearchScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Pretraži Archive.org",
+                        text = "Pretraži filmove i serije",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 20.sp
@@ -117,17 +111,6 @@ fun SearchScreen(
                 modifier = Modifier
                     .width(330.dp)
                     .fillMaxHeight()
-                    .onPreviewKeyEvent { keyEvent ->
-                        if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionRight) {
-                            if (searchResults.isNotEmpty()) {
-                                try {
-                                    resultsFocusRequester.requestFocus()
-                                    return@onPreviewKeyEvent true
-                                } catch (_: Exception) {}
-                            }
-                        }
-                        false
-                    }
             ) {
                 OutlinedTextField(
                     value = query,
@@ -135,8 +118,8 @@ fun SearchScreen(
                         viewModel.updateSearchQuery(it)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    readOnly = true, 
-                    placeholder = { Text("Upiši naziv film/serije...", color = Color.Gray, fontSize = 14.sp) },
+                    readOnly = true,
+                    placeholder = { Text("Upiši naziv filma ili serije...", color = Color.Gray, fontSize = 14.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Red) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
@@ -231,7 +214,7 @@ fun SearchScreen(
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Rezultati s cijelog Archive.org prikazuju se automatski",
+                                text = "Rezultati pretrage prikazuju se automatski",
                                 color = Color.Gray,
                                 fontSize = 14.sp
                             )
@@ -245,7 +228,7 @@ fun SearchScreen(
                     }
                     searchResults.isEmpty() -> {
                         Text(
-                            text = "Nema pronađenih naslova za \"$query\"",
+                            text = "Nema pronađenih naslova za \"${query.trim()}\"",
                             color = Color.Gray,
                             fontSize = 16.sp,
                             modifier = Modifier.align(Alignment.Center)
@@ -268,14 +251,17 @@ fun SearchScreen(
                             ) {
                                 items(searchResults.size) { index ->
                                     val ratedItem = searchResults[index]
-                                    val isProbablySeries = selectedTab == ContentTab.SERIES
-                                    
+                                    val isDbSeries = SupabaseRepository.getCatalogItem(ratedItem.movie.identifier)?.mediaType == "series"
+                                    val isProbablySeries = isDbSeries ||
+                                        ratedItem.movie.identifier.startsWith("tmdb-tv-") ||
+                                        selectedTab == ContentTab.SERIES
+
                                     val modifier = if (index == 0) {
                                         Modifier.focusRequester(resultsFocusRequester)
                                     } else {
                                         Modifier
                                     }
-                                    
+
                                     Box(modifier = modifier) {
                                         RatedMovieGridCard(
                                             ratedMovie = ratedItem,
