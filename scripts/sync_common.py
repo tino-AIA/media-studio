@@ -36,17 +36,20 @@ if not SUPABASE_SERVICE_KEY.startswith("sb_"):
     SB_HEADERS["Authorization"] = f"Bearer {SUPABASE_SERVICE_KEY}"
 
 BLOCKED_ORIGINAL_LANGS = {
-    "ar", "hi", "ta", "te", "ml", "bn", "ur", "pa", "mr", "gu", "kn", "si", "ne", "fa"
+    "ar", "hi", "ta", "te", "ml", "bn", "ur", "pa", "mr", "gu", "kn", "si", "ne", "fa",
+    "id", "ms", "jv", "su", "tl"
 }
 
 BLOCKED_REGIONAL_AND_ARABIC_KEYWORDS = [
     "bollywood", "tollywood", "kollywood", "hindi", "telugu", "tamil", "urdu",
     "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
     "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh",
-    "hindi dubbed", "dual audio hindi", "urdu dubbed"
+    "hindi dubbed", "dual audio hindi", "urdu dubbed",
+    "indonesian", "malay", "tagalog", "bahasa", "sinetron"
 ]
 
 ARABIC_OR_INDIC_SCRIPT_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u0900-\u0D7F]")
+NON_LATIN_TITLE_RE = re.compile(r"[^\u0000-\u024F\u1E00-\u1EFF\s\d\W]")
 
 HENTAI_AND_ADULT_KEYWORDS = [
     "hentai", "ecchi", "yaoi", "yuri", "erotic", "erotica", "xxx", "porn", "porno",
@@ -69,7 +72,9 @@ SPAM_OR_FAKE_KEYWORDS = [
 EXPLICIT_DUB_KEYWORDS = [
     "dublado", "dublagem", "doblado", "doblaje", "ozvuchka", "дубляж", "озвучка",
     "russian dub", "spanish dub", "portuguese dub", "portugues dub", "french dub",
-    "german dub", "italian dub", "hindi dubbed", "truefrench"
+    "german dub", "italian dub", "hindi dubbed", "truefrench",
+    "audio latino", "latino", "castellano", "espanol", "español", "sub espanol", "sub español",
+    "lektor pl", "lektor polski", "polski lektor", "dubbing pl", "polski dubbing", "polish dub", "pldub"
 ]
 
 NON_ENGLISH_LANG_TOKENS = {
@@ -79,7 +84,8 @@ NON_ENGLISH_LANG_TOKENS = {
     "fre", "fra", "french", "francais", "français",
     "ger", "deu", "german", "deutsch",
     "ita", "italian", "italiano",
-    "hin", "hindi", "ara", "arabic", "tur", "turkish", "pol", "polish"
+    "hin", "hindi", "ara", "arabic", "tur", "turkish",
+    "pol", "polish", "polski", "lektor", "ind", "indonesian", "may", "malay"
 }
 
 RELEASE_TAG_PATTERN = re.compile(
@@ -142,7 +148,7 @@ def safe_get(url, params=None, timeout=12):
 
 
 def translate_to_croatian(text):
-    if not text or len(text.strip()) < 5:
+    if not text or len(text.strip()) < 2:
         return text
     key = text[:300]
     with state_lock:
@@ -578,9 +584,27 @@ def get_tmdb_movie_details(tmdb_id):
     genre_ids = [g.get("id") for g in (data.get("genres") or []) if g.get("id")]
     companies = [c.get("name", "") for c in (data.get("production_companies") or []) if c.get("name")]
 
+    en_data = None
+    orig_title = str(data.get("original_title") or data.get("title") or "").strip()
+    hr_title = str(data.get("title") or orig_title).strip()
+
+    if NON_LATIN_TITLE_RE.search(hr_title):
+        en_data = safe_get(f"{TMDB_BASE}/movie/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+        en_title = str((en_data or {}).get("title") or "").strip()
+        if en_title and not NON_LATIN_TITLE_RE.search(en_title):
+            translated_title = translate_to_croatian(en_title)
+            hr_title = translated_title if (translated_title and not NON_LATIN_TITLE_RE.search(translated_title)) else en_title
+            if NON_LATIN_TITLE_RE.search(orig_title):
+                orig_title = en_title
+        else:
+            translated_orig = translate_to_croatian(hr_title)
+            if translated_orig and not NON_LATIN_TITLE_RE.search(translated_orig):
+                hr_title = translated_orig
+
     overview = (data.get("overview") or "").strip()
     if not overview:
-        en_data = safe_get(f"{TMDB_BASE}/movie/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
+        if en_data is None:
+            en_data = safe_get(f"{TMDB_BASE}/movie/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
         en_overview = ((en_data or {}).get("overview") or "").strip()
         if en_overview:
             overview = translate_to_croatian(en_overview)
@@ -600,8 +624,8 @@ def get_tmdb_movie_details(tmdb_id):
         "runtime": int(data.get("runtime") or 0),
         "status": str(data.get("status") or ""),
         "release_date": str(data.get("release_date") or ""),
-        "orig_title": str(data.get("original_title") or data.get("title") or ""),
-        "hr_title": str(data.get("title") or data.get("original_title") or ""),
+        "orig_title": orig_title,
+        "hr_title": hr_title,
         "original_language": str(data.get("original_language") or ""),
         "overview_hr": overview,
         "poster_path": data.get("poster_path") or "",
