@@ -119,6 +119,112 @@ CULT_AND_ANIMATION_SEEDS = [
     "Watership Down", "Animal Farm", "Heavy Metal"
 ]
 
+CURATED_MOVIE_EXCEPTIONS = [
+    {
+        "archive_query": "identifier:dune-david-lynch-1984",
+        "tmdb_id": 841,
+        "custom_title": "",  # Službeni hrvatski naslov s TMDB-a ("Dina")
+        "min_mins": 115,
+    },
+    {
+        "archive_query": "identifier:dune-1984-alternative-edition-redux-fanedit-m*",
+        "tmdb_id": 841,
+        "custom_title": "Dina - Alternative Edition Redux",
+        "min_mins": 150,
+    },
+    {
+        "archive_query": "identifier:DuneTheCompleteSagaVimeo",
+        "tmdb_id": 841,
+        "custom_title": "Dina - The Complete Saga",
+        "min_mins": 150,
+    },
+]
+
+
+def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years):
+    """Ubacuje ručno odobrene verzije filmova (uključujući produžena izdanja) u Sci-Fi klasike i katalog."""
+    print("0/3 Provjera ručno odobrenih izdanja filmova...", flush=True)
+    valid_archive_ids = {
+        r.get("archive_id") for r in all_movie_rows
+        if r.get("is_valid", True) and r.get("archive_id")
+    }
+    curated_tmdb_to_mark = set()
+
+    for item in CURATED_MOVIE_EXCEPTIONS:
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": item["archive_query"],
+                "fl[]": ["identifier", "title", "downloads"],
+                "rows": 3,
+                "output": "json"
+            }
+        )
+        docs = (data or {}).get("response", {}).get("docs", [])
+        if not docs:
+            continue
+
+        ident = docs[0].get("identifier") or ""
+        if not ident or ident in valid_archive_ids:
+            continue
+
+        details = get_tmdb_movie_details(item["tmdb_id"])
+        if not details:
+            continue
+
+        videos, _ = get_archive_item_details(ident, min_size_mb=250, allow_mkv=True)
+        min_mins = item.get("min_mins", 115)
+        long_videos = [
+            v for v in videos
+            if v.get("duration_mins", 0) >= min_mins
+            or (v.get("duration_mins", 0) == 0 and v.get("size_mb", 0) >= 900)
+        ]
+        if not long_videos:
+            continue
+
+        best = pick_best_video_file(long_videos)
+        if not verify_stream_url_playable(best["stream_url"]):
+            continue
+
+        final_title = item["custom_title"].strip() or details["hr_title"]
+        rel_year = extract_year_from_text(details["release_date"]) or 1984
+        genres = determine_primary_genres(
+            details["genre_ids"],
+            details["companies"],
+            details["orig_title"],
+            final_title,
+            details["overview_hr"],
+            "Sci-Fi klasici"
+        )
+        row = {
+            "archive_id": ident,
+            "tmdb_id": item["tmdb_id"],
+            "title": final_title,
+            "media_type": "movie",
+            "genres": genres,
+            "release_year": rel_year,
+            "rating": round(details["vote_average"], 1),
+            "popularity_score": float(details["popularity"]) * 100.0 + 3500.0,
+            "description_hr": details["overview_hr"],
+            "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}" if details["poster_path"] else "",
+            "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
+            "stream_url": best["stream_url"],
+            "is_featured": False,
+            "is_valid": True,
+            "tmdb_runtime": details["runtime"],
+            "archive_runtime": best["duration_mins"]
+        }
+        supabase_upsert("catalog_items", [row], "archive_id")
+        existing_archive_ids.add(ident)
+        valid_archive_ids.add(ident)
+        curated_tmdb_to_mark.add(item["tmdb_id"])
+        norm_t = normalize_for_exact_title_compare(final_title)
+        if norm_t:
+            seen_title_years.add((norm_t, rel_year))
+        print(f"  + Odobreno izdanje: {row['title']} ({best['duration_mins']} min) -> {', '.join(genres)}", flush=True)
+
+    seen_tmdb_ids.update(curated_tmdb_to_mark)
+
 
 def find_best_archive_movie_match(details, year, exclude_ids):
     """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u."""
@@ -545,6 +651,7 @@ def run_movies_sync():
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova.", flush=True)
     audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years)
+    sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years)
     mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years)
     search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years)
     print(f"=== [FILMOVI] Završeno! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ===", flush=True)
