@@ -18,6 +18,7 @@ from sync_common import (
     fetch_existing_catalog_state,
     format_duration_text,
     get_archive_item_details,
+    is_foreign_dub_without_english,
     normalize_for_exact_title_compare,
     pick_best_video_file,
     safe_get,
@@ -403,6 +404,7 @@ def aggregate_series_from_archive(
     if tv_basic is None:
         tv_basic = safe_get(f"{TMDB_BASE}/tv/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
     total_seasons_hint = int((tv_basic or {}).get("number_of_seasons") or 1)
+    tv_orig_lang = str((tv_basic or {}).get("original_language") or "en")
 
     raw_candidates = []
     detected_seasons = set()
@@ -436,6 +438,9 @@ def aggregate_series_from_archive(
             continue
 
         for m in videos:
+            if is_foreign_dub_without_english(arch_md, ident, m["filename"], orig_lang=tv_orig_lang):
+                continue
+
             fname_prefix_match = re.match(
                 r"(?i)^(.*?)(?:\bS\d{1,2}\s*[-_.]?\s*E\d{1,3}|\b\d{1,2}x\d{1,3}|\bSeason\s*\d{1,2}|\bSeries\s*\d{1,2})",
                 m["filename"].rsplit("/", 1)[-1]
@@ -674,10 +679,13 @@ def sync_short_cartoons(existing_archive_ids):
                 return
             seen_short_titles.add(norm_s)
 
-        videos, _ = get_archive_item_details(ident, min_size_mb=4, allow_mkv=True)
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=4, allow_mkv=True)
         if not videos:
             return
         best = pick_best_video_file(videos)
+        if is_foreign_dub_without_english(arch_md, ident, best["filename"], orig_lang="en"):
+            return
+
         dur = best["duration_mins"]
         if dur > 0 and (dur < 2 or dur > 35):
             return
