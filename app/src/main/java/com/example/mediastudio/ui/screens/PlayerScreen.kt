@@ -2,6 +2,7 @@ package com.example.mediastudio.ui.screens
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -93,8 +94,9 @@ data class PlayerSubtitleOption(
 data class PlayerVersionOption(
     val label: String,
     val url: String,
-    val languageRank: Int = 1, // 0 = Engleski / Multi-audio, 1 = Standardno, 2 = Strana sinkronizacija (Španjolski itd.)
-    val sizeBytes: Long = 0L
+    val languageRank: Int = 1, // 0 = Engleski / Multi-audio, 1 = Standardno, 2 = Strana sinkronizacija
+    val sizeBytes: Long = 0L,
+    val height: Int = 0
 )
 
 @OptIn(UnstableApi::class)
@@ -134,6 +136,11 @@ fun PlayerScreen(
     var selectedVersion by remember { mutableStateOf<PlayerVersionOption?>(null) }
     var showQualityDialog by remember { mutableStateOf(false) }
 
+    // Praćenje zastoja (rebuffering) za automatsko prebacivanje s preteške datoteke na bržu verziju
+    val recentRebufferTimestamps = remember { mutableListOf<Long>() }
+    var hasStartedCurrentStream by remember { mutableStateOf(false) }
+    var autoDownshiftedForStall by remember { mutableStateOf(false) }
+
     var showSubtitleDialog by remember { mutableStateOf(false) }
     var subtitleList by remember { mutableStateOf<List<PlayerSubtitleOption>>(emptyList()) }
     var isLoadingSubtitles by remember { mutableStateOf(false) }
@@ -166,19 +173,26 @@ fun PlayerScreen(
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15_000,
-                50_000,
-                1_500,
-                3_000
+                30_000, // minBufferMs: 30s unaprijed
+                90_000, // maxBufferMs: 90s unaprijed za stabilan stream bez zapinjanja
+                3_500,  // bufferForPlaybackMs: 3.5s prije prvog kadra
+                7_500   // bufferForPlaybackAfterRebufferMs: 7.5s zalihe nakon zastoja
             )
+            .setBackBuffer(15_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) MediaStudio/1.0")
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
+            .setReadTimeoutMs(30_000)
+            .setDefaultRequestProperties(
+                mapOf(
+                    "Accept-Encoding" to "identity",
+                    "Connection" to "keep-alive"
+                )
+            )
 
         val player = ExoPlayer.Builder(context)
             .setLoadControl(loadControl)
@@ -250,6 +264,9 @@ fun PlayerScreen(
         mp4FallbackUrlOverride = null
         playbackErrorMessage = ""
         isBuffering = true
+        hasStartedCurrentStream = false
+        autoDownshiftedForStall = false
+        recentRebufferTimestamps.clear()
 
         availableVersions = emptyList()
         selectedVersion = null
@@ -297,15 +314,19 @@ fun PlayerScreen(
                     url = it.url,
                     languageRank = classifyVersionLanguageRank("${it.label} ${it.url}")
                 )
-            }.sortedWith(compareBy<PlayerVersionOption> { it.languageRank })
+            }.sortedWith(
+                compareBy<PlayerVersionOption> { it.languageRank }
+                    .thenByDescending { computeVersionStreamScore(it) }
+            )
             availableVersions = mapped
             val bestQuality = mapped.firstOrNull()
             selectedVersion = bestQuality
             bestQuality?.url ?: fallbackVideoUrl
         }
 
+        // Nadogradi .ia.mp4 na izvornu datoteku samo ako nije preteška (> 4.5 GB)
         val upgradedOriginalUrl = if (initialUrl.lowercase().contains(".ia.mp4")) {
-            findOriginalMultiAudioUrl(initialUrl)
+            findOriginalMultiAudioUrl(initialUrl, maxAllowedBytes = 4_800_000_000L)
         } else {
             null
         }
@@ -321,7 +342,7 @@ fun PlayerScreen(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
-        // 2. U pozadini učitaj sve verzije videa (rezolucija, veličina, jezik) i prebaci na ENG ako je trenutni španjolska sinkronizacija
+        // 2. U pozadini učitaj sve verzije i automatski odaberi najbržu HD / englesku verziju ako je trenutna preteška ili na stranom jeziku
         launch {
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
@@ -341,24 +362,38 @@ fun PlayerScreen(
                 }
                 val bestOption = discoveredVersions.first()
                 val currentRank = currentMatched?.languageRank ?: classifyVersionLanguageRank("$cleanArchiveId $activeStreamUrl")
+                val currentSize = currentMatched?.sizeBytes ?: 0L
+                val isCurrentBloated = currentSize > 6_000_000_000L && bestOption.sizeBytes in 350_000_000L..4_800_000_000L && bestOption.height >= 700
 
-                if (currentRank >= 2 && bestOption.languageRank < currentRank && !urlsMatchArchiveFile(bestOption.url, activeStreamUrl)) {
-                    val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
-                    selectedVersion = bestOption
-                    activeStreamUrl = bestOption.url
-                    detectedVideoFps = 0f
-                    exoPlayer.setMediaItem(MediaItem.fromUri(bestOption.url), resumePos)
-                    exoPlayer.prepare()
-                    exoPlayer.playWhenReady = true
-                    quickHudMessage = "🔊 Odabrana engleska verzija (ostale u ⚙ Verzije)"
-                    quickHudTick++
+                if ((currentRank >= 2 && bestOption.languageRank < currentRank) ||
+                    (isCurrentBloated && bestOption.languageRank <= currentRank)
+                ) {
+                    if (!urlsMatchArchiveFile(bestOption.url, activeStreamUrl)) {
+                        val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                        selectedVersion = bestOption
+                        activeStreamUrl = bestOption.url
+                        detectedVideoFps = 0f
+                        hasStartedCurrentStream = false
+                        recentRebufferTimestamps.clear()
+                        exoPlayer.setMediaItem(MediaItem.fromUri(bestOption.url), resumePos)
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                        quickHudMessage = if (isCurrentBloated) {
+                            "⚡ Odabrana brža HD verzija (teška verzija dostupna u ⚙ Verzije)"
+                        } else {
+                            "🔊 Odabrana engleska verzija (ostale u ⚙ Verzije)"
+                        }
+                        quickHudTick++
+                    } else {
+                        selectedVersion = currentMatched ?: bestOption
+                    }
                 } else {
                     selectedVersion = currentMatched ?: bestOption
                 }
             }
         }
 
-        // 3. Provjera koncerata (samo Archive.org .srt) vs filmova/serija (predmemorija -> Supabase -> IMDb/OpenSubtitles)
+        // 3. Provjera koncerata (samo Archive.org .srt) vs filmova/serija
         launch {
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             if (concertMode) {
@@ -532,7 +567,7 @@ fun PlayerScreen(
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
             val durationMs = when {
-                quickHudMessage.startsWith("🔊") -> 4500L
+                quickHudMessage.startsWith("🔊") || quickHudMessage.startsWith("⚡") -> 4500L
                 quickHudMessage.startsWith("💬") || quickHudMessage.startsWith("🌐") ||
                     quickHudMessage.startsWith("✅") || quickHudMessage.startsWith("🎞️") -> 3500L
                 else -> 2000L
@@ -573,11 +608,39 @@ fun PlayerScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
                 if (playbackState == Player.STATE_READY) {
+                    hasStartedCurrentStream = true
                     playbackErrorMessage = ""
                     duration = exoPlayer.duration.coerceAtLeast(0L)
                     val formatFps = exoPlayer.videoFormat?.frameRate ?: 0f
                     if (formatFps in 15f..120f) {
                         detectedVideoFps = formatFps
+                    }
+                } else if (playbackState == Player.STATE_BUFFERING && hasStartedCurrentStream && !isContinuousSeeking) {
+                    val now = SystemClock.elapsedRealtime()
+                    recentRebufferTimestamps.removeAll { now - it > 25_000L }
+                    recentRebufferTimestamps.add(now)
+
+                    val curSize = selectedVersion?.sizeBytes ?: 0L
+                    if (!autoDownshiftedForStall && recentRebufferTimestamps.size >= 3 && curSize > 4_800_000_000L) {
+                        val lighterAlt = availableVersions.firstOrNull {
+                            !urlsMatchArchiveFile(it.url, activeStreamUrl) &&
+                                it.sizeBytes in 200_000_000L until curSize &&
+                                it.languageRank <= (selectedVersion?.languageRank ?: 1)
+                        }
+                        if (lighterAlt != null) {
+                            autoDownshiftedForStall = true
+                            recentRebufferTimestamps.clear()
+                            val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                            selectedVersion = lighterAlt
+                            activeStreamUrl = lighterAlt.url
+                            detectedVideoFps = 0f
+                            hasStartedCurrentStream = false
+                            exoPlayer.setMediaItem(MediaItem.fromUri(lighterAlt.url), resumePos)
+                            exoPlayer.prepare()
+                            exoPlayer.playWhenReady = true
+                            quickHudMessage = "⚡ Velika datoteka zapinje — prebačeno na bržu verziju"
+                            quickHudTick++
+                        }
                     }
                 }
             }
@@ -1127,6 +1190,9 @@ fun PlayerScreen(
                                     selectedVersion = version
                                     activeStreamUrl = version.url
                                     detectedVideoFps = 0f
+                                    hasStartedCurrentStream = false
+                                    autoDownshiftedForStall = true
+                                    recentRebufferTimestamps.clear()
                                     exoPlayer.setMediaItem(MediaItem.fromUri(version.url), savedPos)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
@@ -1295,6 +1361,25 @@ private fun classifyVersionLanguageRank(text: String): Int {
     return if (isForeignDub) 2 else 1
 }
 
+private fun computeVersionStreamScore(opt: PlayerVersionOption): Int {
+    if (opt.sizeBytes <= 0L) return 500
+    val mb = opt.sizeBytes / (1024.0 * 1024.0)
+    return when {
+        // Optimalna HD verzija (720p/1080p između 450 MB i 4.8 GB — oštra slika i glatko učitavanje)
+        opt.height >= 700 && mb in 450.0..4800.0 -> {
+            val resBonus = if (opt.height >= 1000) 250 else 120
+            val idealDiffPenalty = (abs(mb - 2200.0) / 30.0).toInt().coerceAtMost(90)
+            1100 + resBonus - idealDiffPenalty
+        }
+        // Brza standardna / .ia.mp4 verzija (250 MB – 4.8 GB)
+        mb in 250.0..4800.0 -> 780 + (opt.height / 10)
+        // Teška HD datoteka (> 4.8 GB — odlična slika, ali može zapinjati na sporijim vezama)
+        opt.height >= 700 && mb > 4800.0 -> 520 + (opt.height / 20)
+        // Preteška SD datoteka ili premala (< 250 MB)
+        else -> 320 + (opt.height / 20)
+    }
+}
+
 private fun formatFileSizeHuman(bytes: Long): String {
     if (bytes <= 0L) return ""
     val mb = bytes / (1024.0 * 1024.0)
@@ -1317,7 +1402,7 @@ private fun buildVersionDisplayLabel(
         .replace(Regex("[._]+"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
-        .take(42)
+        .take(40)
     val resTag = when {
         height >= 2000 || width >= 3800 -> "4K"
         height >= 1000 || width >= 1900 -> "1080p"
@@ -1331,7 +1416,13 @@ private fun buildVersionDisplayLabel(
         2 -> "STRANI AUDIO"
         else -> ""
     }
-    val metaParts = listOf(langTag, resTag, sizeTag, extraTag).filter { it.isNotBlank() }
+    val speedTag = when {
+        sizeBytes > 6_000_000_000L -> "⚠️ Velika"
+        sizeBytes in 450_000_000L..4_800_000_000L && height >= 700 -> "⚡ Brza HD"
+        sizeBytes in 250_000_000L..4_800_000_000L -> "⚡ Brza"
+        else -> ""
+    }
+    val metaParts = listOf(langTag, resTag, sizeTag, speedTag, extraTag).filter { it.isNotBlank() }
     return if (metaParts.isNotEmpty()) {
         "$cleanName (${metaParts.joinToString(" • ")})"
     } else {
@@ -1408,7 +1499,8 @@ private suspend fun loadAllMovieVersions(
                             label = label,
                             url = streamUrl,
                             languageRank = langRank,
-                            sizeBytes = sizeBytes
+                            sizeBytes = sizeBytes,
+                            height = height
                         )
                     )
                 }
@@ -1431,11 +1523,11 @@ private suspend fun loadAllMovieVersions(
     } catch (_: Exception) {
     }
 
-    // 3. Ako trenutni zapis ima strani audio ili samo 1 verziju, potraži i druge Archive.org uploade istog filma (s prednošću za ENG)
+    // 3. Potraži i druge Archive.org uploade istog filma ako trenutni ima strani audio ili pretešku datoteku (> 4.8 GB)
     val needsAlternativeSearch = searchAlternativeItems && (
         collected.none { it.languageRank == 0 } ||
             collected.any { it.languageRank == 2 } ||
-            collected.size <= 1
+            collected.none { it.height >= 700 && it.sizeBytes in 450_000_000L..4_800_000_000L }
         )
 
     if (needsAlternativeSearch) {
@@ -1450,7 +1542,7 @@ private suspend fun loadAllMovieVersions(
                 val yearClause = if (targetYear > 0) " AND year:[${targetYear - 1} TO ${targetYear + 1}]" else ""
                 val q = "title:\"$asciiQuery\"$yearClause AND mediatype:movies AND -subject:trailer AND -subject:review"
                 val encodedQ = URLEncoder.encode(q, "UTF-8")
-                val searchUrl = "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=downloads&sort[]=downloads+desc&rows=6&output=json"
+                val searchUrl = "https://archive.org/advancedsearch.php?q=$encodedQ&fl[]=identifier&fl[]=title&fl[]=downloads&sort[]=downloads+desc&rows=12&output=json"
                 val conn = URL(searchUrl).openConnection() as HttpURLConnection
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0")
                 conn.connectTimeout = 5000
@@ -1475,31 +1567,24 @@ private suspend fun loadAllMovieVersions(
                             val altBlob = "$altId $altTitle ${altMd?.opt("language")?.toString().orEmpty()}"
                             val altFiles = altMeta.optJSONArray("files") ?: continue
 
-                            var bestAltFile: JSONObject? = null
-                            var bestAltSize = 0L
                             for (j in 0 until altFiles.length()) {
                                 val af = altFiles.optJSONObject(j) ?: continue
-                                val afName = af.optString("name").lowercase(Locale.ROOT)
+                                val rawName = af.optString("name")
+                                val afName = rawName.lowercase(Locale.ROOT)
                                 if (!afName.endsWith(".mp4") && !afName.endsWith(".mkv")) continue
                                 if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(afName)) continue
                                 val afSize = af.optString("size").toLongOrNull() ?: 0L
-                                if (afSize < 150_000_000L) continue
+                                if (afSize < 250_000_000L) continue
                                 val afSecs = af.optString("length").toDoubleOrNull()?.toInt() ?: 0
                                 if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 600) {
                                     if (afSecs < (detectedPrimaryRuntimeSecs * 0.85).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.18).toInt()) {
                                         continue
                                     }
                                 }
-                                if (afSize > bestAltSize) {
-                                    bestAltSize = afSize
-                                    bestAltFile = af
-                                }
-                            }
 
-                            if (bestAltFile != null) {
-                                val rawName = bestAltFile.optString("name")
-                                val width = bestAltFile.optString("width").toDoubleOrNull()?.toInt() ?: 0
-                                val height = bestAltFile.optString("height").toDoubleOrNull()?.toInt() ?: 0
+                                val width = af.optString("width").toDoubleOrNull()?.toInt() ?: 0
+                                val height = af.optString("height").toDoubleOrNull()?.toInt() ?: 0
+                                val isDeriv = afName.endsWith(".ia.mp4") || af.optString("source") == "derivative"
                                 val langRank = classifyVersionLanguageRank("$altBlob $rawName")
                                 val encoded = rawName.split("/").joinToString("/") { part ->
                                     URLEncoder.encode(part, "UTF-8").replace("+", "%20")
@@ -1509,16 +1594,17 @@ private suspend fun loadAllMovieVersions(
                                     filename = rawName,
                                     width = width,
                                     height = height,
-                                    sizeBytes = bestAltSize,
+                                    sizeBytes = afSize,
                                     langRank = langRank,
-                                    extraTag = "Archive"
+                                    extraTag = if (isDeriv) "IA" else "Archive"
                                 )
                                 addUniqueVersion(
                                     PlayerVersionOption(
                                         label = label,
                                         url = altStreamUrl,
                                         languageRank = langRank,
-                                        sizeBytes = bestAltSize
+                                        sizeBytes = afSize,
+                                        height = height
                                     )
                                 )
                             }
@@ -1543,7 +1629,7 @@ private suspend fun loadAllMovieVersions(
 
     collected.sortedWith(
         compareBy<PlayerVersionOption> { it.languageRank }
-            .thenByDescending { it.sizeBytes }
+            .thenByDescending { computeVersionStreamScore(it) }
     )
 }
 
@@ -1926,7 +2012,10 @@ private fun requestGoogleTranslateBatch(text: String): String {
     }
 }
 
-private suspend fun findOriginalMultiAudioUrl(iaMp4Url: String): String? = withContext(Dispatchers.IO) {
+private suspend fun findOriginalMultiAudioUrl(
+    iaMp4Url: String,
+    maxAllowedBytes: Long = 4_800_000_000L
+): String? = withContext(Dispatchers.IO) {
     try {
         val afterDownload = iaMp4Url.substringAfter("archive.org/download/", "")
         val itemId = afterDownload.substringBefore("/")
@@ -1952,6 +2041,9 @@ private suspend fun findOriginalMultiAudioUrl(iaMp4Url: String): String? = withC
             val lower = name.lowercase()
             if (lower.endsWith(".ia.mp4") || f.optString("source") == "derivative") continue
             if (!lower.endsWith(".mkv") && !lower.endsWith(".mp4")) continue
+
+            val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
+            if (sizeBytes > maxAllowedBytes) continue
 
             val nameWithoutExt = name.substringBeforeLast(".")
             if (nameWithoutExt.equals(stem, ignoreCase = true) ||
