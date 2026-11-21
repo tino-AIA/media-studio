@@ -48,14 +48,21 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.api.VideoQualityOption
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
@@ -115,10 +122,12 @@ fun PlayerScreen(
     var showSubtitleDialog by remember { mutableStateOf(false) }
     var subtitleList by remember { mutableStateOf<List<PlayerSubtitleOption>>(emptyList()) }
     var isLoadingSubtitles by remember { mutableStateOf(false) }
+    var isTranslatingSubtitles by remember { mutableStateOf(false) }
     var activeSubtitleName by remember { mutableStateOf<String?>(null) }
     var parsedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
     var currentSubtitleText by remember { mutableStateOf("") }
     var subtitleOffsetMs by remember { mutableLongStateOf(0L) }
+    var cachedAutoTranslatedCues by remember { mutableStateOf<List<SrtCue>>(emptyList()) }
 
     var showAudioDialog by remember { mutableStateOf(false) }
     var hasMultipleAudioTracks by remember { mutableStateOf(false) }
@@ -198,13 +207,99 @@ fun PlayerScreen(
         playbackErrorMessage = ""
         isBuffering = true
 
+        activeSubtitleName = null
+        parsedCues = emptyList()
+        currentSubtitleText = ""
+        subtitleOffsetMs = 0L
+        subtitleList = emptyList()
+        cachedAutoTranslatedCues = emptyList()
+        isTranslatingSubtitles = false
+
+        val cleanArchiveId = identifier.substringBefore(",tmdb-").trim()
+        val sbMeta = SupabaseRepository.getCatalogItem(identifier)
+        val effectiveYear = movieYear.ifBlank {
+            sbMeta?.releaseYear?.takeIf { it > 0 }?.toString() ?: ""
+        }
+
+        // 1. Automatska pretraga i prijevod titlova u pozadini čim krene reprodukcija
+        launch {
+            isLoadingSubtitles = true
+            val foundSubs = searchAllSubtitles(cleanArchiveId, movieTitle, effectiveYear)
+            isLoadingSubtitles = false
+
+            if (foundSubs.isEmpty()) {
+                subtitleList = emptyList()
+                quickHudMessage = "💬 Nema pronađenih titlova"
+                quickHudTick++
+                return@launch
+            }
+
+            val bestSub = pickBestSubtitleOption(foundSubs)
+            val rawSrt = downloadSubtitleText(bestSub)
+            val initialCues = parseSrtContent(rawSrt)
+
+            if (initialCues.isEmpty()) {
+                subtitleList = foundSubs
+                quickHudMessage = "💬 Nema ispravnih titlova"
+                quickHudTick++
+                return@launch
+            }
+
+            if (isCroatianOrRegionalSubtitle(bestSub, initialCues)) {
+                subtitleList = foundSubs
+                activeSubtitleName = bestSub.fileName
+                parsedCues = initialCues
+                quickHudMessage = "💬 Titlovi: [${bestSub.language}] ${bestSub.fileName}"
+                quickHudTick++
+            } else {
+                val safeKey = "${cleanArchiveId}_${bestSub.fileName}".replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
+                val cacheFile = File(context.cacheDir, "sub_hr_$safeKey.json")
+                val autoOptionName = "🇭🇷 Auto-prijevod (${bestSub.fileName})"
+                val autoOption = PlayerSubtitleOption(
+                    fileName = autoOptionName,
+                    language = "HR-AUTO",
+                    downloadUrl = "cached://$safeKey"
+                )
+
+                val cachedTranslated = readCachedTranslatedCues(cacheFile)
+                if (cachedTranslated.isNotEmpty()) {
+                    cachedAutoTranslatedCues = cachedTranslated
+                    subtitleList = listOf(autoOption) + foundSubs
+                    activeSubtitleName = autoOptionName
+                    parsedCues = cachedTranslated
+                    quickHudMessage = "💬 Titlovi: $autoOptionName"
+                    quickHudTick++
+                } else {
+                    // Odmah prikaži engleske titlove dok u pozadini prevodimo na hrvatski
+                    subtitleList = foundSubs
+                    activeSubtitleName = bestSub.fileName
+                    parsedCues = initialCues
+                    isTranslatingSubtitles = true
+                    quickHudMessage = "🌐 Prevodim titlove na hrvatski..."
+                    quickHudTick++
+
+                    val translatedCues = translateCuesToCroatian(initialCues, cacheFile)
+                    isTranslatingSubtitles = false
+                    cachedAutoTranslatedCues = translatedCues
+                    subtitleList = listOf(autoOption) + foundSubs
+
+                    if (activeSubtitleName == bestSub.fileName && translatedCues.isNotEmpty()) {
+                        activeSubtitleName = autoOptionName
+                        parsedCues = translatedCues
+                        quickHudMessage = "✅ Titlovi prevedeni na hrvatski"
+                        quickHudTick++
+                    }
+                }
+            }
+        }
+
+        // 2. Učitavanje najboljeg video streama (izvorni multi-audio .mp4/.mkv ili fallback)
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             availableQualities = emptyList()
             selectedQuality = null
             directVideoUrl
         } else {
-            val cleanId = identifier.substringBefore(",tmdb-")
-            val qualities = ArchiveMetadataModule.fetchAvailableQualities(cleanId)
+            val qualities = ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)
             availableQualities = qualities
             val bestQuality = qualities.firstOrNull()
             selectedQuality = bestQuality
@@ -231,7 +326,11 @@ fun PlayerScreen(
 
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
-            val durationMs = if (quickHudMessage.startsWith("🔊")) 4500L else 2000L
+            val durationMs = when {
+                quickHudMessage.startsWith("🔊") -> 4500L
+                quickHudMessage.startsWith("💬") || quickHudMessage.startsWith("🌐") || quickHudMessage.startsWith("✅") -> 3500L
+                else -> 2000L
+            }
             delay(durationMs)
             if (!isContinuousSeeking) {
                 quickHudMessage = ""
@@ -461,7 +560,7 @@ fun PlayerScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 26.dp)
+                    .padding(bottom = if (currentSubtitleText.isNotEmpty()) 84.dp else 26.dp)
                     .background(Color.Black.copy(alpha = 0.82f), RoundedCornerShape(10.dp))
                     .border(1.5.dp, Color.White.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
                     .padding(horizontal = 20.dp, vertical = 10.dp)
@@ -610,12 +709,16 @@ fun PlayerScreen(
                         }
 
                         PlayerChipButton(
-                            label = if (activeSubtitleName != null) "CC ✓" else "CC Titlovi",
+                            label = when {
+                                isTranslatingSubtitles -> "CC 🌐..."
+                                activeSubtitleName != null -> "CC ✓"
+                                else -> "CC Titlovi"
+                            },
                             isHighlighted = activeSubtitleName != null,
                             onClick = {
                                 controlsInteractionTick++
                                 showSubtitleDialog = true
-                                if (subtitleList.isEmpty()) {
+                                if (subtitleList.isEmpty() && !isLoadingSubtitles) {
                                     isLoadingSubtitles = true
                                     coroutineScope.launch {
                                         subtitleList = searchAllSubtitles(identifier.substringBefore(",tmdb-"), movieTitle, movieYear)
@@ -808,7 +911,7 @@ fun PlayerScreen(
                         }
                     } else {
                         LazyColumn(
-                            modifier = Modifier.heightIn(max = 300.dp),
+                            modifier = Modifier.heightIn(max = 320.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             item {
@@ -824,6 +927,46 @@ fun PlayerScreen(
                                     }
                                 )
                             }
+
+                            if (parsedCues.isNotEmpty() && activeSubtitleName != null && !activeSubtitleName!!.startsWith("🇭🇷 Auto-prijevod") && !isTranslatingSubtitles) {
+                                item {
+                                    DialogFocusableRow(
+                                        label = "🌐 Prevedi trenutni titl na hrvatski",
+                                        isSelected = false,
+                                        onClick = {
+                                            val sourceName = activeSubtitleName ?: "titl"
+                                            val cuesToTranslate = parsedCues
+                                            showSubtitleDialog = false
+                                            coroutineScope.launch {
+                                                isTranslatingSubtitles = true
+                                                quickHudMessage = "🌐 Prevodim titlove na hrvatski..."
+                                                quickHudTick++
+                                                val cleanId = identifier.substringBefore(",tmdb-").trim()
+                                                val safeKey = "${cleanId}_$sourceName".replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
+                                                val cacheFile = File(context.cacheDir, "sub_hr_$safeKey.json")
+                                                val translated = translateCuesToCroatian(cuesToTranslate, cacheFile)
+                                                isTranslatingSubtitles = false
+                                                if (translated.isNotEmpty()) {
+                                                    val autoName = "🇭🇷 Auto-prijevod ($sourceName)"
+                                                    cachedAutoTranslatedCues = translated
+                                                    subtitleList = listOf(
+                                                        PlayerSubtitleOption(
+                                                            fileName = autoName,
+                                                            language = "HR-AUTO",
+                                                            downloadUrl = "cached://$safeKey"
+                                                        )
+                                                    ) + subtitleList.filterNot { it.fileName == autoName }
+                                                    activeSubtitleName = autoName
+                                                    parsedCues = translated
+                                                    quickHudMessage = "✅ Titlovi prevedeni na hrvatski"
+                                                    quickHudTick++
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+
                             if (subtitleList.isEmpty()) {
                                 item {
                                     Text("Nema pronađenih titlova za ovaj film.", color = Color.Gray, fontSize = 14.sp)
@@ -837,9 +980,13 @@ fun PlayerScreen(
                                             activeSubtitleName = sub.fileName
                                             subtitleOffsetMs = 0L
                                             showSubtitleDialog = false
-                                            coroutineScope.launch {
-                                                val srtContent = downloadSubtitleText(sub)
-                                                parsedCues = parseSrtContent(srtContent)
+                                            if (sub.downloadUrl.startsWith("cached://") && cachedAutoTranslatedCues.isNotEmpty()) {
+                                                parsedCues = cachedAutoTranslatedCues
+                                            } else {
+                                                coroutineScope.launch {
+                                                    val srtContent = downloadSubtitleText(sub)
+                                                    parsedCues = parseSrtContent(srtContent)
+                                                }
                                             }
                                         }
                                     )
@@ -855,6 +1002,134 @@ fun PlayerScreen(
                 }
             )
         }
+    }
+}
+
+private fun pickBestSubtitleOption(subs: List<PlayerSubtitleOption>): PlayerSubtitleOption {
+    fun priority(sub: PlayerSubtitleOption): Int {
+        val lang = sub.language.uppercase()
+        val fname = sub.fileName.lowercase()
+        return when {
+            lang == "HRV" || Regex("(?i)\\b(hr|hrv|cro|croatian)\\b").containsMatchIn(fname) -> 0
+            lang == "SRP" || lang == "BOS" || Regex("(?i)\\b(sr|srp|serbian|bos|bosnian)\\b").containsMatchIn(fname) -> 1
+            lang == "ARCHIVE" -> 2
+            lang == "ENG" -> 3
+            else -> 4
+        }
+    }
+    return subs.minByOrNull { priority(it) } ?: subs.first()
+}
+
+private fun isCroatianOrRegionalSubtitle(sub: PlayerSubtitleOption, cues: List<SrtCue>): Boolean {
+    val lang = sub.language.uppercase()
+    if (lang in setOf("HRV", "SRP", "BOS", "HR", "SR", "BS")) return true
+    val fname = sub.fileName.lowercase()
+    if (Regex("(?i)\\b(hr|hrv|cro|croatian|sr|srp|serbian|bos|bosnian)\\b").containsMatchIn(fname)) {
+        return true
+    }
+    val sample = cues.take(20).joinToString(" ") { it.text }.lowercase()
+    if (Regex("[čćžšđ]").containsMatchIn(sample)) return true
+    val regionalMarkers = listOf(" sam ", " nije ", " kako ", " ovdje ", " zašto ", " dobro ", " molim ", " hvala ")
+    return regionalMarkers.count { sample.contains(it) } >= 2
+}
+
+private fun readCachedTranslatedCues(cacheFile: File): List<SrtCue> {
+    return try {
+        if (!cacheFile.exists() || cacheFile.length() < 10L) return emptyList()
+        val arr = JSONArray(cacheFile.readText(Charsets.UTF_8))
+        val list = ArrayList<SrtCue>(arr.length())
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val text = obj.optString("t")
+            if (text.isNotEmpty()) {
+                list.add(
+                    SrtCue(
+                        startMs = obj.optLong("s"),
+                        endMs = obj.optLong("e"),
+                        text = text
+                    )
+                )
+            }
+        }
+        list
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+private suspend fun translateCuesToCroatian(
+    cues: List<SrtCue>,
+    cacheFile: File
+): List<SrtCue> = withContext(Dispatchers.IO) {
+    if (cues.isEmpty()) return@withContext emptyList()
+    val translatedTexts = MutableList(cues.size) { cues[it].text }
+    val batches = cues.indices.chunked(18)
+    val semaphore = Semaphore(5)
+
+    coroutineScope {
+        batches.map { indices ->
+            async {
+                semaphore.withPermit {
+                    val payload = indices.joinToString("\n") { idx ->
+                        val cleanLine = cues[idx].text.replace("\n", " ").trim()
+                        "[[$idx]] $cleanLine"
+                    }
+                    val translatedBatch = requestGoogleTranslateBatch(payload)
+                    if (translatedBatch.isNotBlank()) {
+                        val markerRegex = Regex("\\[\\s*\\[\\s*(\\d+)\\s*\\]\\s*\\]\\s*([\\s\\S]*?)(?=\\[\\s*\\[\\s*\\d+\\s*\\]\\s*\\]|$)")
+                        for (match in markerRegex.findAll(translatedBatch)) {
+                            val idx = match.groupValues[1].toIntOrNull()
+                            val text = match.groupValues[2].trim()
+                            if (idx != null && idx in translatedTexts.indices && text.isNotEmpty()) {
+                                translatedTexts[idx] = text
+                            }
+                        }
+                    }
+                }
+            }
+        }.awaitAll()
+    }
+
+    val result = cues.mapIndexed { index, cue ->
+        cue.copy(text = translatedTexts[index])
+    }
+
+    try {
+        val jsonArr = JSONArray()
+        for (c in result) {
+            val obj = JSONObject()
+            obj.put("s", c.startMs)
+            obj.put("e", c.endMs)
+            obj.put("t", c.text)
+            jsonArr.put(obj)
+        }
+        cacheFile.writeText(jsonArr.toString(), Charsets.UTF_8)
+    } catch (_: Exception) {
+    }
+
+    result
+}
+
+private fun requestGoogleTranslateBatch(text: String): String {
+    return try {
+        val encoded = URLEncoder.encode(text, "UTF-8")
+        val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
+        val conn = URL(urlStr).openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 7000
+        conn.readTimeout = 8000
+        if (conn.responseCode != 200) return ""
+        val response = conn.inputStream.bufferedReader().use { it.readText() }
+        val jsonArray = JSONArray(response)
+        val parts = jsonArray.getJSONArray(0)
+        val sb = StringBuilder()
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONArray(i)?.optString(0) ?: ""
+            sb.append(part)
+        }
+        sb.toString()
+    } catch (_: Exception) {
+        ""
     }
 }
 
