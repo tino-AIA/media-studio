@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
+import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,10 +40,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.VideoQualityOption
@@ -74,6 +77,7 @@ data class PlayerSubtitleOption(
     val isGzipped: Boolean = false
 )
 
+@OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     identifier: String,
@@ -92,6 +96,8 @@ fun PlayerScreen(
     var duration by remember { mutableLongStateOf(0L) }
     var showControls by remember { mutableStateOf(false) }
     var controlsInteractionTick by remember { mutableIntStateOf(0) }
+
+    var videoResizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
 
     var activeStreamUrl by remember { mutableStateOf("") }
     var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
@@ -184,6 +190,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(identifier, directVideoUrl) {
+        videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedMp4Fallback = false
@@ -409,10 +416,16 @@ fun PlayerScreen(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
+                    resizeMode = videoResizeMode
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
+                }
+            },
+            update = { playerView ->
+                if (playerView.resizeMode != videoResizeMode) {
+                    playerView.resizeMode = videoResizeMode
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -553,6 +566,24 @@ fun PlayerScreen(
                             onClick = {
                                 exoPlayer.pause()
                                 exoPlayer.seekTo(0L)
+                                controlsInteractionTick++
+                            }
+                        )
+
+                        val formatLabel = when (videoResizeMode) {
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "📐 Zoom 16:9"
+                            AspectRatioFrameLayout.RESIZE_MODE_FILL -> "📐 Rastegni"
+                            else -> "📐 Original"
+                        }
+                        PlayerChipButton(
+                            label = formatLabel,
+                            isHighlighted = videoResizeMode != AspectRatioFrameLayout.RESIZE_MODE_FIT,
+                            onClick = {
+                                videoResizeMode = when (videoResizeMode) {
+                                    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                }
                                 controlsInteractionTick++
                             }
                         )
