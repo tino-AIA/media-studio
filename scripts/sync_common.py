@@ -95,6 +95,14 @@ RELEASE_TAG_PATTERN = re.compile(
     r")\b"
 )
 
+VARIANT_TAG_RE = re.compile(
+    r"(?i)[\(\[]\s*("
+    r"the\s+complete\s+novel|complete\s+novel|director'?s?\s*cut|theatrical\s*cut|theatrical|"
+    r"extended\s*cut|extended|final\s*cut|workprint|unrated|uncut|tv\s*cut|us\s*cut|eu\s*cut|uk\s*cut|"
+    r"restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+"
+    r")\s*[\)\]]"
+)
+
 WIDESCREEN_TAG_RE = re.compile(
     r"(?i)\b(widescreen|16x9|16_9|16-9|1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip)\b"
 )
@@ -422,6 +430,7 @@ def normalize_for_exact_title_compare(raw_title):
     s = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", str(raw_title), flags=re.IGNORECASE)
     s = s.replace("&", " and ")
     s = re.sub(r"\[[^\]]*\]", " ", s)
+    s = VARIANT_TAG_RE.sub(" ", s)
     s = re.sub(r"[._]+", " ", s)
     s = re.sub(r"(?i)^(?:walt\s+disney(?:'s|\s+pictures|\s+presents)?|disney(?:'s)?|pixar(?:'s)?|dreamworks(?:'s)?|studio\s+ghibli)\s*[-:]?\s*", "", s)
     s = re.sub(r"[\(\[\{]\s*(19\d{2}|20\d{2})\s*[\)\]\}]", " ", s)
@@ -453,18 +462,35 @@ def extract_year_from_text(text):
 def clean_filename_to_title(filename, fallback_to_stem=False):
     base = filename.rsplit("/", 1)[-1]
     name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
-    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
-    year = int(year_match.group(1)) if year_match else 0
+
+    paren_year = re.search(r"[\(\[]\s*(19\d{2}|20\d{2})\s*[\)\]]", name)
+    lead_year = re.match(r"^\s*(19\d{2}|20\d{2})(?=[\s\-_.:])", name)
+    all_years = re.findall(r"\b(19\d{2}|20\d{2})\b", name)
+
+    if paren_year:
+        year = int(paren_year.group(1))
+    elif lead_year:
+        year = int(lead_year.group(1))
+    elif all_years:
+        year = int(all_years[-1])
+    else:
+        year = 0
 
     clean = re.sub(r"\[[^\]]*\]", " ", name)
     clean = re.sub(r"\(\([^)]*\)\)", " ", clean)
+    clean = VARIANT_TAG_RE.sub(" ", clean)
     clean = re.sub(r"[._]+", " ", clean)
-    clean = RELEASE_TAG_PATTERN.sub("", clean)
+
     if year:
-        clean = re.sub(rf"\(?\b{year}\b\)?", "", clean)
-    clean = re.sub(r"\(\s*\)|\[\s*\]", "", clean)
-    clean = re.sub(r"^\s*\d+[\.\-\s]+", "", clean)
-    clean = re.sub(r"\s+", " ", clean).strip(" -")
+        clean = re.sub(rf"[\(\[]\s*{year}\s*[\)\]]", " ", clean)
+        clean = re.sub(rf"^\s*\(?\b{year}\b\)?[\s\-_.:)]*(?:\d{{1,2}}[\s\-_.:)]+)?(?=[A-Za-zČĆŽŠĐ])", " ", clean)
+        clean = re.sub(rf"(?<=\S)\s+\b{year}\b\s*$", " ", clean)
+
+    clean = RELEASE_TAG_PATTERN.sub(" ", clean)
+    clean = re.sub(r"\(\s*(?:cut|version|edition)?\s*\)|\[\s*\]", " ", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^\s*\d{1,3}\s*[\.\-\)\]]+\s*", "", clean)
+    clean = re.sub(r"^\s*[12]\s+(?=[A-ZČĆŽŠĐ])", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip(" -–—.")
     if not clean and fallback_to_stem:
         clean = re.sub(r"[._]+", " ", name).strip()
     return clean.strip(), year
