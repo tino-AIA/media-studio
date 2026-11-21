@@ -99,8 +99,11 @@ fun HomeScreen(
     LaunchedEffect(currentHeroMovie) {
         currentHeroMovie?.let { (movie, isSeries) ->
             val firstId = movie.identifier.split(",").first()
-            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstId)
-            currentHeroPosterUrl = fetchedUrl.ifBlank { "https://archive.org/services/img/$firstId" }
+            val sbPoster = SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
+            currentHeroPosterUrl = sbPoster.ifBlank {
+                PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                    .ifBlank { "https://archive.org/services/img/$firstId" }
+            }
         }
     }
 
@@ -909,12 +912,19 @@ fun NetflixTop10Card(
     }
 
     val firstArchiveId = movie.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("") }
     val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
+    var posterUrl by remember(movie.identifier) {
+        mutableStateOf(SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty())
+    }
 
-    LaunchedEffect(movie.title) {
-        val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-        posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+    LaunchedEffect(movie.identifier, movie.title) {
+        val sbPoster = SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
+        if (sbPoster.isNotBlank()) {
+            posterUrl = sbPoster
+        } else {
+            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+            posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+        }
     }
 
     Column(modifier = Modifier.width(162.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1048,7 +1058,7 @@ fun MovieCard(
                     ?: viewModel.staticAuthorImages[authorName]
                     ?: authorImages[authorName].orEmpty()
             } else {
-                ""
+                SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
             }
         )
     }
@@ -1064,10 +1074,15 @@ fun MovieCard(
                 ?: authorImages[authorName].orEmpty()
             posterUrl = resolved
         } else {
-            val firstArchiveId = movie.identifier.split(",").first()
-            val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
-            val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, firstArchiveId)
-            posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+            val sbPoster = SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
+            if (sbPoster.isNotBlank()) {
+                posterUrl = sbPoster
+            } else {
+                val firstArchiveId = movie.identifier.split(",").first()
+                val fallbackUrl = "https://archive.org/services/img/$firstArchiveId"
+                val fetchedUrl = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                posterUrl = fetchedUrl.ifBlank { fallbackUrl }
+            }
         }
     }
 
