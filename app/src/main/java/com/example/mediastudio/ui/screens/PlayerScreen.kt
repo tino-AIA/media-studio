@@ -129,6 +129,7 @@ fun PlayerScreen(
     var videoResizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var detectedVideoFps by remember { mutableFloatStateOf(0f) }
     var resolvedMovieYear by remember { mutableStateOf(movieYear) }
+    var resolvedMediaType by remember { mutableStateOf<String?>(null) }
 
     var activeStreamUrl by remember { mutableStateOf("") }
     var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
@@ -288,6 +289,7 @@ fun PlayerScreen(
         val localCacheFile = File(context.cacheDir, "sub_hr_v5_$safeCacheSlug.json")
 
         val sbMeta = SupabaseRepository.getCatalogItem(identifier)
+        resolvedMediaType = sbMeta?.mediaType
         val titleEmbeddedYear = Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)").find(movieTitle)?.groupValues?.get(1).orEmpty()
         val effectiveYear = movieYear.ifBlank {
             sbMeta?.releaseYear?.takeIf { it > 0 }?.toString() ?: titleEmbeddedYear
@@ -985,7 +987,7 @@ fun PlayerScreen(
                                             movieTitle = movieTitle,
                                             movieYear = resolvedMovieYear,
                                             directVideoUrl = directVideoUrl,
-                                            mediaTypeHint = sbMeta?.mediaType,
+                                            mediaTypeHint = resolvedMediaType,
                                             archiveOnly = archiveOnly
                                         )
                                         isLoadingSubtitles = false
