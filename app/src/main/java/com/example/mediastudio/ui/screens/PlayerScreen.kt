@@ -1310,7 +1310,6 @@ private fun parseEpisodeContext(
     } catch (_: Exception) {
         directVideoUrl
     }
-    val combined = "$movieTitle $decodedUrl"
 
     val seRegex = Regex("(?i)\\bS(\\d{1,2})\\s*[-_.]?\\s*E(\\d{1,3})\\b")
     val xRegex = Regex("(?i)\\b(\\d{1,2})x(\\d{1,3})\\b")
@@ -2324,7 +2323,11 @@ private fun titlesMatchStrictly(queryWords: Set<String>, candidateTitle: String)
     if (queryWords.isEmpty()) return false
     val candWords = normalizeTitleWordsForMatch(candidateTitle)
     if (candWords.isEmpty()) return false
-    val overlap = queryWords.intersect(candWords).size
+    val overlap = queryWords.count { qw ->
+        qw in candWords ||
+            (qw.length >= 4 && qw.endsWith("s") && qw.dropLast(1) in candWords) ||
+            candWords.any { cw -> cw.length >= 4 && cw.endsWith("s") && cw.dropLast(1) == qw }
+    }
     if (queryWords.size == 1) {
         return overlap == 1 && candWords.size <= 2
     }
@@ -2522,7 +2525,7 @@ private suspend fun searchAllSubtitles(
                     }
                     archiveEnglishTitle = cleanMovieTitleForSubtitleSearch(rawArchTitle)
                 }
-                if (parsedYear == 0 && !isCollectionStream) {
+                if (parsedYear == 0 && !isCollectionStream && !episodeCtx.isSeries) {
                     val yRaw = md.optString("year").ifBlank { md.optString("date") }
                     parsedYear = Regex("(19\\d{2}|20\\d{2})").find(yRaw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                 }
