@@ -1,0 +1,408 @@
+import os
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sync_common import (
+    TMDB_API_KEY,
+    TMDB_BASE,
+    TMDB_IMG_BACKDROP,
+    TMDB_IMG_POSTER,
+    clean_filename_to_title,
+    contains_blocked_regional_or_arabic,
+    contains_hentai_or_adult,
+    determine_primary_genres,
+    extract_year_from_text,
+    fetch_existing_catalog_state,
+    get_archive_item_details,
+    get_tmdb_movie_details,
+    has_multiple_tmdb_versions,
+    is_future_release,
+    normalize_for_exact_title_compare,
+    pick_best_video_file,
+    safe_get,
+    state_lock,
+    supabase_upsert,
+    validate_movie_match,
+    verify_stream_url_playable,
+)
+
+ARCHIVE_FEATURE_COLLECTIONS = [
+    ("feature_films", 10),
+    ("opensource_movies", 8),
+    ("SciFi_Films", 8),
+    ("film_noir", 6),
+    ("comedy_films", 6),
+    ("vhsvault", 6),
+    ("laserdiscarchive", 5),
+    ("colorized-and-upscaled-movies", 5),
+    ("miscellaneous_feature_films", 6),
+    ("westerns", 6),
+    ("war_films", 6),
+    ("horror_films", 6),
+    ("romance_films", 6),
+    ("thriller_films", 6),
+    ("action_adventure_films", 6),
+    ("drama_films", 6),
+    ("mystery_films", 6),
+    ("animationandcartoons", 6),
+]
+
+TMDB_DISCOVER_GENRE_SEEDS = [
+    ("37", "Vestern", 20),
+    ("27", "Horor", 30),
+    ("10752", "Ratni", 20),
+    ("878", "Sci-Fi klasici", 30),
+    ("80", "Krimi", 35),
+    ("53", "Triler i misterija", 35),
+    ("9648", "Triler i misterija", 30),
+    ("35", "Komedija", 40),
+    ("10749", "Romantični", 25),
+    ("28", "Akcija i avantura", 35),
+    ("12", "Akcija i avantura", 35),
+    ("18", "Drama", 45),
+]
+
+CULT_AND_ANIMATION_SEEDS = [
+    # Kultni SF, mjuzikli, plesni i klasici
+    "Dune", "Star Wars", "The Empire Strikes Back", "Return of the Jedi",
+    "2001: A Space Odyssey", "2010: The Year We Make Contact", "Hair", "Footloose",
+    "Dirty Dancing", "Grease", "Saturday Night Fever", "Flashdance", "Fame",
+    "The Blues Brothers", "The Rocky Horror Picture Show", "West Side Story",
+    "Singin' in the Rain", "The Sound of Music", "Cabaret", "All That Jazz",
+    "Blade Runner", "Alien", "Aliens", "The Terminator", "Terminator 2: Judgment Day",
+    "Back to the Future", "Back to the Future Part II", "Back to the Future Part III",
+    "Raiders of the Lost Ark", "Indiana Jones and the Temple of Doom",
+    "Indiana Jones and the Last Crusade", "The Matrix", "Jurassic Park",
+    "E.T. the Extra-Terrestrial", "Close Encounters of the Third Kind",
+    "A Clockwork Orange", "The Shining", "Full Metal Jacket", "Dr. Strangelove",
+    "Barry Lyndon", "Eyes Wide Shut", "Apocalypse Now", "The Godfather",
+    "The Godfather Part II", "Goodfellas", "Taxi Driver", "Raging Bull", "Casino",
+    "Pulp Fiction", "Reservoir Dogs", "Jackie Brown", "Scarface", "Carlito's Way",
+    "Heat", "The Shawshank Redemption", "Forrest Gump", "Schindler's List",
+    "Fight Club", "Se7en", "The Silence of the Lambs", "Gladiator", "Braveheart",
+    "Ghostbusters", "The Fifth Element", "Total Recall", "RoboCop", "Starship Troopers",
+    "Mad Max", "Mad Max 2", "Stalker", "Solaris", "Metropolis", "Brazil",
+    "Twelve Monkeys", "The Thing", "Escape from New York", "They Live",
+    "Big Trouble in Little China", "The Abyss", "Predator", "Die Hard",
+    "Lethal Weapon", "First Blood", "Rocky", "Rocky II", "Platoon", "The Deer Hunter",
+    "One Flew Over the Cuckoo's Nest", "Amadeus", "Chinatown", "The French Connection",
+    "Lawrence of Arabia", "The Bridge on the River Kwai", "Doctor Zhivago",
+    "Ben-Hur", "Spartacus", "Once Upon a Time in the West", "The Good, the Bad and the Ugly",
+    "A Fistful of Dollars", "For a Few Dollars More", "Unforgiven", "True Grit",
+    # Disney, Pixar i ostali animirani klasici
+    "Snow White and the Seven Dwarfs", "Pinocchio", "Fantasia", "Dumbo", "Bambi",
+    "Cinderella", "Alice in Wonderland", "Peter Pan", "Lady and the Tramp",
+    "Sleeping Beauty", "One Hundred and One Dalmatians", "The Sword in the Stone",
+    "The Jungle Book", "The Aristocats", "Robin Hood", "The Rescuers",
+    "The Fox and the Hound", "The Great Mouse Detective", "Oliver & Company",
+    "The Little Mermaid", "Beauty and the Beast", "Aladdin", "The Lion King",
+    "Pocahontas", "The Hunchback of Notre Dame", "Hercules", "Mulan", "Tarzan",
+    "The Emperor's New Groove", "Atlantis: The Lost Empire", "Lilo & Stitch",
+    "Treasure Planet", "Brother Bear", "Tangled", "Wreck-It Ralph", "Frozen",
+    "Big Hero 6", "Zootopia", "Moana", "Encanto", "The Nightmare Before Christmas",
+    "Who Framed Roger Rabbit", "Mary Poppins", "Toy Story", "A Bug's Life",
+    "Toy Story 2", "Monsters, Inc.", "Finding Nemo", "The Incredibles", "Cars",
+    "Ratatouille", "WALL-E", "Up", "Toy Story 3", "Brave", "Inside Out",
+    "Finding Dory", "Coco", "Incredibles 2", "Toy Story 4", "Soul", "Luca",
+    "Spirited Away", "My Neighbor Totoro", "Princess Mononoke", "Howl's Moving Castle",
+    "Kiki's Delivery Service", "Castle in the Sky", "Ponyo", "Grave of the Fireflies",
+    "Shrek", "Shrek 2", "Madagascar", "Kung Fu Panda", "How to Train Your Dragon",
+    "Ice Age", "Despicable Me", "The Iron Giant", "Coraline", "Corpse Bride",
+    "Anastasia", "The Prince of Egypt", "The Land Before Time", "An American Tail",
+    "All Dogs Go to Heaven", "The Secret of NIMH", "Akira", "Ghost in the Shell",
+    "Watership Down", "Animal Farm", "Heavy Metal"
+]
+
+
+def save_verified_movie_row(
+    arch_id,
+    details,
+    rel_year,
+    stream_url,
+    arch_mins,
+    pop_score,
+    seen_tmdb_ids,
+    seen_title_years,
+    existing_archive_ids,
+    hint_genre=None
+):
+    mid = details["tmdb_id"]
+    norm_t = normalize_for_exact_title_compare(details["hr_title"])
+    ty_key = (norm_t, rel_year)
+
+    with state_lock:
+        if mid in seen_tmdb_ids or arch_id in existing_archive_ids:
+            return False
+        if norm_t and ty_key in seen_title_years:
+            return False
+        seen_tmdb_ids.add(mid)
+        existing_archive_ids.add(arch_id)
+        if norm_t:
+            seen_title_years.add(ty_key)
+
+    genres = determine_primary_genres(
+        details["genre_ids"],
+        details["companies"],
+        details["orig_title"],
+        details["hr_title"],
+        details["overview_hr"],
+        hint_genre
+    )
+    row = {
+        "archive_id": arch_id,
+        "tmdb_id": mid,
+        "title": details["hr_title"],
+        "media_type": "movie",
+        "genres": genres,
+        "release_year": rel_year,
+        "rating": round(details["vote_average"], 1),
+        "popularity_score": pop_score,
+        "description_hr": details["overview_hr"],
+        "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}",
+        "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
+        "stream_url": stream_url,
+        "is_featured": details["vote_average"] >= 7.8 and 16 not in details["genre_ids"],
+        "is_valid": True,
+        "tmdb_runtime": details["runtime"],
+        "archive_runtime": arch_mins
+    }
+    supabase_upsert("catalog_items", [row], "archive_id")
+    print(f"  + Film: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
+    return True
+
+
+def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years):
+    print("1/3 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
+    archive_docs = {}
+
+    def fetch_col_page(col_page):
+        col, page = col_page
+        query = f"mediatype:movies AND collection:{col} AND -collection:television AND -subject:trailer AND -subject:news"
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": query,
+                "fl[]": ["identifier", "title", "year", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 200,
+                "page": page,
+                "output": "json"
+            }
+        )
+        return (data or {}).get("response", {}).get("docs", [])
+
+    tasks = [(col, p) for col, max_p in ARCHIVE_FEATURE_COLLECTIONS for p in range(1, max_p + 1)]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for docs in pool.map(fetch_col_page, tasks):
+            for doc in docs:
+                ident = doc.get("identifier")
+                if ident and ident not in existing_archive_ids and ident not in archive_docs:
+                    archive_docs[ident] = doc
+
+    print(f"  Pronađeno {len(archive_docs)} novih Archive.org stavki za obradu...", flush=True)
+    added = [0]
+
+    def process_archive_doc(doc):
+        ident = doc.get("identifier") or ""
+        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+            return
+
+        raw_title = doc.get("title") or ident
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0]
+        if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
+            return
+
+        clean_t, parsed_y = clean_filename_to_title(str(raw_title))
+        if not parsed_y:
+            parsed_y = extract_year_from_text(doc.get("year") or ident)
+        if not clean_t or len(clean_t) < 2:
+            return
+
+        params = {"api_key": TMDB_API_KEY, "query": clean_t, "language": "hr-HR", "include_adult": "false"}
+        if parsed_y > 0:
+            params["year"] = parsed_y
+        res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+        results = (res or {}).get("results", [])
+        if not results and parsed_y > 0:
+            params.pop("year")
+            res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+            results = (res or {}).get("results", [])
+        if not results:
+            return
+
+        hit = results[0]
+        mid = hit["id"]
+        with state_lock:
+            if mid in seen_tmdb_ids:
+                return
+
+        details = get_tmdb_movie_details(mid)
+        if not details or not details["poster_path"]:
+            return
+
+        is_anim = 16 in (details.get("genre_ids") or [])
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 180), allow_mkv=True)
+        if not videos:
+            return
+        best = pick_best_video_file(videos)
+        arch_mins = best["duration_mins"]
+
+        rel_year = extract_year_from_text(details["release_date"]) or parsed_y
+        require_credits = has_multiple_tmdb_versions(details["orig_title"])
+        ok, _ = validate_movie_match(
+            ident,
+            arch_md,
+            arch_mins,
+            details,
+            [details["orig_title"], details["hr_title"]],
+            rel_year,
+            require_credits=require_credits,
+            chosen_filename=best["filename"],
+            chosen_size_mb=best["size_mb"]
+        )
+        if not ok or not verify_stream_url_playable(best["stream_url"]):
+            return
+
+        downloads = float(doc.get("downloads") or 0)
+        pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
+        if save_verified_movie_row(
+            ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
+            seen_tmdb_ids, seen_title_years, existing_archive_ids
+        ):
+            with state_lock:
+                added[0] += 1
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(process_archive_doc, archive_docs.values()))
+
+    print(f"  Dodano {added[0]} filmova iz Archive.org kolekcija.", flush=True)
+
+
+def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years):
+    print("2/3 Ciljana pretraga kultnih klasika, animiranih filmova i TMDB žanrova...", flush=True)
+    candidates = {}
+
+    def fetch_seed(seed_title):
+        res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
+        return (res or {}).get("results", [])[:2]
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for res_list in pool.map(fetch_seed, CULT_AND_ANIMATION_SEEDS):
+            for m in res_list:
+                mid = m["id"]
+                if mid not in seen_tmdb_ids and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                    candidates[mid] = (m, None)
+
+    for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
+        for page in range(1, 6):
+            data = safe_get(
+                f"{TMDB_BASE}/discover/movie",
+                {
+                    "api_key": TMDB_API_KEY,
+                    "language": "hr-HR",
+                    "with_genres": tmdb_genre_id,
+                    "without_genres": "16,99",
+                    "include_adult": "false",
+                    "vote_count.gte": min_votes,
+                    "sort_by": "vote_count.desc",
+                    "page": page
+                }
+            )
+            for m in (data or {}).get("results", []):
+                mid = m["id"]
+                if mid not in seen_tmdb_ids and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                    if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
+                        candidates[mid] = (m, hr_genre_label)
+
+    print(f"  Provjera {len(candidates)} TMDB kandidata na Archive.org...", flush=True)
+    added = [0]
+
+    def process_candidate(item):
+        m, hint_genre = item
+        mid = m["id"]
+        with state_lock:
+            if mid in seen_tmdb_ids:
+                return
+
+        rel_date = m.get("release_date") or ""
+        year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
+        details = get_tmdb_movie_details(mid)
+        if not details or not details["poster_path"]:
+            return
+        if details["runtime"] > 0 and details["runtime"] < 55:
+            return
+
+        orig_title = details["orig_title"]
+        hr_title = details["hr_title"]
+        clean_q = re.sub(r"[^\w\s]", " ", orig_title).strip()
+        if len(clean_q) < 2:
+            return
+
+        is_anim = 16 in (details.get("genre_ids") or [])
+        min_mb = 80 if is_anim else 180
+        require_credits = has_multiple_tmdb_versions(orig_title)
+        year_clause = f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else ""
+        query = f'title:"{clean_q}"{year_clause} AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review'
+
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": query,
+                "fl[]": ["identifier", "title", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 6,
+                "output": "json"
+            }
+        )
+        for doc in (data or {}).get("response", {}).get("docs", []):
+            ident = doc.get("identifier")
+            if not ident or ident in existing_archive_ids or ident.lower().startswith(("youtube-", "yt-")):
+                continue
+            videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
+            if not videos:
+                continue
+            best = pick_best_video_file(videos)
+            arch_mins = best["duration_mins"]
+
+            ok, _ = validate_movie_match(
+                ident,
+                arch_md,
+                arch_mins,
+                details,
+                [orig_title, hr_title],
+                year,
+                require_credits=require_credits,
+                chosen_filename=best["filename"],
+                chosen_size_mb=best["size_mb"]
+            )
+            if ok and verify_stream_url_playable(best["stream_url"]):
+                pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
+                if save_verified_movie_row(
+                    ident, details, year, best["stream_url"], arch_mins, pop_score,
+                    seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre
+                ):
+                    with state_lock:
+                        added[0] += 1
+                break
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(process_candidate, candidates.values()))
+
+    print(f"  Dodano {added[0]} kultnih i žanrovskih filmova.", flush=True)
+
+
+def run_movies_sync():
+    print("=== [FILMOVI] Pokretanje brze sinkronizacije igranih i animiranih filmova ===", flush=True)
+    existing_archive_ids, seen_tmdb_ids, seen_title_years, _ = fetch_existing_catalog_state("movie")
+    print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova (ostaju netaknuti).", flush=True)
+    mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years)
+    search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years)
+    print(f"=== [FILMOVI] Završeno! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ===", flush=True)
+
+
+if __name__ == "__main__":
+    run_movies_sync()
