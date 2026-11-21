@@ -91,6 +91,11 @@ AUTHORS = [
     ("Gordon Hessler", "filmography-gordon-hessler"),
     ("Russ Meyer", "filmography-russ-meyer"),
     ("Gaspar Noé", "filmography-gaspar-noe"),
+    ("Woody Allen", "filmography-woody-allen"),
+    ("Robert Altman", "filmography-robert-altman"),
+    ("Sion Sono", "filmography-sion-sono"),
+    ("Peter Greenaway", "filmography-peter-greenaway"),
+    ("Alan Clarke", "filmography-alan-clarke"),
 ]
 
 
@@ -225,47 +230,116 @@ def fetch_wiki_bio(author_name):
     return ""
 
 
+def compute_credits_score(credits_list):
+    by_movie = {}
+    for c in credits_list:
+        mid = c.get("id")
+        if not mid:
+            continue
+        vc = int(c.get("vote_count") or 0)
+        pop = float(c.get("popularity") or 0.0)
+        if mid not in by_movie or vc > by_movie[mid][0]:
+            by_movie[mid] = (vc, pop)
+    top_movies = sorted(by_movie.values(), key=lambda x: (-x[0], -x[1]))[:6]
+    if not top_movies:
+        return 0.0
+    max_votes = top_movies[0][0]
+    top_votes_sum = sum(x[0] for x in top_movies)
+    top_pop_sum = sum(x[1] for x in top_movies)
+    return (max_votes * 0.6) + (top_votes_sum * 0.25) + (top_pop_sum * 15.0)
+
+
+def fetch_author_tmdb_profile(author_name, archive_id):
+    """Dohvaća sliku, biografiju i TMDB indeks poznatosti (popularnost osobe + top filmovi)."""
+    search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    person_res = safe_get(
+        f"{TMDB_BASE}/search/person",
+        {"api_key": TMDB_API_KEY, "query": search_person, "language": "hr-HR"}
+    )
+    candidates = (person_res or {}).get("results") or []
+    person = None
+    if candidates:
+        if search_person not in {"Elvis Presley", "Jackie Collins"}:
+            directors_only = [p for p in candidates if p.get("known_for_department") == "Directing"]
+            pool_list = directors_only if directors_only else candidates
+        else:
+            pool_list = candidates
+        person = max(pool_list, key=lambda p: float(p.get("popularity") or 0.0))
+
+    photo_url = ""
+    bio_hr = ""
+    fame_score = 0.0
+
+    if person:
+        if person.get("profile_path"):
+            photo_url = f"{TMDB_IMG_POSTER}{person['profile_path']}"
+        details = safe_get(
+            f"{TMDB_BASE}/person/{person['id']}",
+            {"api_key": TMDB_API_KEY, "language": "hr-HR", "append_to_response": "movie_credits"}
+        )
+        bio_hr = ((details or {}).get("biography") or "").strip()
+        person_pop = float((details or {}).get("popularity") or person.get("popularity") or 0.0)
+
+        credits = (details or {}).get("movie_credits") or {}
+        crew_list = credits.get("crew") or []
+        cast_list = credits.get("cast") or []
+
+        directed = [c for c in crew_list if c.get("job") == "Director"]
+        directing_score = compute_credits_score(directed)
+        other_score = compute_credits_score(crew_list + cast_list) * 0.65
+
+        fame_score = (person_pop * 120.0) + max(directing_score, other_score)
+
+    if not bio_hr:
+        bio_hr = fetch_wiki_bio(author_name)
+
+    return {
+        "name": author_name,
+        "archive_id": archive_id,
+        "photo_url": photo_url,
+        "bio_hr": bio_hr,
+        "fame_score": round(fame_score, 2)
+    }
+
+
 def run_authors_sync():
-    print("=== [AUTORI] Sinkronizacija 63 kolekcije autora i promocija u žanrove ===", flush=True)
+    print(f"=== [AUTORI] Rangiranje i sinkronizacija {len(AUTHORS)} kolekcija autora ===", flush=True)
     existing_archive_ids, seen_tmdb_movies, _, all_rows = fetch_existing_catalog_state("movie")
     author_promoted_rows = [r for r in all_rows if r.get("is_valid", True) and ",tmdb-" in (r.get("archive_id") or "")]
     promoted_counter = [0]
 
-    def process_single_author(idx_author):
-        idx, (author_name, archive_id) = idx_author
-        search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
-        person_res = safe_get(f"{TMDB_BASE}/search/person", {"api_key": TMDB_API_KEY, "query": search_person, "language": "hr-HR"})
-        person = ((person_res or {}).get("results") or [None])[0]
+    # 1. Izračun poznatosti na TMDB-u za sve autore i sortiranje od najpoznatijeg prema najmanje poznatom
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        profiles = list(pool.map(lambda a: fetch_author_tmdb_profile(a[0], a[1]), AUTHORS))
 
-        photo_url = ""
-        bio_hr = ""
-        if person:
-            if person.get("profile_path"):
-                photo_url = f"{TMDB_IMG_POSTER}{person['profile_path']}"
-            details = safe_get(f"{TMDB_BASE}/person/{person['id']}", {"api_key": TMDB_API_KEY, "language": "hr-HR"})
-            bio_hr = ((details or {}).get("biography") or "").strip()
+    profiles.sort(key=lambda p: (-p["fame_score"], p["name"]))
+    print("  Poredak autora po TMDB poznatosti (1 = najpoznatiji):", flush=True)
+    for rank_idx, prof in enumerate(profiles, start=1):
+        print(f"    {rank_idx:2d}. {prof['name']} (indeks: {prof['fame_score']:.0f})", flush=True)
 
-        if not bio_hr:
-            bio_hr = fetch_wiki_bio(author_name)
+    def process_single_author(idx_prof):
+        idx, prof = idx_prof
+        author_name = prof["name"]
+        archive_id = prof["archive_id"]
 
         saved_authors = supabase_upsert(
             "authors",
             [{
                 "name": author_name,
                 "archive_id": archive_id,
-                "bio_hr": bio_hr,
-                "photo_url": photo_url,
+                "bio_hr": prof["bio_hr"],
+                "photo_url": prof["photo_url"],
                 "sort_order": idx
             }],
             "name"
         )
         if not saved_authors:
-            return f"  [{idx}/{len(AUTHORS)}] {author_name}: greška upisa autora"
+            return f"  [{idx}/{len(profiles)}] {author_name}: greška upisa autora"
         author_db_id = saved_authors[0]["id"]
 
         videos, arch_md = get_archive_item_details(archive_id, min_size_mb=15, allow_mkv=True)
         if not videos:
-            return f"  [{idx}/{len(AUTHORS)}] {author_name}: kolekcija nedostupna/ograničena"
+            return f"  [{idx}/{len(profiles)}] {author_name}: kolekcija nedostupna/ograničena"
 
         deduped = {}
         for m in videos:
@@ -393,10 +467,10 @@ def run_authors_sync():
         if movie_rows:
             supabase_upsert("author_movies", movie_rows, "author_id,title,release_year")
 
-        return f"  [{idx}/{len(AUTHORS)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} u žanrove)"
+        return f"  [{idx}/{len(profiles)}] {author_name}: {len(movie_rows)} filmova (+{promoted_for_author} u žanrove)"
 
     with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = [pool.submit(process_single_author, item) for item in enumerate(AUTHORS, start=1)]
+        futures = [pool.submit(process_single_author, item) for item in enumerate(profiles, start=1)]
         for fut in as_completed(futures):
             print(fut.result(), flush=True)
 
