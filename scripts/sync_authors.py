@@ -102,18 +102,20 @@ AUTHORS = [
 ]
 
 
-def extract_variant_label(filename, enriched_title):
+def extract_variant_label(filename):
     base = filename.rsplit("/", 1)[-1]
     name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
     m = re.search(
-        r"(?i)\b(us\s*cut|eu\s*cut|uk\s*cut|director'?s\s*cut|extended|theatrical|unrated|uncut|restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+|1080p|720p|480p)\b",
+        r"(?i)\b("
+        r"the\s+complete\s+novel|complete\s+novel|director'?s?\s*cut|theatrical\s*cut|"
+        r"extended\s*cut|extended|final\s*cut|workprint|unrated|uncut|tv\s*cut|"
+        r"us\s*cut|eu\s*cut|uk\s*cut|restored|remastered|colorized|"
+        r"part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+|1080p|720p"
+        r")\b",
         name
     )
     if m:
-        return m.group(1).strip()
-    clean_stem, _ = clean_filename_to_title(filename, fallback_to_stem=True)
-    if clean_stem and clean_stem.lower() != enriched_title.lower():
-        return clean_stem[:32].strip()
+        return re.sub(r"\s+", " ", m.group(1)).strip()
     return ""
 
 
@@ -137,6 +139,7 @@ def title_closely_matches(clean_title, orig_title, hr_title):
     c_norm = normalize_for_exact_title_compare(clean_title)
     if len(c_norm) < 2:
         return False
+    c_letters = re.sub(r"[^a-z0-9]", "", c_norm)
     for target in (orig_title, hr_title):
         t_norm = normalize_for_exact_title_compare(target)
         if not t_norm:
@@ -145,39 +148,45 @@ def title_closely_matches(clean_title, orig_title, hr_title):
             return True
         if len(c_norm) >= 4 and len(t_norm) >= 4 and (c_norm in t_norm or t_norm in c_norm):
             return True
+        t_letters = re.sub(r"[^a-z0-9]", "", t_norm)
+        if len(c_letters) >= 4 and len(t_letters) >= 4 and (c_letters in t_letters or t_letters in c_letters):
+            return True
     return False
 
 
-def tmdb_enrich_author_movie(title, year=0, author_name=""):
-    letters_only = re.sub(r"[^a-zA-Zčćžšđа-яА-Я]", "", title)
-    if len(letters_only) < 2:
+def tmdb_enrich_author_movie(title, year=0, author_name="", filmography_credits=None):
+    cleaned_input = re.sub(r"^\s*\d{1,2}\s*[\.\-\)\]]*\s*(?=[A-Za-zČĆŽŠĐ])", "", title).strip()
+    if len(re.sub(r"[^a-zA-Zčćžšđа-яА-Я0-9]", "", cleaned_input)) < 2:
         return None
 
-    cache_key = (title.lower().strip(), year, author_name)
+    cache_key = (cleaned_input.lower(), year, author_name)
     with state_lock:
         if cache_key in author_enrich_cache:
             return author_enrich_cache[cache_key]
 
-    params = {"api_key": TMDB_API_KEY, "query": title, "language": "hr-HR", "include_adult": "false"}
-    if year > 0:
-        params["year"] = year
-    res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
-    results = (res or {}).get("results", [])
+    query_variants = [cleaned_input]
+    dehyphenated = re.sub(r"(?<=[a-zA-Z])-(?=[a-zA-Z]\b)", "", cleaned_input)
+    if dehyphenated != cleaned_input:
+        query_variants.append(dehyphenated)
 
-    if not results and year > 0:
-        params.pop("year")
+    results = []
+    for q_var in query_variants:
+        params = {"api_key": TMDB_API_KEY, "query": q_var, "language": "hr-HR", "include_adult": "false"}
+        if year > 0:
+            params["year"] = year
         res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
         results = (res or {}).get("results", [])
-
-    if not results:
-        with state_lock:
-            author_enrich_cache[cache_key] = None
-        return None
+        if not results and year > 0:
+            params.pop("year")
+            res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
+            results = (res or {}).get("results", [])
+        if results:
+            break
 
     best_match = None
     best_details = None
 
-    for candidate in results[:3]:
+    for candidate in (results or [])[:4]:
         rel_date = candidate.get("release_date") or ""
         cand_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
         if year > 0 and cand_year > 0 and abs(cand_year - year) > 2:
@@ -190,7 +199,7 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
         orig_t = details["orig_title"]
         hr_t = details["hr_title"]
         credit_ok = author_matches_tmdb_credits(author_name, details)
-        title_ok = title_closely_matches(title, orig_t, hr_t)
+        title_ok = title_closely_matches(cleaned_input, orig_t, hr_t)
 
         if credit_ok and (title_ok or (year > 0 and cand_year > 0 and abs(cand_year - year) <= 1)):
             best_match = candidate
@@ -200,6 +209,23 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
         if title_ok and year > 0 and cand_year > 0 and abs(cand_year - year) <= 1 and best_match is None:
             best_match = candidate
             best_details = details
+
+    # Rezervna provjera izravno kroz autorovu TMDB filmografiju za stilizirane naslove (npr. Gas-s-s-s -> Gas! -Or-...)
+    if not best_details and filmography_credits and year > 0:
+        first_word = re.split(r"[^a-zA-Z0-9čćžšđ]+", cleaned_input.lower())[0]
+        if len(first_word) >= 3:
+            for c in filmography_credits:
+                c_rel = c.get("release_date") or ""
+                c_year = int(c_rel[:4]) if len(c_rel) >= 4 and c_rel[:4].isdigit() else 0
+                if c_year > 0 and abs(c_year - year) <= 1:
+                    c_orig = (c.get("original_title") or "").lower()
+                    c_title = (c.get("title") or "").lower()
+                    if first_word in c_orig or first_word in c_title:
+                        det = get_tmdb_movie_details(c["id"])
+                        if det and author_matches_tmdb_credits(author_name, det):
+                            best_match = c
+                            best_details = det
+                            break
 
     if not best_match or not best_details:
         with state_lock:
@@ -211,8 +237,8 @@ def tmdb_enrich_author_movie(title, year=0, author_name=""):
     poster_path = best_details["poster_path"] or best_match.get("poster_path") or ""
 
     enriched_obj = {
-        "tmdb_id": best_match["id"],
-        "title": best_details["hr_title"] or best_match.get("title") or title,
+        "tmdb_id": best_details["tmdb_id"],
+        "title": best_details["hr_title"] or best_details["orig_title"] or cleaned_input,
         "release_year": rel_year,
         "description_hr": best_details["overview_hr"],
         "poster_url": f"{TMDB_IMG_POSTER}{poster_path}" if poster_path else "",
@@ -312,7 +338,6 @@ def fetch_author_tmdb_profile(author_name, archive_id):
             if is_future_release(rel_d):
                 continue
             vc = int(c.get("vote_count") or 0)
-            pop = float(c.get("popularity") or 0.0)
             if mid not in dedup_credits or vc > int(dedup_credits[mid].get("vote_count") or 0):
                 dedup_credits[mid] = c
 
@@ -414,7 +439,6 @@ def run_authors_sync():
     }
     promoted_counter = [0]
 
-    # 1. Izračun poznatosti na TMDB-u za sve autore i sortiranje od najpoznatijeg prema najmanje poznatom
     with ThreadPoolExecutor(max_workers=12) as pool:
         profiles = list(pool.map(lambda a: fetch_author_tmdb_profile(a[0], a[1]), AUTHORS))
 
@@ -511,9 +535,14 @@ def run_authors_sync():
         extra_found_count = 0
         valid_catalog_arch_ids = set()
 
-        # Korak A: Filmovi iz glavne Archive.org kolekcije autora
+        # Korak A: Filmovi iz glavne Archive.org kolekcije autora (uvijek s točnim TMDB naslovom kad je prepoznat)
         for item in sorted(deduped.values(), key=lambda x: x["year"], reverse=True):
-            enriched = tmdb_enrich_author_movie(item["title"], item["year"], author_name)
+            enriched = tmdb_enrich_author_movie(
+                item["title"],
+                item["year"],
+                author_name,
+                filmography_credits=prof.get("filmography_credits")
+            )
             base_title = enriched["title"] if enriched else item["title"]
             final_year = enriched["release_year"] if (enriched and enriched["release_year"]) else item["year"]
             mid = enriched["tmdb_id"] if enriched else 0
@@ -525,7 +554,7 @@ def run_authors_sync():
             if dedup_key in unique_movie_rows:
                 if unique_movie_rows[dedup_key]["stream_url"] == item["stream_url"]:
                     continue
-                variant_tag = extract_variant_label(item["filename"], base_title)
+                variant_tag = extract_variant_label(item["filename"])
                 final_title = f"{base_title} ({variant_tag})" if variant_tag else f"{base_title} (verzija {len(unique_movie_rows) + 1})"
                 dedup_key = (final_title.lower(), final_year)
 
