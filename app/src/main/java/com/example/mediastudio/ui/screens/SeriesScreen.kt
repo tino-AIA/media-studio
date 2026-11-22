@@ -1,6 +1,7 @@
 package com.example.mediastudio.ui.screens
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,8 +23,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +48,25 @@ import com.example.mediastudio.data.api.SeriesSeason
 import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+
+private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
+    var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
+    this.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown &&
+            (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+        ) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastVerticalStepTime < minIntervalMs) {
+                true
+            } else {
+                lastVerticalStepTime = now
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,11 +174,15 @@ fun SeriesScreen(
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 64.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize().padding(paddingValues)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .clipToBounds()
+                    .throttleSeriesVerticalDpad()
             ) {
-                item {
+                item(key = "series_header") {
                     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -160,7 +191,7 @@ fun SeriesScreen(
                             val posterRequest = remember(posterUrl) {
                                 ImageRequest.Builder(context)
                                     .data(posterUrl)
-                                    .size(240, 340)
+                                    .size(200, 290)
                                     .scale(Scale.FILL)
                                     .bitmapConfig(Bitmap.Config.RGB_565)
                                     .allowHardware(false)
@@ -271,7 +302,10 @@ fun SeriesScreen(
                     }
                 }
 
-                items(visibleEpisodes) { episode ->
+                items(
+                    items = visibleEpisodes,
+                    key = { ep -> "${selectedSeasonIndex}_${ep.episodeNumber}_${ep.fileUrl}" }
+                ) { episode ->
                     EpisodeRowItem(episode = episode, onClick = { onEpisodeClick(episode) })
                 }
             }
