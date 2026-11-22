@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -227,7 +228,7 @@ fun DetailsScreen(
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0A0A0A).copy(alpha = 0.96f))
             )
         },
         containerColor = Color.Black
@@ -236,6 +237,7 @@ fun DetailsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .clipToBounds()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -525,7 +527,7 @@ fun DetailsScreen(
                         modifier = Modifier.padding(top = 20.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(30.dp))
+                Spacer(modifier = Modifier.height(64.dp))
             }
         }
     }
