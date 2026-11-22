@@ -7,15 +7,45 @@ android {
     namespace = "com.example.mediastudio"
     compileSdk = 34
 
+    val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 2
+
     defaultConfig {
         applicationId = "com.example.mediastudio"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-        
+        versionCode = runNumber
+        versionName = "1.$runNumber"
+
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    val ksPath = System.getenv("KEYSTORE_PATH")
+    val hasPersistentKey = !ksPath.isNullOrBlank() && file(ksPath).exists()
+
+    if (hasPersistentKey) {
+        signingConfigs {
+            create("persistent") {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            if (hasPersistentKey) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
+        }
+        getByName("release") {
+            isMinifyEnabled = false
+            if (hasPersistentKey) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
         }
     }
 
@@ -23,7 +53,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
-    
+
     kotlinOptions {
         jvmTarget = "1.8"
     }
@@ -31,7 +61,7 @@ android {
     buildFeatures {
         compose = true
     }
-    
+
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
