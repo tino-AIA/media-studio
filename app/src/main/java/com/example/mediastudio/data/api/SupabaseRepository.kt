@@ -62,11 +62,13 @@ object SupabaseRepository {
     private const val SUPABASE_REST_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
     private const val SUPABASE_PUBLISHABLE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
 
-    private const val CATALOG_LITE_COLUMNS =
+    // Samo lagana polja potrebna za kartice i filtriranje (bez opisnih tekstova, backdropa i epizoda)
+    private const val CATALOG_ULTRA_LITE_COLUMNS =
         "id,archive_id,tmdb_id,title,media_type,genres,release_year,rating,popularity_score," +
-            "description_hr,poster_url,backdrop_url,stream_url,is_featured,is_valid,tmdb_runtime,archive_runtime"
+            "poster_url,stream_url,is_featured,is_valid,tmdb_runtime,archive_runtime"
 
-    private var cacheDir: File? = null
+    private var filesDirRef: File? = null
+    private var cacheDirRef: File? = null
 
     @Volatile
     private var catalogItems: List<SupabaseCatalogItem> = emptyList()
@@ -74,31 +76,40 @@ object SupabaseRepository {
     @Volatile
     private var authors: List<SupabaseAuthor> = emptyList()
 
-    @Volatile
-    private var authorMovies: List<SupabaseAuthorMovie> = emptyList()
-
     private val posterByArchiveId = ConcurrentHashMap<String, String>()
     private val posterByTitle = ConcurrentHashMap<String, String>()
     private val itemByArchiveId = ConcurrentHashMap<String, SupabaseCatalogItem>()
     private val itemByStreamUrl = ConcurrentHashMap<String, SupabaseCatalogItem>()
-    private val authorMovieByStreamUrl = ConcurrentHashMap<String, SupabaseAuthorMovie>()
+
+    // Ograničene priručne memorije koje se učitavaju tek na klik i redovito čiste
     private val episodesByArchiveId = ConcurrentHashMap<String, List<SupabaseEpisodeItem>>()
+    private val descriptionByArchiveId = ConcurrentHashMap<String, String>()
+    private val authorMoviesByAuthorId = ConcurrentHashMap<Long, List<SupabaseAuthorMovie>>()
+    private val authorMovieByStreamUrl = ConcurrentHashMap<String, SupabaseAuthorMovie>()
 
     fun init(context: Context) {
-        if (cacheDir == null) {
-            val dir = context.applicationContext.filesDir
-            cacheDir = dir
-            // Obriši staru preveliku predmemoriju koja je sadržavala sve epizode u RAM-u
-            try {
-                File(dir, "supabase_catalog_cache.json").delete()
-            } catch (_: Exception) {
+        if (filesDirRef == null) {
+            val appCtx = context.applicationContext
+            val fDir = appCtx.filesDir
+            filesDirRef = fDir
+            cacheDirRef = appCtx.cacheDir
+            // Ukloni stare teške cache datoteke s diska
+            listOf(
+                "supabase_catalog_cache.json",
+                "supabase_catalog_lite_v2.json",
+                "supabase_author_movies_cache.json"
+            ).forEach { oldName ->
+                try {
+                    File(fDir, oldName).delete()
+                } catch (_: Exception) {
+                }
             }
             loadFromDiskCache()
         }
     }
 
     private fun readCacheFile(fileName: String): String? {
-        val dir = cacheDir ?: return null
+        val dir = filesDirRef ?: return null
         val file = File(dir, fileName)
         return try {
             if (file.exists() && file.length() > 2) file.readText(Charsets.UTF_8) else null
@@ -108,7 +119,7 @@ object SupabaseRepository {
     }
 
     private fun writeCacheFile(fileName: String, content: String) {
-        val dir = cacheDir ?: return
+        val dir = filesDirRef ?: return
         try {
             File(dir, fileName).writeText(content, Charsets.UTF_8)
         } catch (_: Exception) {
@@ -116,7 +127,7 @@ object SupabaseRepository {
     }
 
     private fun loadFromDiskCache() {
-        readCacheFile("supabase_catalog_lite_v2.json")?.let { jsonStr ->
+        readCacheFile("supabase_catalog_ultralite_v3.json")?.let { jsonStr ->
             try {
                 updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr)))
             } catch (_: Exception) {
@@ -128,22 +139,16 @@ object SupabaseRepository {
             } catch (_: Exception) {
             }
         }
-        readCacheFile("supabase_author_movies_cache.json")?.let { jsonStr ->
-            try {
-                updateAuthorMoviesMemory(parseAuthorMoviesArray(JSONArray(jsonStr)))
-            } catch (_: Exception) {
-            }
-        }
     }
 
     suspend fun syncFromSupabase(): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
 
         val catalogArr = fetchAllPaginated(
-            "catalog_items?select=$CATALOG_LITE_COLUMNS&is_valid=eq.true&order=popularity_score.desc"
+            "catalog_items?select=$CATALOG_ULTRA_LITE_COLUMNS&is_valid=eq.true&order=popularity_score.desc"
         )
         if (catalogArr != null && catalogArr.length() > 0) {
-            writeCacheFile("supabase_catalog_lite_v2.json", catalogArr.toString())
+            writeCacheFile("supabase_catalog_ultralite_v3.json", catalogArr.toString())
             updateCatalogMemory(parseCatalogArray(catalogArr))
             anySuccess = true
         }
@@ -155,14 +160,57 @@ object SupabaseRepository {
             anySuccess = true
         }
 
-        val authorMoviesArr = fetchAllPaginated("author_movies?select=*&order=release_year.desc")
-        if (authorMoviesArr != null && authorMoviesArr.length() > 0) {
-            writeCacheFile("supabase_author_movies_cache.json", authorMoviesArr.toString())
-            updateAuthorMoviesMemory(parseAuthorMoviesArray(authorMoviesArr))
-            anySuccess = true
-        }
-
         anySuccess || catalogItems.isNotEmpty()
+    }
+
+    suspend fun loadItemDescription(archiveId: String): String = withContext(Dispatchers.IO) {
+        val cleanId = archiveId.substringBefore(",tmdb-").trim()
+        descriptionByArchiveId[archiveId]?.takeIf { it.isNotBlank() }?.let { return@withContext it }
+        descriptionByArchiveId[cleanId]?.takeIf { it.isNotBlank() }?.let { return@withContext it }
+
+        try {
+            val encodedId = URLEncoder.encode(archiveId, "UTF-8")
+            var arr = fetchJsonArrayPage("catalog_items?select=description_hr&archive_id=eq.$encodedId&limit=1", 0, 0)
+            if ((arr == null || arr.length() == 0) && cleanId != archiveId) {
+                val encodedClean = URLEncoder.encode(cleanId, "UTF-8")
+                arr = fetchJsonArrayPage("catalog_items?select=description_hr&archive_id=eq.$encodedClean&limit=1", 0, 0)
+            }
+            val desc = arr?.optJSONObject(0)?.optString("description_hr", "")?.trim().orEmpty()
+            if (desc.isNotEmpty()) {
+                if (descriptionByArchiveId.size > 50) descriptionByArchiveId.clear()
+                descriptionByArchiveId[archiveId] = desc
+                descriptionByArchiveId[cleanId] = desc
+            }
+            desc
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    suspend fun loadAuthorMoviesById(authorId: Long): List<SupabaseAuthorMovie> = withContext(Dispatchers.IO) {
+        authorMoviesByAuthorId[authorId]?.takeIf { it.isNotEmpty() }?.let { return@withContext it }
+        try {
+            val arr = fetchAllPaginated("author_movies?select=*&author_id=eq.$authorId&order=release_year.desc")
+            val parsed = if (arr != null) parseAuthorMoviesArray(arr) else emptyList()
+            if (parsed.isNotEmpty()) {
+                if (authorMoviesByAuthorId.size > 8) {
+                    authorMoviesByAuthorId.clear()
+                    authorMovieByStreamUrl.clear()
+                }
+                authorMoviesByAuthorId[authorId] = parsed
+                for (m in parsed) {
+                    if (m.streamUrl.isNotBlank()) {
+                        authorMovieByStreamUrl[m.streamUrl] = m
+                    }
+                    if (m.posterUrl.isNotBlank()) {
+                        posterByTitle[m.title.lowercase().trim()] = m.posterUrl
+                    }
+                }
+            }
+            parsed
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     suspend fun loadSeriesEpisodes(archiveId: String): List<SupabaseEpisodeItem> = withContext(Dispatchers.IO) {
@@ -176,12 +224,38 @@ object SupabaseRepository {
             val obj = arr?.optJSONObject(0)
             val parsed = parseEpisodesArray(obj?.optJSONArray("episodes"))
             if (parsed.isNotEmpty()) {
+                if (episodesByArchiveId.size > 12) episodesByArchiveId.clear()
                 episodesByArchiveId[archiveId] = parsed
                 episodesByArchiveId[cleanId] = parsed
             }
             parsed
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * Oslobađa nakupljene opise, epizode i stare privremene datoteke s diska kako bi Firestick radio stabilno.
+     */
+    fun trimMemoryCaches() {
+        episodesByArchiveId.clear()
+        descriptionByArchiveId.clear()
+        if (authorMoviesByAuthorId.size > 3) {
+            authorMoviesByAuthorId.clear()
+            authorMovieByStreamUrl.clear()
+        }
+        val cDir = cacheDirRef ?: return
+        try {
+            val now = System.currentTimeMillis()
+            val maxAgeMs = 20 * 60 * 1000L
+            cDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("parallel_stream_")) {
+                    f.deleteRecursively()
+                } else if (f.isFile && (now - f.lastModified()) > maxAgeMs) {
+                    f.delete()
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -220,21 +294,6 @@ object SupabaseRepository {
         posterByArchiveId.putAll(nextPosterById)
     }
 
-    private fun updateAuthorMoviesMemory(movies: List<SupabaseAuthorMovie>) {
-        authorMovies = movies
-        val nextByStream = HashMap<String, SupabaseAuthorMovie>(movies.size)
-        for (m in movies) {
-            if (m.streamUrl.isNotBlank()) {
-                nextByStream[m.streamUrl] = m
-            }
-            if (m.posterUrl.isNotBlank()) {
-                posterByTitle[m.title.lowercase().trim()] = m.posterUrl
-            }
-        }
-        authorMovieByStreamUrl.clear()
-        authorMovieByStreamUrl.putAll(nextByStream)
-    }
-
     fun getCatalogItems(): List<SupabaseCatalogItem> = catalogItems
 
     fun getAuthors(): List<SupabaseAuthor> = authors
@@ -242,8 +301,7 @@ object SupabaseRepository {
     fun getAuthorWithMovies(authorName: String): Pair<SupabaseAuthor?, List<SupabaseAuthorMovie>> {
         val author = authors.find { it.name.equals(authorName, ignoreCase = true) }
         val movies = if (author != null) {
-            authorMovies.filter { it.authorId == author.id }
-                .sortedByDescending { it.releaseYear }
+            authorMoviesByAuthorId[author.id].orEmpty().sortedByDescending { it.releaseYear }
         } else {
             emptyList()
         }
@@ -254,11 +312,11 @@ object SupabaseRepository {
         val cleanId = archiveId.substringBefore(",tmdb-").trim()
         val base = itemByArchiveId[archiveId] ?: itemByArchiveId[cleanId] ?: return null
         val cachedEps = episodesByArchiveId[base.archiveId] ?: episodesByArchiveId[cleanId]
-        return if (!cachedEps.isNullOrEmpty() && base.episodes.isEmpty()) {
-            base.copy(episodes = cachedEps)
-        } else {
-            base
-        }
+        val cachedDesc = descriptionByArchiveId[base.archiveId] ?: descriptionByArchiveId[cleanId]
+        return base.copy(
+            episodes = if (!cachedEps.isNullOrEmpty()) cachedEps else base.episodes,
+            descriptionHr = cachedDesc?.takeIf { it.isNotBlank() } ?: base.descriptionHr
+        )
     }
 
     fun findByStreamUrl(streamUrl: String): Pair<String, String>? {
@@ -266,7 +324,8 @@ object SupabaseRepository {
             return it.posterUrl to it.descriptionHr
         }
         itemByStreamUrl[streamUrl]?.let {
-            return it.posterUrl to it.descriptionHr
+            val desc = descriptionByArchiveId[it.archiveId] ?: it.descriptionHr
+            return it.posterUrl to desc
         }
         return null
     }
