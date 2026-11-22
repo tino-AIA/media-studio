@@ -72,6 +72,7 @@ fun SeriesScreen(
     LaunchedEffect(series.identifier) {
         isLoading = true
         posterUrl = PosterFetcher.fetchPoster(series.title, isSeries = true, firstArchiveId)
+        SupabaseRepository.loadSeriesEpisodes(series.identifier)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
         seriesDescription = fullInfo.description
         seasons = fullInfo.seasons
