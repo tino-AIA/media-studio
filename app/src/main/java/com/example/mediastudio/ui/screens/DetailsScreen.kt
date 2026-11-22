@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -26,11 +27,14 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import coil.size.Scale
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.MovieFullInfo
 import com.example.mediastudio.data.api.PosterFetcher
@@ -56,6 +60,7 @@ fun DetailsScreen(
     onMovieSelectFromList: ((ArchiveMovie) -> Unit)? = null,
     onBackClick: () -> Unit
 ) {
+    val context = LocalContext.current
     var movieInfo by remember { mutableStateOf<MovieFullInfo?>(null) }
     var translatedDescription by remember { mutableStateOf("") }
     var imageUrl by remember { mutableStateOf("") }
@@ -87,7 +92,12 @@ fun DetailsScreen(
 
         if (isAuthorMode) {
             val authorName = movie.identifier.substringAfter("AUTHOR|")
-            val (sbAuthor, sbMovies) = SupabaseRepository.getAuthorWithMovies(authorName)
+            val sbAuthor = SupabaseRepository.getAuthors().find { it.name.equals(authorName, ignoreCase = true) }
+            val sbMovies = if (sbAuthor != null) {
+                SupabaseRepository.loadAuthorMoviesById(sbAuthor.id)
+            } else {
+                emptyList()
+            }
 
             if (sbAuthor != null && sbMovies.isNotEmpty()) {
                 isSupabaseAuthorList = true
@@ -120,13 +130,20 @@ fun DetailsScreen(
             val sbCatalogMatch = SupabaseRepository.getCatalogItems().find { it.streamUrl == movie.identifier }
             if (sbMatch != null) {
                 imageUrl = sbMatch.first
-                translatedDescription = sbMatch.second.ifBlank {
-                    sbCatalogMatch?.descriptionHr?.takeIf { it.isNotBlank() }
-                        ?: fetchMoviePlotFallback(movie.title, sbCatalogMatch?.releaseYear ?: 0)
+                val dbDesc = sbMatch.second.ifBlank {
+                    sbCatalogMatch?.let {
+                        it.descriptionHr.ifBlank { SupabaseRepository.loadItemDescription(it.archiveId) }
+                    }.orEmpty()
+                }
+                translatedDescription = dbDesc.ifBlank {
+                    fetchMoviePlotFallback(movie.title, sbCatalogMatch?.releaseYear ?: 0)
                 }
             } else if (sbCatalogMatch != null) {
                 imageUrl = sbCatalogMatch.posterUrl
-                translatedDescription = sbCatalogMatch.descriptionHr.ifBlank {
+                val dbDesc = sbCatalogMatch.descriptionHr.ifBlank {
+                    SupabaseRepository.loadItemDescription(sbCatalogMatch.archiveId)
+                }
+                translatedDescription = dbDesc.ifBlank {
                     fetchMoviePlotFallback(sbCatalogMatch.title, sbCatalogMatch.releaseYear)
                 }
             } else {
@@ -142,12 +159,15 @@ fun DetailsScreen(
                     PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
                 }
                 val yearStr = if (sbItem.releaseYear > 0) sbItem.releaseYear.toString() else (movie.year ?: "")
+                val dbDescription = sbItem.descriptionHr.ifBlank {
+                    SupabaseRepository.loadItemDescription(movie.identifier)
+                }
 
                 if (movie.identifier.contains(",tmdb-")) {
                     val authorSlug = movie.identifier.substringBefore(",tmdb-")
                     val matchedAuthor = SupabaseRepository.getAuthors()
                         .find { it.archiveId.equals(authorSlug, ignoreCase = true) }?.name ?: ""
-                    val desc = sbItem.descriptionHr.ifBlank {
+                    val desc = dbDescription.ifBlank {
                         fetchMoviePlotFallback(sbItem.title, sbItem.releaseYear)
                     }
                     translatedDescription = desc
@@ -161,7 +181,7 @@ fun DetailsScreen(
                     val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
                     movieInfo = info.copy(year = yearStr.ifEmpty { info.year })
                     val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else translateToCroatian(info.description)
-                    translatedDescription = sbItem.descriptionHr
+                    translatedDescription = dbDescription
                         .ifBlank { cleanArchiveDesc }
                         .ifBlank { fetchMoviePlotFallback(sbItem.title, sbItem.releaseYear) }
                 }
@@ -221,8 +241,17 @@ fun DetailsScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (imageUrl.isNotEmpty()) {
+                val detailImageRequest = remember(imageUrl) {
+                    ImageRequest.Builder(context)
+                        .data(imageUrl)
+                        .size(360, 510)
+                        .scale(Scale.FILL)
+                        .bitmapConfig(Bitmap.Config.RGB_565)
+                        .allowHardware(false)
+                        .build()
+                }
                 Image(
-                    painter = rememberAsyncImagePainter(imageUrl),
+                    painter = rememberAsyncImagePainter(detailImageRequest),
                     contentDescription = movie.title,
                     modifier = Modifier
                         .width(180.dp)
