@@ -1,0 +1,28 @@
+name: Generate Signing Key
+on:
+  workflow_dispatch:
+
+jobs:
+  keygen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate keystore and Base64
+        run: |
+          keytool -genkeypair -v \
+            -keystore mediastudio-key.jks \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -alias mediastudio \
+            -storepass MediaStudio2026 \
+            -keypass MediaStudio2026 \
+            -dname "CN=MediaStudio, O=MediaStudio, C=HR"
+          base64 -w 0 mediastudio-key.jks > mediastudio-key-base64.txt
+
+      - name: Upload keystore files
+        uses: actions/upload-artifact@v4
+        with:
+          name: mediastudio-signing-key
+          path: |
+            mediastudio-key.jks
+            mediastudio-key-base64.txt
