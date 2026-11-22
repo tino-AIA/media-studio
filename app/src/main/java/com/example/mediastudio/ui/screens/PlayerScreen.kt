@@ -1,9 +1,7 @@
 package com.example.mediastudio.ui.screens
 
 import android.app.Activity
-import android.content.Context
 import android.content.pm.ActivityInfo
-import android.net.Uri
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -44,16 +42,13 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.BaseDataSource
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
@@ -71,19 +66,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToLong
 
 private const val SUBTITLES_SUPABASE_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
@@ -122,358 +112,6 @@ private data class ParsedEpisodeContext(
     val episodeTitle: String
 )
 
-/**
- * Ubrzava reprodukciju velikih HD datoteka s Archive.org-a:
- * - Jednokratno razrješava 302 preusmjeravanje na ciljni storage poslužitelj
- * - Preuzima 12 MB unaprijed u blokovima od 1 MB kroz 4 paralelne Range HTTP veze
- * - Poslužuje ExoPlayer iz RAM/disk kliznog spremnika bez mrežnih zastoja
- */
-private class ParallelStreamCacheManager(context: Context) {
-    companion object {
-        const val CHUNK_SIZE = 1_048_576L // 1 MB po bloku
-        const val PREFETCH_AHEAD_CHUNKS = 12 // 12 MB unaprijed (štedi RAM na Firesticku)
-        const val KEEP_BEHIND_CHUNKS = 2 // 2 MB iza pozicije gledanja
-    }
-
-    private val cacheRoot = File(context.cacheDir, "parallel_stream_${System.nanoTime()}").apply {
-        mkdirs()
-    }
-    private val workerPool = Executors.newFixedThreadPool(4)
-    private val entries = ConcurrentHashMap<String, StreamEntry>()
-    private val ramChunkCache = ConcurrentHashMap<String, ByteArray>()
-
-    @Volatile
-    private var isClosed = false
-
-    class StreamEntry(
-        val id: String,
-        val originalUrl: String
-    ) {
-        @Volatile
-        var resolvedUrl: String = originalUrl
-
-        @Volatile
-        var totalSize: Long = -1L // -1 = nije još provjereno, -2 = Range nije podržan (koristi fallback)
-
-        val lock = Object()
-        val completedChunks = HashSet<Long>()
-        val inFlightChunks = HashSet<Long>()
-        val failedChunks = HashMap<Long, Int>()
-    }
-
-    fun getOrProbeEntry(url: String): StreamEntry? {
-        if (isClosed || !url.contains("archive.org/download/", ignoreCase = true)) return null
-        val entry = entries.computeIfAbsent(url) {
-            StreamEntry(id = abs(url.hashCode()).toString(), originalUrl = url)
-        }
-        if (entry.totalSize >= 0L) return entry
-        if (entry.totalSize == -2L) return null
-
-        synchronized(entry.lock) {
-            if (entry.totalSize >= 0L) return entry
-            if (entry.totalSize == -2L) return null
-            try {
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.instanceFollowRedirects = true
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", STREAM_USER_AGENT)
-                conn.setRequestProperty("Range", "bytes=0-1")
-                conn.setRequestProperty("Accept-Encoding", "identity")
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 12_000
-                val code = conn.responseCode
-                val contentRange = conn.getHeaderField("Content-Range").orEmpty()
-                val finalUrl = conn.url?.toString()?.takeIf { it.startsWith("http") } ?: url
-                conn.inputStream?.close()
-                conn.disconnect()
-
-                val total = contentRange.substringAfter("/", "").trim().toLongOrNull() ?: -1L
-                if (code == 206 && total > CHUNK_SIZE) {
-                    entry.resolvedUrl = finalUrl
-                    entry.totalSize = total
-                    return entry
-                }
-            } catch (_: Exception) {
-            }
-            entry.totalSize = -2L
-            return null
-        }
-    }
-
-    fun scheduleWindow(entry: StreamEntry, currentChunk: Long) {
-        if (isClosed || entry.totalSize <= 0L) return
-        val maxChunk = (entry.totalSize - 1L) / CHUNK_SIZE
-        val fromChunk = currentChunk.coerceIn(0L, maxChunk)
-        val toChunk = min(maxChunk, fromChunk + PREFETCH_AHEAD_CHUNKS)
-
-        // Očisti stare blokove iza trenutne pozicije gledanja
-        val pruneBefore = fromChunk - KEEP_BEHIND_CHUNKS
-        if (pruneBefore > 0L) {
-            synchronized(entry.lock) {
-                val toRemove = entry.completedChunks.filter { it < pruneBefore }
-                for (oldIdx in toRemove) {
-                    entry.completedChunks.remove(oldIdx)
-                    ramChunkCache.remove("${entry.id}_$oldIdx")
-                    File(cacheRoot, "${entry.id}_$oldIdx.bin").delete()
-                }
-            }
-        }
-
-        for (idx in fromChunk..toChunk) {
-            val shouldSubmit = synchronized(entry.lock) {
-                if (idx !in entry.completedChunks &&
-                    idx !in entry.inFlightChunks &&
-                    (entry.failedChunks[idx] ?: 0) < 3
-                ) {
-                    entry.inFlightChunks.add(idx)
-                    true
-                } else {
-                    false
-                }
-            }
-            if (shouldSubmit) {
-                workerPool.submit {
-                    downloadSingleChunk(entry, idx)
-                }
-            }
-        }
-    }
-
-    private fun downloadSingleChunk(entry: StreamEntry, chunkIdx: Long) {
-        if (isClosed) return
-        val startByte = chunkIdx * CHUNK_SIZE
-        val endByte = min(entry.totalSize - 1L, startByte + CHUNK_SIZE - 1L)
-        val expectedLen = (endByte - startByte + 1L).toInt()
-        val finalFile = File(cacheRoot, "${entry.id}_$chunkIdx.bin")
-        val tmpFile = File(cacheRoot, "${entry.id}_$chunkIdx.tmp")
-
-        var success = false
-        for (attempt in 0 until 3) {
-            if (isClosed) break
-            var conn: HttpURLConnection? = null
-            try {
-                val targetUrl = if (attempt == 2) entry.originalUrl else entry.resolvedUrl
-                conn = URL(targetUrl).openConnection() as HttpURLConnection
-                conn.instanceFollowRedirects = true
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", STREAM_USER_AGENT)
-                conn.setRequestProperty("Range", "bytes=$startByte-$endByte")
-                conn.setRequestProperty("Accept-Encoding", "identity")
-                conn.setRequestProperty("Connection", "keep-alive")
-                conn.connectTimeout = 12_000
-                conn.readTimeout = 25_000
-
-                val code = conn.responseCode
-                if (code == 206 || code == 200) {
-                    val newResolved = conn.url?.toString()
-                    if (!newResolved.isNullOrBlank() && newResolved.startsWith("http")) {
-                        entry.resolvedUrl = newResolved
-                    }
-                    var totalRead = 0
-                    conn.inputStream.use { input ->
-                        FileOutputStream(tmpFile).use { out ->
-                            val buf = ByteArray(32 * 1024)
-                            var r = input.read(buf)
-                            while (!isClosed && r != -1) {
-                                out.write(buf, 0, r)
-                                totalRead += r
-                                r = input.read(buf)
-                            }
-                        }
-                    }
-                    if (totalRead >= expectedLen && tmpFile.exists()) {
-                        if (finalFile.exists()) finalFile.delete()
-                        if (tmpFile.renameTo(finalFile)) {
-                            success = true
-                            break
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                try {
-                    Thread.sleep(150L * (attempt + 1))
-                } catch (_: InterruptedException) {
-                    break
-                }
-            } finally {
-                try {
-                    conn?.disconnect()
-                } catch (_: Exception) {
-                }
-            }
-        }
-
-        if (!success) {
-            tmpFile.delete()
-        }
-
-        synchronized(entry.lock) {
-            entry.inFlightChunks.remove(chunkIdx)
-            if (success) {
-                entry.completedChunks.add(chunkIdx)
-            } else {
-                entry.failedChunks[chunkIdx] = (entry.failedChunks[chunkIdx] ?: 0) + 1
-            }
-            entry.lock.notifyAll()
-        }
-    }
-
-    fun getChunkBytesBlocking(entry: StreamEntry, chunkIdx: Long): ByteArray? {
-        val ramKey = "${entry.id}_$chunkIdx"
-        ramChunkCache[ramKey]?.let { return it }
-
-        scheduleWindow(entry, chunkIdx)
-
-        while (!isClosed) {
-            var shouldWait = false
-            synchronized(entry.lock) {
-                if (chunkIdx in entry.completedChunks) {
-                    shouldWait = false
-                } else if ((entry.failedChunks[chunkIdx] ?: 0) >= 3) {
-                    return null
-                } else {
-                    shouldWait = true
-                    try {
-                        entry.lock.wait(250L)
-                    } catch (_: InterruptedException) {
-                        return null
-                    }
-                }
-            }
-            if (!shouldWait) break
-        }
-
-        if (isClosed) return null
-        val file = File(cacheRoot, "${entry.id}_$chunkIdx.bin")
-        return try {
-            if (!file.exists()) return null
-            val bytes = file.readBytes()
-            if (ramChunkCache.size > 3) {
-                ramChunkCache.clear()
-            }
-            ramChunkCache[ramKey] = bytes
-            bytes
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    fun shutdown() {
-        isClosed = true
-        entries.values.forEach { entry ->
-            synchronized(entry.lock) {
-                entry.lock.notifyAll()
-            }
-        }
-        workerPool.shutdownNow()
-        ramChunkCache.clear()
-        try {
-            cacheRoot.deleteRecursively()
-        } catch (_: Exception) {
-        }
-    }
-}
-
-@OptIn(UnstableApi::class)
-private class ParallelArchiveDataSource(
-    private val cacheManager: ParallelStreamCacheManager,
-    private val fallbackDataSource: HttpDataSource
-) : BaseDataSource(/* isNetwork = */ true) {
-
-    private var currentUri: Uri? = null
-    private var activeEntry: ParallelStreamCacheManager.StreamEntry? = null
-    private var readPosition: Long = 0L
-    private var bytesRemaining: Long = 0L
-    private var usingFallback: Boolean = false
-    private var opened: Boolean = false
-
-    override fun open(dataSpec: DataSpec): Long {
-        transferInitializing(dataSpec)
-        currentUri = dataSpec.uri
-        val url = dataSpec.uri.toString()
-
-        val entry = cacheManager.getOrProbeEntry(url)
-        if (entry != null && entry.totalSize > 0L) {
-            usingFallback = false
-            activeEntry = entry
-            readPosition = dataSpec.position
-            val available = (entry.totalSize - readPosition).coerceAtLeast(0L)
-            bytesRemaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
-                min(dataSpec.length, available)
-            } else {
-                available
-            }
-            cacheManager.scheduleWindow(entry, readPosition / ParallelStreamCacheManager.CHUNK_SIZE)
-            opened = true
-            transferStarted(dataSpec)
-            return bytesRemaining
-        } else {
-            usingFallback = true
-            activeEntry = null
-            opened = true
-            val len = fallbackDataSource.open(dataSpec)
-            transferStarted(dataSpec)
-            return len
-        }
-    }
-
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (length == 0) return 0
-        if (usingFallback) {
-            val read = fallbackDataSource.read(buffer, offset, length)
-            if (read > 0) bytesTransferred(read)
-            return read
-        }
-
-        if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
-        val entry = activeEntry ?: return C.RESULT_END_OF_INPUT
-
-        val chunkIdx = readPosition / ParallelStreamCacheManager.CHUNK_SIZE
-        val offsetInChunk = (readPosition % ParallelStreamCacheManager.CHUNK_SIZE).toInt()
-        val chunkBytes = cacheManager.getChunkBytesBlocking(entry, chunkIdx)
-            ?: throw IOException("Prekid preuzimanja bloka $chunkIdx s Archive.org-a")
-
-        val availableInChunk = (chunkBytes.size - offsetInChunk).coerceAtLeast(0)
-        if (availableInChunk == 0) return C.RESULT_END_OF_INPUT
-
-        val toCopy = min(min(length.toLong(), bytesRemaining), availableInChunk.toLong()).toInt()
-        System.arraycopy(chunkBytes, offsetInChunk, buffer, offset, toCopy)
-
-        readPosition += toCopy
-        bytesRemaining -= toCopy
-        bytesTransferred(toCopy)
-        return toCopy
-    }
-
-    override fun getUri(): Uri? = currentUri
-
-    override fun close() {
-        currentUri = null
-        activeEntry = null
-        if (usingFallback) {
-            try {
-                fallbackDataSource.close()
-            } catch (_: Exception) {
-            }
-            usingFallback = false
-        }
-        if (opened) {
-            opened = false
-            transferEnded()
-        }
-    }
-}
-
-@OptIn(UnstableApi::class)
-private class ParallelArchiveDataSourceFactory(
-    private val cacheManager: ParallelStreamCacheManager,
-    private val fallbackFactory: HttpDataSource.Factory
-) : DataSource.Factory {
-    override fun createDataSource(): DataSource {
-        return ParallelArchiveDataSource(cacheManager, fallbackFactory.createDataSource())
-    }
-}
-
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -502,6 +140,7 @@ fun PlayerScreen(
     var activeStreamUrl by remember { mutableStateOf("") }
     var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
     var triedMp4Fallback by remember { mutableStateOf(false) }
+    var midStreamRetryCount by remember { mutableIntStateOf(0) }
     var playbackErrorMessage by remember { mutableStateOf("") }
 
     var quickHudMessage by remember { mutableStateOf("") }
@@ -533,8 +172,6 @@ fun PlayerScreen(
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
-    val streamCacheManager = remember { ParallelStreamCacheManager(context.applicationContext) }
-
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, 32 * 1024))
@@ -560,11 +197,6 @@ fun PlayerScreen(
                 )
             )
 
-        val parallelDataSourceFactory = ParallelArchiveDataSourceFactory(
-            cacheManager = streamCacheManager,
-            fallbackFactory = httpDataSourceFactory
-        )
-
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
 
@@ -575,7 +207,10 @@ fun PlayerScreen(
 
         val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(parallelDataSourceFactory))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(httpDataSourceFactory)
+                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+            )
             .build()
 
         player.setAudioAttributes(audioAttributes, true)
@@ -643,6 +278,7 @@ fun PlayerScreen(
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedMp4Fallback = false
+        midStreamRetryCount = 0
         mp4FallbackUrlOverride = null
         playbackErrorMessage = ""
         isBuffering = true
@@ -683,7 +319,7 @@ fun PlayerScreen(
         }
         resolvedMovieYear = effectiveYear
 
-        // 1. Pokreni video stream odmah (100% mrežnog kapaciteta za početni buffer)
+        // 1. Pokreni video stream odmah (100% mrežnog kapaciteta za početni buffer u RAM-u)
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             directVideoUrl
         } else {
@@ -748,6 +384,7 @@ fun PlayerScreen(
                     selectedVersion = bestOption
                     activeStreamUrl = bestOption.url
                     detectedVideoFps = 0f
+                    midStreamRetryCount = 0
                     exoPlayer.setMediaItem(MediaItem.fromUri(bestOption.url), resumePos)
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
@@ -1004,6 +641,21 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
+                // Automatski nastavi s točne pozicije ako je veza s Archive.org-om nakratko pukla usred filma
+                if (resumePos > 3_000L && midStreamRetryCount < 3 && activeStreamUrl.isNotBlank()) {
+                    midStreamRetryCount++
+                    isBuffering = true
+                    playbackErrorMessage = ""
+                    coroutineScope.launch {
+                        delay(1000L * midStreamRetryCount)
+                        exoPlayer.setMediaItem(MediaItem.fromUri(activeStreamUrl), resumePos)
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                    }
+                    return
+                }
+
                 if (!triedMp4Fallback && (mp4FallbackUrlOverride != null || activeStreamUrl.contains("archive.org/download/"))) {
                     triedMp4Fallback = true
                     isBuffering = true
@@ -1011,7 +663,8 @@ fun PlayerScreen(
                         val mp4Alternative = mp4FallbackUrlOverride ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
                         if (mp4Alternative != null && mp4Alternative != activeStreamUrl) {
                             activeStreamUrl = mp4Alternative
-                            exoPlayer.setMediaItem(MediaItem.fromUri(mp4Alternative), 0L)
+                            midStreamRetryCount = 0
+                            exoPlayer.setMediaItem(MediaItem.fromUri(mp4Alternative), resumePos)
                             exoPlayer.prepare()
                             exoPlayer.playWhenReady = true
                         } else {
@@ -1054,7 +707,6 @@ fun PlayerScreen(
         onDispose {
             exoPlayer.removeListener(listener)
             exoPlayer.release()
-            streamCacheManager.shutdown()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -1184,11 +836,11 @@ fun PlayerScreen(
         if (playbackErrorMessage.isNotEmpty() && !isBuffering) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 36.dp)
+                    .align(Alignment.TopCenter)
+                    .padding(top = 84.dp, start = 36.dp, end = 36.dp)
                     .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
                     .border(1.5.dp, Color.Red, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 24.dp, vertical = 18.dp)
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
             ) {
                 Text(
                     text = playbackErrorMessage,
@@ -1548,6 +1200,7 @@ fun PlayerScreen(
                                     selectedVersion = version
                                     activeStreamUrl = version.url
                                     detectedVideoFps = 0f
+                                    midStreamRetryCount = 0
                                     exoPlayer.setMediaItem(MediaItem.fromUri(version.url), savedPos)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
