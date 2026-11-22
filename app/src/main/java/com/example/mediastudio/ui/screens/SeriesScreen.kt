@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -24,11 +25,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import coil.size.Scale
 import com.example.mediastudio.data.api.ArchiveMetadataModule
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SeriesEpisode
@@ -45,13 +49,19 @@ fun SeriesScreen(
     onEpisodeClick: (SeriesEpisode) -> Unit,
     onBackClick: () -> Unit
 ) {
+    val context = LocalContext.current
     var seasons by remember { mutableStateOf<List<SeriesSeason>>(emptyList()) }
     var selectedSeasonIndex by remember { mutableIntStateOf(0) }
     var seriesDescription by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
     val firstArchiveId = series.identifier.split(",").first()
-    var posterUrl by remember { mutableStateOf("https://archive.org/services/img/$firstArchiveId") }
+    val initialSbPoster = remember(series.identifier) {
+        SupabaseRepository.getCatalogItem(series.identifier)?.posterUrl.orEmpty()
+    }
+    var posterUrl by remember(series.identifier) {
+        mutableStateOf(initialSbPoster.ifBlank { "https://archive.org/services/img/$firstArchiveId" })
+    }
 
     val resolvedYear = remember(series.identifier, series.year, series.title) {
         series.year?.takeIf { it.isNotBlank() && it != "0" }
@@ -71,10 +81,17 @@ fun SeriesScreen(
 
     LaunchedEffect(series.identifier) {
         isLoading = true
-        posterUrl = PosterFetcher.fetchPoster(series.title, isSeries = true, firstArchiveId)
+        val sbPoster = SupabaseRepository.getCatalogItem(series.identifier)?.posterUrl.orEmpty()
+        posterUrl = sbPoster.ifBlank {
+            PosterFetcher.fetchPoster(series.title, isSeries = true, series.identifier)
+                .ifBlank { "https://archive.org/services/img/$firstArchiveId" }
+        }
+        val dbDesc = SupabaseRepository.loadItemDescription(series.identifier)
         SupabaseRepository.loadSeriesEpisodes(series.identifier)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
-        seriesDescription = fullInfo.description
+        seriesDescription = fullInfo.description.takeIf {
+            it.isNotBlank() && !it.startsWith("Opis za ovaj naslov")
+        } ?: dbDesc.ifBlank { fullInfo.description }
         seasons = fullInfo.seasons
         selectedSeasonIndex = 0
         isLoading = false
@@ -140,8 +157,17 @@ fun SeriesScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val posterRequest = remember(posterUrl) {
+                                ImageRequest.Builder(context)
+                                    .data(posterUrl)
+                                    .size(240, 340)
+                                    .scale(Scale.FILL)
+                                    .bitmapConfig(Bitmap.Config.RGB_565)
+                                    .allowHardware(false)
+                                    .build()
+                            }
                             Image(
-                                painter = rememberAsyncImagePainter(posterUrl),
+                                painter = rememberAsyncImagePainter(posterRequest),
                                 contentDescription = series.title,
                                 modifier = Modifier
                                     .width(100.dp)
