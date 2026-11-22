@@ -1,8 +1,8 @@
 package com.example.mediastudio.ui.screens
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,11 +23,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +53,25 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import com.example.mediastudio.ui.viewmodel.RatedMovie
 import kotlinx.coroutines.delay
+
+private fun Modifier.throttleGenreVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
+    var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
+    this.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown &&
+            (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+        ) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastVerticalStepTime < minIntervalMs) {
+                true
+            } else {
+                lastVerticalStepTime = now
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -73,7 +99,6 @@ fun GenreScreen(
         onDispose {
             viewModel.savedGenreScrollIndex = gridState.firstVisibleItemIndex
             viewModel.savedGenreScrollOffset = gridState.firstVisibleItemScrollOffset
-            // Oslobodi RAM predmemoriju slika pri izlasku iz žanra
             try {
                 Coil.imageLoader(context).memoryCache?.clear()
             } catch (_: Exception) {
@@ -201,10 +226,14 @@ fun GenreScreen(
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(minSize = 120.dp),
-                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 72.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.fillMaxSize().padding(paddingValues)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .clipToBounds()
+                    .throttleGenreVerticalDpad()
             ) {
                 items(
                     items = movies,
@@ -279,7 +308,6 @@ private fun PaginationNavButton(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RatedMovieGridCard(
     ratedMovie: RatedMovie,
@@ -293,7 +321,7 @@ fun RatedMovieGridCard(
     val movie = ratedMovie.movie
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.07f else 1f, label = "grid_card_scale")
+    val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     val cardFocusRequester = remember { FocusRequester() }
@@ -340,22 +368,32 @@ fun RatedMovieGridCard(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+    // Fokus na cijelom Columnu osigurava da se plakat i naziv filma uvijek zajedno pomiču u vidljivo polje
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scaleVal
+                scaleY = scaleVal
+            }
+            .focusRequester(cardFocusRequester)
+            .clickable(interactionSource = interactionSource, indication = null) {
+                onMovieClick(movie)
+            }
+            .padding(bottom = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(175.dp)
-                .scale(scale)
         ) {
             Card(
                 modifier = Modifier
                     .fillMaxSize()
-                    .focusRequester(cardFocusRequester)
                     .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C)),
-                interactionSource = interactionSource,
-                onClick = { onMovieClick(movie) }
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
             ) {
                 val activeImageUrl = posterUrl.ifBlank { fallbackUrl }
                 if (activeImageUrl.isBlank()) {
@@ -374,7 +412,7 @@ fun RatedMovieGridCard(
                     val imageRequest = remember(activeImageUrl) {
                         ImageRequest.Builder(context)
                             .data(activeImageUrl)
-                            .size(240, 360)
+                            .size(180, 270)
                             .scale(Scale.FILL)
                             .bitmapConfig(Bitmap.Config.RGB_565)
                             .allowHardware(false)
@@ -383,7 +421,7 @@ fun RatedMovieGridCard(
                     val painter = rememberAsyncImagePainter(model = imageRequest)
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (painter.state is AsyncImagePainter.State.Loading) {
-                            CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
                         }
                         if (painter.state is AsyncImagePainter.State.Error) {
                             if (isAuthor || fallbackUrl.isBlank()) {
@@ -402,7 +440,7 @@ fun RatedMovieGridCard(
                                 val fallbackRequest = remember(fallbackUrl) {
                                     ImageRequest.Builder(context)
                                         .data(fallbackUrl)
-                                        .size(240, 360)
+                                        .size(180, 270)
                                         .scale(Scale.FILL)
                                         .bitmapConfig(Bitmap.Config.RGB_565)
                                         .allowHardware(false)
