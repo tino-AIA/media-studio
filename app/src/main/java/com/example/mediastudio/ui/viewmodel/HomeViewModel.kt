@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import coil.Coil
 import com.example.mediastudio.data.api.SupabaseCatalogItem
 import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -11,12 +12,14 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
@@ -384,7 +387,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _totalGenreMoviesCount = MutableStateFlow(0)
     val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
 
-    // Pamćenje pozicije pomicanja i D-pad fokusa pri povratku iz detalja filma/serije
     private val _lastFocusedMovieId = MutableStateFlow<String?>(null)
     val lastFocusedMovieId: StateFlow<String?> = _lastFocusedMovieId
 
@@ -407,7 +409,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _lastFocusedMovieId.value = null
     }
 
-    val pageSize = 60
+    // Manja stranica (36 kartica) sprječava preopterećenje memorije na Fire TV Sticku
+    val pageSize = 36
 
     private var isAdultCategoryUnlocked = false
     private var unlockedAdultMovies: List<ArchiveMovie> = emptyList()
@@ -416,12 +419,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         SupabaseRepository.init(application)
         loadFavorites()
 
-        if (SupabaseRepository.getCatalogItems().isNotEmpty()) {
-            rebuildCategoriesFromSupabase()
-            _isLoading.value = false
+        viewModelScope.launch {
+            if (SupabaseRepository.getCatalogItems().isNotEmpty()) {
+                rebuildCategoriesFromSupabase()
+                _isLoading.value = false
+            }
+            loadAllContent()
         }
 
-        loadAllContent()
+        // Automatsko održavanje memorije: svake 3 minute prazni nakupljeni RAM slika i privremeni cache
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(180_000L)
+                trimAppMemory()
+            }
+        }
+    }
+
+    fun trimAppMemory() {
+        try {
+            SupabaseRepository.trimMemoryCaches()
+            Coil.imageLoader(getApplication()).memoryCache?.clear()
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        trimAppMemory()
     }
 
     private fun loadFavorites() {
@@ -481,7 +506,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isBlockedSpecificAdult(item: SupabaseCatalogItem): Boolean {
-        val blob = "${item.title} ${item.descriptionHr} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
+        val blob = "${item.title} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
         return blockedSpecificAdultKeywords.any { blob.contains(it) } || isBlockedRegionalOrArabic(blob)
     }
 
@@ -525,7 +550,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         ) {
             return true
         }
-        val blob = "${item.title} ${item.descriptionHr} ${item.archiveId}".lowercase()
+        val blob = "${item.title} ${item.archiveId}".lowercase()
         return listOf(
             "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
             "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
@@ -555,23 +580,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
     }
 
-    private fun loadAllContent() {
-        viewModelScope.launch {
-            if (_movieCategories.value.isEmpty()) {
-                _isLoading.value = true
-            }
-            try {
-                SupabaseRepository.syncFromSupabase()
-                rebuildCategoriesFromSupabase()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                _isLoading.value = false
-            }
+    private suspend fun loadAllContent() {
+        if (_movieCategories.value.isEmpty()) {
+            _isLoading.value = true
+        }
+        try {
+            SupabaseRepository.syncFromSupabase()
+            rebuildCategoriesFromSupabase()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            _isLoading.value = false
         }
     }
 
-    private fun rebuildCategoriesFromSupabase() {
+    private suspend fun rebuildCategoriesFromSupabase() = withContext(Dispatchers.Default) {
         val allItems = deduplicateCatalogItems(
             SupabaseRepository.getCatalogItems().filter { !isBlockedSpecificAdult(it) }
         )
@@ -624,7 +647,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     val classics = liveActionMovies.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
-                    ).take(25).map { it.toArchiveMovie() }
+                    ).take(20).map { it.toArchiveMovie() }
                     if (classics.isNotEmpty()) genre to classics else null
                 }
                 else -> {
@@ -633,7 +656,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
-                    ).take(25).map { it.toArchiveMovie() }
+                    ).take(20).map { it.toArchiveMovie() }
                     if (matching.isNotEmpty()) genre to matching else null
                 }
             }
@@ -663,7 +686,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         .sortedWith(
                             compareByDescending<SupabaseCatalogItem> { it.rating }
                                 .thenByDescending { it.popularityScore }
-                        ).take(25).map { it.toArchiveMovie() }
+                        ).take(20).map { it.toArchiveMovie() }
                     if (disney.isNotEmpty()) genre to disney else null
                 }
                 "Disney kratki crtići" -> {
@@ -672,7 +695,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
-                    ).take(25).map { it.toArchiveMovie() }
+                    ).take(20).map { it.toArchiveMovie() }
                     if (disneyShorts.isNotEmpty()) genre to disneyShorts else null
                 }
                 "Animirani filmovi" -> {
@@ -680,21 +703,21 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         .sortedWith(
                             compareByDescending<SupabaseCatalogItem> { it.rating }
                                 .thenByDescending { it.popularityScore }
-                        ).take(25).map { it.toArchiveMovie() }
+                        ).take(20).map { it.toArchiveMovie() }
                     if (otherAnim.isNotEmpty()) genre to otherAnim else null
                 }
                 "Klasični crtići" -> {
                     val shorts = shortCartoons.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
-                    ).take(25).map { it.toArchiveMovie() }
+                    ).take(20).map { it.toArchiveMovie() }
                     if (shorts.isNotEmpty()) genre to shorts else null
                 }
                 "Animirane serije" -> {
                     val animSer = animatedSeries.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
                             .thenByDescending { it.popularityScore }
-                    ).take(25).map { it.toArchiveMovie() }
+                    ).take(20).map { it.toArchiveMovie() }
                     if (animSer.isNotEmpty()) genre to animSer else null
                 }
                 else -> null
@@ -711,7 +734,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }.sortedWith(
                     compareByDescending<SupabaseCatalogItem> { it.rating }
                         .thenByDescending { it.popularityScore }
-                ).take(25).map { it.toArchiveMovie() }
+                ).take(20).map { it.toArchiveMovie() }
                 if (matching.isNotEmpty()) genre to matching else null
             }
         }
@@ -723,7 +746,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val matching = concerts.filter { item ->
                     item.genres.any { it.equals(genre.title, ignoreCase = true) }
-                }.sortedByDescending { it.popularityScore }.take(25).map { it.toArchiveMovie() }
+                }.sortedByDescending { it.popularityScore }.take(20).map { it.toArchiveMovie() }
                 if (matching.isNotEmpty()) genre to matching else null
             }
         }
@@ -846,33 +869,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val qLower = trimmed.lowercase()
                 val words = qLower.split(Regex("\\s+")).filter { it.isNotEmpty() }
 
-                val sbMatches = deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
-                    .filter { item ->
-                        !isBlockedSpecificAdult(item) &&
-                            (isAdultCategoryUnlocked || !isAdultOrEroticItem(item)) && (
-                            item.title.lowercase().contains(qLower) ||
-                                item.descriptionHr.lowercase().contains(qLower) ||
-                                item.archiveId.lowercase().contains(qLower) ||
-                                (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
+                val sbMatches = withContext(Dispatchers.Default) {
+                    deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
+                        .filter { item ->
+                            !isBlockedSpecificAdult(item) &&
+                                (isAdultCategoryUnlocked || !isAdultOrEroticItem(item)) && (
+                                item.title.lowercase().contains(qLower) ||
+                                    item.archiveId.lowercase().contains(qLower) ||
+                                    (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
+                                )
+                        }
+                        .map { item ->
+                            val rel = computeSearchRelevance(
+                                title = item.title,
+                                identifier = item.archiveId,
+                                description = "",
+                                rawQuery = trimmed,
+                                isFromSupabase = true,
+                                baseQualityScore = item.popularityScore.coerceAtMost(3000.0)
                             )
-                    }
-                    .map { item ->
-                        val rel = computeSearchRelevance(
-                            title = item.title,
-                            identifier = item.archiveId,
-                            description = item.descriptionHr,
-                            rawQuery = trimmed,
-                            isFromSupabase = true,
-                            baseQualityScore = item.popularityScore.coerceAtMost(3000.0)
-                        )
-                        RatedMovie(
-                            movie = item.toArchiveMovie(),
-                            rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
-                            relevanceScore = rel
-                        )
-                    }
+                            RatedMovie(
+                                movie = item.toArchiveMovie(),
+                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                relevanceScore = rel
+                            )
+                        }
+                }
 
-                val archiveMatches = if (sbMatches.size < 20 && trimmed.length >= 3) {
+                val archiveMatches = if (sbMatches.size < 16 && trimmed.length >= 3) {
                     val safePhrase = trimmed.replace("\"", "").trim()
                     val exclusions = "-subject:trailer -subject:teaser -subject:promo -subject:commercial -subject:gameplay -collection:movie_trailers -collection:trailers"
                     val archiveQuery = if (words.size > 1) {
@@ -882,7 +906,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     fetchFromArchiveFallback(
                         query = archiveQuery,
-                        rows = 80,
+                        rows = 50,
                         page = 1,
                         excludeAdult = !isAdultCategoryUnlocked,
                         searchQueryHint = trimmed,
@@ -896,6 +920,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     .distinctBy { it.movie.identifier }
                     .distinctBy { it.movie.title.lowercase().replace(Regex("\\(\\d{4}\\)"), "").trim() }
                     .sortedByDescending { it.relevanceScore }
+                    .take(40)
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -941,23 +966,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (genre.isAdultCategory) {
-                    val sbAdultRated = deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
-                        .filter { it.mediaType == "movie" && !isBlockedSpecificAdult(it) && isAdultOrEroticItem(it) }
-                        .sortedWith(
-                            compareByDescending<SupabaseCatalogItem> { it.rating }
-                                .thenByDescending { it.popularityScore }
-                        )
-                        .map { item ->
-                            RatedMovie(
-                                movie = item.toArchiveMovie(),
-                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
-                                relevanceScore = item.popularityScore + 2000.0
+                    val sbAdultRated = withContext(Dispatchers.Default) {
+                        deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
+                            .filter { it.mediaType == "movie" && !isBlockedSpecificAdult(it) && isAdultOrEroticItem(it) }
+                            .sortedWith(
+                                compareByDescending<SupabaseCatalogItem> { it.rating }
+                                    .thenByDescending { it.popularityScore }
                             )
-                        }
+                            .map { item ->
+                                RatedMovie(
+                                    movie = item.toArchiveMovie(),
+                                    rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                    relevanceScore = item.popularityScore + 2000.0
+                                )
+                            }
+                    }
 
                     val archiveAdult = fetchFromArchiveFallback(
                         query = genre.query,
-                        rows = 150,
+                        rows = 80,
                         page = page,
                         excludeAdult = false,
                         isAdultCategory = true
@@ -972,14 +999,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     _totalGenrePages.value = if (archiveAdult.size >= pageSize) page + 1 else page
 
                     if (combinedAdult.isNotEmpty()) {
-                        unlockedAdultMovies = combinedAdult.map { it.movie }.take(25)
+                        unlockedAdultMovies = combinedAdult.map { it.movie }.take(20)
                         val currentWithoutAdult = _movieCategories.value.filterNot { it.first.isAdultCategory }
                         _movieCategories.value = currentWithoutAdult + (genre to unlockedAdultMovies)
                     }
                     return@launch
                 }
 
-                val sbMatches = findSupabaseItemsForGenre(genre)
+                val sbMatches = withContext(Dispatchers.Default) {
+                    findSupabaseItemsForGenre(genre)
+                }
                 if (sbMatches.isNotEmpty()) {
                     val isTop10 = genre.title.startsWith("Top 10")
                     val allRated = sbMatches.map { item ->
@@ -1007,7 +1036,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val results = fetchFromArchiveFallback(
                         query = genre.query,
-                        rows = 150,
+                        rows = 80,
                         page = page,
                         excludeAdult = true,
                         isAdultCategory = false
