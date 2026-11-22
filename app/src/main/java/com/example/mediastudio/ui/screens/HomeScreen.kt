@@ -2,8 +2,8 @@ package com.example.mediastudio.ui.screens
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,8 +35,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -44,7 +45,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -65,6 +72,25 @@ import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private fun Modifier.throttleVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
+    var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
+    this.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown &&
+            (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+        ) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastVerticalStepTime < minIntervalMs) {
+                true
+            } else {
+                lastVerticalStepTime = now
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -192,7 +218,7 @@ fun HomeScreen(
                             }
                         )
                     }
-                    Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
@@ -202,7 +228,7 @@ fun HomeScreen(
                 val heroBgRequest = remember(currentHeroPosterUrl) {
                     ImageRequest.Builder(context)
                         .data(currentHeroPosterUrl)
-                        .size(480, 320)
+                        .size(420, 280)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(false)
@@ -212,7 +238,7 @@ fun HomeScreen(
                     painter = rememberAsyncImagePainter(heroBgRequest),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().alpha(0.35f)
+                    modifier = Modifier.fillMaxSize().alpha(0.32f)
                 )
             }
 
@@ -221,7 +247,7 @@ fun HomeScreen(
                     .fillMaxSize()
                     .background(
                         Brush.horizontalGradient(
-                            colors = listOf(Color(0xFF0F0F0F), Color(0xFF0F0F0F).copy(alpha = 0.7f), Color.Transparent),
+                            colors = listOf(Color(0xFF0F0F0F), Color(0xFF0F0F0F).copy(alpha = 0.72f), Color.Transparent),
                             startX = 0f,
                             endX = 1200f
                         )
@@ -242,7 +268,9 @@ fun HomeScreen(
                 topBar = {
                     Column(
                         modifier = Modifier
-                            .padding(top = 6.dp)
+                            .fillMaxWidth()
+                            .background(Color(0xFF0D0D0D).copy(alpha = 0.96f))
+                            .padding(top = 4.dp, bottom = 4.dp)
                             .focusProperties { up = FocusRequester.Cancel }
                     ) {
                         Row(
@@ -276,7 +304,7 @@ fun HomeScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             TabButton(
@@ -352,10 +380,14 @@ fun HomeScreen(
                         LazyVerticalGrid(
                             state = favGridState,
                             columns = GridCells.Adaptive(minSize = 120.dp),
-                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 40.dp),
+                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 64.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.fillMaxSize().padding(paddingValues)
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(paddingValues)
+                                .clipToBounds()
+                                .throttleVerticalDpad()
                         ) {
                             items(
                                 items = favoriteMovies,
@@ -412,29 +444,32 @@ fun HomeScreen(
 
                     LazyColumn(
                         state = homeListState,
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 64.dp),
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(paddingValues)
+                            .clipToBounds()
+                            .throttleVerticalDpad()
                     ) {
                         item(key = "hero_banner") {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(380.dp)
-                                    .padding(start = 24.dp, bottom = 24.dp, end = 24.dp)
+                                    .height(350.dp)
+                                    .padding(start = 24.dp, bottom = 20.dp, end = 24.dp)
                             ) {
                                 currentHeroMovie?.let { (movie, isSeries) ->
                                     Column(
                                         modifier = Modifier.align(Alignment.BottomStart),
-                                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 38.sp,
+                                            fontSize = 36.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             maxLines = 2,
-                                            lineHeight = 42.sp,
+                                            lineHeight = 40.sp,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.width(650.dp)
                                         )
@@ -483,7 +518,7 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
-                                            .offset(y = 16.dp),
+                                            .offset(y = 14.dp),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         heroMovies.forEachIndexed { index, _ ->
@@ -526,7 +561,6 @@ fun HomeScreen(
                                 onHeaderClick = { onGenreSelect(genre) }
                             )
                         }
-                        item(key = "bottom_spacer") { Spacer(modifier = Modifier.height(40.dp)) }
                     }
                 }
             }
@@ -819,7 +853,7 @@ fun MovieCategoryRow(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -862,7 +896,7 @@ fun MovieCategoryRow(
 
         LazyRow(
             state = rowListState,
-            contentPadding = PaddingValues(horizontal = 16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp)
         ) {
             itemsIndexed(
@@ -895,7 +929,6 @@ fun MovieCategoryRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetflixTop10Card(
     movie: ArchiveMovie,
@@ -908,7 +941,7 @@ fun NetflixTop10Card(
     val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
+    val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     val cardFocusRequester = remember { FocusRequester() }
@@ -940,29 +973,39 @@ fun NetflixTop10Card(
         }
     }
 
-    Column(modifier = Modifier.width(162.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    // Fokus na cijelom Columnu osigurava da i plakat i naziv filma uvijek ostanu unutar ekrana
+    Column(
+        modifier = Modifier
+            .width(162.dp)
+            .graphicsLayer {
+                scaleX = scaleVal
+                scaleY = scaleVal
+            }
+            .focusRequester(cardFocusRequester)
+            .clickable(interactionSource = interactionSource, indication = null) {
+                onMovieClick(movie)
+            }
+            .padding(bottom = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Box(
             modifier = Modifier
                 .width(162.dp)
                 .height(175.dp)
-                .scale(scale)
         ) {
             Card(
                 modifier = Modifier
                     .width(115.dp)
                     .height(170.dp)
                     .align(Alignment.CenterEnd)
-                    .focusRequester(cardFocusRequester)
                     .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                interactionSource = interactionSource,
-                onClick = { onMovieClick(movie) }
+                shape = RoundedCornerShape(12.dp)
             ) {
                 val activeUrl = posterUrl.ifBlank { fallbackUrl }
                 val imageRequest = remember(activeUrl) {
                     ImageRequest.Builder(context)
                         .data(activeUrl)
-                        .size(240, 360)
+                        .size(180, 270)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(false)
@@ -972,7 +1015,7 @@ fun NetflixTop10Card(
 
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
                     }
                     Image(
                         painter = painter,
@@ -984,7 +1027,7 @@ fun NetflixTop10Card(
                         val fallbackReq = remember(fallbackUrl) {
                             ImageRequest.Builder(context)
                                 .data(fallbackUrl)
-                                .size(240, 360)
+                                .size(180, 270)
                                 .scale(Scale.FILL)
                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                 .allowHardware(false)
@@ -1047,7 +1090,6 @@ fun NetflixTop10Card(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MovieCard(
     movie: ArchiveMovie,
@@ -1061,7 +1103,7 @@ fun MovieCard(
     val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
+    val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
     val cardFocusRequester = remember { FocusRequester() }
@@ -1117,24 +1159,34 @@ fun MovieCard(
         }
     }
 
-    Column(modifier = Modifier.width(120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    // Fokus na cijelom Columnu osigurava da i plakat i naziv filma uvijek ostanu unutar ekrana
+    Column(
+        modifier = Modifier
+            .width(120.dp)
+            .graphicsLayer {
+                scaleX = scaleVal
+                scaleY = scaleVal
+            }
+            .focusRequester(cardFocusRequester)
+            .clickable(interactionSource = interactionSource, indication = null) {
+                onMovieClick(movie)
+            }
+            .padding(bottom = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Card(
             modifier = Modifier
                 .width(120.dp)
                 .height(175.dp)
-                .scale(scale)
-                .focusRequester(cardFocusRequester)
                 .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
             shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C)),
-            interactionSource = interactionSource,
-            onClick = { onMovieClick(movie) }
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
         ) {
             if (posterUrl.isNotEmpty()) {
                 val imageRequest = remember(posterUrl) {
                     ImageRequest.Builder(context)
                         .data(posterUrl)
-                        .size(240, 360)
+                        .size(180, 270)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(false)
@@ -1143,7 +1195,7 @@ fun MovieCard(
                 val painter = rememberAsyncImagePainter(model = imageRequest)
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
                     }
                     if (painter.state is AsyncImagePainter.State.Error) {
                         if (isAuthor) {
@@ -1164,7 +1216,7 @@ fun MovieCard(
                             val fallbackReq = remember(fallback) {
                                 ImageRequest.Builder(context)
                                     .data(fallback)
-                                    .size(240, 360)
+                                    .size(180, 270)
                                     .scale(Scale.FILL)
                                     .bitmapConfig(Bitmap.Config.RGB_565)
                                     .allowHardware(false)
