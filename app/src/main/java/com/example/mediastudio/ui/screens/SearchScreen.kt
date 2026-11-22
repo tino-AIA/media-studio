@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,9 +10,11 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
@@ -20,9 +23,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -33,6 +43,25 @@ import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.ContentTab
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+
+private fun Modifier.throttleSearchVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
+    var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
+    this.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown &&
+            (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+        ) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastVerticalStepTime < minIntervalMs) {
+                true
+            } else {
+                lastVerticalStepTime = now
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -104,6 +133,7 @@ fun SearchScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .clipToBounds()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp)
         ) {
@@ -111,6 +141,8 @@ fun SearchScreen(
                 modifier = Modifier
                     .width(330.dp)
                     .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 24.dp)
             ) {
                 OutlinedTextField(
                     value = query,
@@ -199,6 +231,7 @@ fun SearchScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .clipToBounds()
             ) {
                 when {
                     query.trim().length < 2 -> {
@@ -245,11 +278,18 @@ fun SearchScreen(
                             )
                             LazyVerticalGrid(
                                 columns = GridCells.Adaptive(minSize = 125.dp),
+                                contentPadding = PaddingValues(top = 4.dp, bottom = 64.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clipToBounds()
+                                    .throttleSearchVerticalDpad()
                             ) {
-                                items(searchResults.size) { index ->
+                                items(
+                                    count = searchResults.size,
+                                    key = { index -> "${searchResults[index].movie.identifier}_$index" }
+                                ) { index ->
                                     val ratedItem = searchResults[index]
                                     val isDbSeries = SupabaseRepository.getCatalogItem(ratedItem.movie.identifier)?.mediaType == "series"
                                     val isProbablySeries = isDbSeries ||
