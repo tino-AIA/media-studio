@@ -7,6 +7,8 @@ import org.json.JSONArray
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 
 data class SupabaseEpisodeItem(
     val season: Int = 1,
@@ -60,6 +62,10 @@ object SupabaseRepository {
     private const val SUPABASE_REST_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
     private const val SUPABASE_PUBLISHABLE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
 
+    private const val CATALOG_LITE_COLUMNS =
+        "id,archive_id,tmdb_id,title,media_type,genres,release_year,rating,popularity_score," +
+            "description_hr,poster_url,backdrop_url,stream_url,is_featured,is_valid,tmdb_runtime,archive_runtime"
+
     private var cacheDir: File? = null
 
     @Volatile
@@ -71,15 +77,22 @@ object SupabaseRepository {
     @Volatile
     private var authorMovies: List<SupabaseAuthorMovie> = emptyList()
 
-    private val posterByArchiveId = mutableMapOf<String, String>()
-    private val posterByTitle = mutableMapOf<String, String>()
-    private val itemByArchiveId = mutableMapOf<String, SupabaseCatalogItem>()
-    private val itemByStreamUrl = mutableMapOf<String, SupabaseCatalogItem>()
-    private val authorMovieByStreamUrl = mutableMapOf<String, SupabaseAuthorMovie>()
+    private val posterByArchiveId = ConcurrentHashMap<String, String>()
+    private val posterByTitle = ConcurrentHashMap<String, String>()
+    private val itemByArchiveId = ConcurrentHashMap<String, SupabaseCatalogItem>()
+    private val itemByStreamUrl = ConcurrentHashMap<String, SupabaseCatalogItem>()
+    private val authorMovieByStreamUrl = ConcurrentHashMap<String, SupabaseAuthorMovie>()
+    private val episodesByArchiveId = ConcurrentHashMap<String, List<SupabaseEpisodeItem>>()
 
     fun init(context: Context) {
         if (cacheDir == null) {
-            cacheDir = context.applicationContext.filesDir
+            val dir = context.applicationContext.filesDir
+            cacheDir = dir
+            // Obriši staru preveliku predmemoriju koja je sadržavala sve epizode u RAM-u
+            try {
+                File(dir, "supabase_catalog_cache.json").delete()
+            } catch (_: Exception) {
+            }
             loadFromDiskCache()
         }
     }
@@ -103,7 +116,7 @@ object SupabaseRepository {
     }
 
     private fun loadFromDiskCache() {
-        readCacheFile("supabase_catalog_cache.json")?.let { jsonStr ->
+        readCacheFile("supabase_catalog_lite_v2.json")?.let { jsonStr ->
             try {
                 updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr)))
             } catch (_: Exception) {
@@ -126,9 +139,11 @@ object SupabaseRepository {
     suspend fun syncFromSupabase(): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
 
-        val catalogArr = fetchAllPaginated("catalog_items?select=*&is_valid=eq.true&order=popularity_score.desc")
+        val catalogArr = fetchAllPaginated(
+            "catalog_items?select=$CATALOG_LITE_COLUMNS&is_valid=eq.true&order=popularity_score.desc"
+        )
         if (catalogArr != null && catalogArr.length() > 0) {
-            writeCacheFile("supabase_catalog_cache.json", catalogArr.toString())
+            writeCacheFile("supabase_catalog_lite_v2.json", catalogArr.toString())
             updateCatalogMemory(parseCatalogArray(catalogArr))
             anySuccess = true
         }
@@ -150,44 +165,74 @@ object SupabaseRepository {
         anySuccess || catalogItems.isNotEmpty()
     }
 
+    suspend fun loadSeriesEpisodes(archiveId: String): List<SupabaseEpisodeItem> = withContext(Dispatchers.IO) {
+        val cleanId = archiveId.substringBefore(",tmdb-").trim()
+        episodesByArchiveId[archiveId]?.takeIf { it.isNotEmpty() }?.let { return@withContext it }
+        episodesByArchiveId[cleanId]?.takeIf { it.isNotEmpty() }?.let { return@withContext it }
+
+        try {
+            val encodedId = URLEncoder.encode(cleanId, "UTF-8")
+            val arr = fetchJsonArrayPage("catalog_items?select=episodes&archive_id=eq.$encodedId&limit=1", 0, 0)
+            val obj = arr?.optJSONObject(0)
+            val parsed = parseEpisodesArray(obj?.optJSONArray("episodes"))
+            if (parsed.isNotEmpty()) {
+                episodesByArchiveId[archiveId] = parsed
+                episodesByArchiveId[cleanId] = parsed
+            }
+            parsed
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     private fun updateCatalogMemory(items: List<SupabaseCatalogItem>) {
         val validItems = items.filter { it.isValid }
         catalogItems = validItems
-        itemByArchiveId.clear()
-        itemByStreamUrl.clear()
-        posterByArchiveId.clear()
+
+        val nextByArchive = HashMap<String, SupabaseCatalogItem>(validItems.size)
+        val nextByStream = HashMap<String, SupabaseCatalogItem>(validItems.size)
+        val nextPosterById = HashMap<String, String>(validItems.size)
 
         for (item in validItems) {
-            itemByArchiveId[item.archiveId] = item
+            nextByArchive[item.archiveId] = item
             val baseId = item.archiveId.substringBefore(",tmdb-").trim()
-            if (baseId.isNotEmpty() && !itemByArchiveId.containsKey(baseId)) {
-                itemByArchiveId[baseId] = item
+            if (baseId.isNotEmpty() && !nextByArchive.containsKey(baseId)) {
+                nextByArchive[baseId] = item
             }
 
             if (item.streamUrl.isNotBlank()) {
-                itemByStreamUrl[item.streamUrl] = item
+                nextByStream[item.streamUrl] = item
             }
             if (item.posterUrl.isNotBlank()) {
-                posterByArchiveId[item.archiveId] = item.posterUrl
-                if (baseId.isNotEmpty() && !posterByArchiveId.containsKey(baseId)) {
-                    posterByArchiveId[baseId] = item.posterUrl
+                nextPosterById[item.archiveId] = item.posterUrl
+                if (baseId.isNotEmpty() && !nextPosterById.containsKey(baseId)) {
+                    nextPosterById[baseId] = item.posterUrl
                 }
                 posterByTitle[item.title.lowercase().trim()] = item.posterUrl
             }
         }
+
+        itemByArchiveId.clear()
+        itemByArchiveId.putAll(nextByArchive)
+        itemByStreamUrl.clear()
+        itemByStreamUrl.putAll(nextByStream)
+        posterByArchiveId.clear()
+        posterByArchiveId.putAll(nextPosterById)
     }
 
     private fun updateAuthorMoviesMemory(movies: List<SupabaseAuthorMovie>) {
         authorMovies = movies
-        authorMovieByStreamUrl.clear()
+        val nextByStream = HashMap<String, SupabaseAuthorMovie>(movies.size)
         for (m in movies) {
             if (m.streamUrl.isNotBlank()) {
-                authorMovieByStreamUrl[m.streamUrl] = m
+                nextByStream[m.streamUrl] = m
             }
             if (m.posterUrl.isNotBlank()) {
                 posterByTitle[m.title.lowercase().trim()] = m.posterUrl
             }
         }
+        authorMovieByStreamUrl.clear()
+        authorMovieByStreamUrl.putAll(nextByStream)
     }
 
     fun getCatalogItems(): List<SupabaseCatalogItem> = catalogItems
@@ -206,9 +251,14 @@ object SupabaseRepository {
     }
 
     fun getCatalogItem(archiveId: String): SupabaseCatalogItem? {
-        itemByArchiveId[archiveId]?.let { return it }
         val cleanId = archiveId.substringBefore(",tmdb-").trim()
-        return itemByArchiveId[cleanId]
+        val base = itemByArchiveId[archiveId] ?: itemByArchiveId[cleanId] ?: return null
+        val cachedEps = episodesByArchiveId[base.archiveId] ?: episodesByArchiveId[cleanId]
+        return if (!cachedEps.isNullOrEmpty() && base.episodes.isEmpty()) {
+            base.copy(episodes = cachedEps)
+        } else {
+            base
+        }
     }
 
     fun findByStreamUrl(streamUrl: String): Pair<String, String>? {
@@ -255,9 +305,10 @@ object SupabaseRepository {
     }
 
     private fun fetchJsonArrayPage(endpointWithQuery: String, rangeStart: Int, rangeEnd: Int): JSONArray? {
+        var conn: HttpURLConnection? = null
         return try {
             val url = URL("$SUPABASE_REST_URL/$endpointWithQuery")
-            val conn = url.openConnection() as HttpURLConnection
+            conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.setRequestProperty("apikey", SUPABASE_PUBLISHABLE_KEY)
             conn.setRequestProperty("Accept", "application/json")
@@ -275,7 +326,33 @@ object SupabaseRepository {
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        } finally {
+            try {
+                conn?.disconnect()
+            } catch (_: Exception) {
+            }
         }
+    }
+
+    private fun parseEpisodesArray(epsArr: JSONArray?): List<SupabaseEpisodeItem> {
+        if (epsArr == null || epsArr.length() == 0) return emptyList()
+        val episodes = ArrayList<SupabaseEpisodeItem>(epsArr.length())
+        for (e in 0 until epsArr.length()) {
+            val epObj = epsArr.optJSONObject(e) ?: continue
+            val epUrl = epObj.optString("url", "")
+            if (epUrl.isNotBlank()) {
+                episodes.add(
+                    SupabaseEpisodeItem(
+                        season = epObj.optInt("season", 1).coerceAtLeast(1),
+                        episode = epObj.optInt("episode", e + 1),
+                        title = epObj.optString("title", "Epizoda ${e + 1}"),
+                        url = epUrl,
+                        duration = epObj.optString("duration", "")
+                    )
+                )
+            }
+        }
+        return episodes
     }
 
     private fun parseCatalogArray(arr: JSONArray): List<SupabaseCatalogItem> {
@@ -290,26 +367,6 @@ object SupabaseRepository {
             if (genresArr != null) {
                 for (g in 0 until genresArr.length()) {
                     genresArr.optString(g)?.takeIf { it.isNotBlank() }?.let { genres.add(it) }
-                }
-            }
-
-            val epsArr = obj.optJSONArray("episodes")
-            val episodes = mutableListOf<SupabaseEpisodeItem>()
-            if (epsArr != null) {
-                for (e in 0 until epsArr.length()) {
-                    val epObj = epsArr.optJSONObject(e) ?: continue
-                    val epUrl = epObj.optString("url", "")
-                    if (epUrl.isNotBlank()) {
-                        episodes.add(
-                            SupabaseEpisodeItem(
-                                season = epObj.optInt("season", 1).coerceAtLeast(1),
-                                episode = epObj.optInt("episode", e + 1),
-                                title = epObj.optString("title", "Epizoda ${e + 1}"),
-                                url = epUrl,
-                                duration = epObj.optString("duration", "")
-                            )
-                        )
-                    }
                 }
             }
 
@@ -328,7 +385,7 @@ object SupabaseRepository {
                     posterUrl = obj.optString("poster_url", ""),
                     backdropUrl = obj.optString("backdrop_url", ""),
                     streamUrl = obj.optString("stream_url", ""),
-                    episodes = episodes,
+                    episodes = parseEpisodesArray(obj.optJSONArray("episodes")),
                     isFeatured = obj.optBoolean("is_featured", false),
                     isValid = isValid,
                     tmdbRuntime = obj.optInt("tmdb_runtime", 0),
