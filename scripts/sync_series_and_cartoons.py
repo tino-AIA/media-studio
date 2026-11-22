@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,9 @@ from sync_common import (
     translate_to_croatian,
     verify_stream_url_playable,
 )
+
+# Sigurnosni limit od 195 min (3h 15m) kako bi skripta uvijek uredno završila prije GitHub limita
+MAX_SYNC_DURATION_SECONDS = 195 * 60
 
 ARCHIVE_TV_COLLECTIONS = [
     "classic_tv",
@@ -376,7 +380,7 @@ def aggregate_series_from_archive(
     if contains_hentai_or_adult(orig_name, hr_name) or contains_blocked_regional_or_arabic(orig_name, hr_name):
         return []
     clean_q = re.sub(r"[^\w\s]", " ", orig_name).strip()
-    if len(clean_q) < 3:
+    if len(clean_q) < 2:
         return []
 
     if tv_basic is None:
@@ -385,6 +389,7 @@ def aggregate_series_from_archive(
     first_air_year = extract_year_from_text((tv_basic or {}).get("first_air_date") or "")
     last_air_year = 2026 if (tv_basic or {}).get("in_production") else extract_year_from_text((tv_basic or {}).get("last_air_date") or "")
     total_seasons_hint = int((tv_basic or {}).get("number_of_seasons") or 1)
+    total_tmdb_eps = int((tv_basic or {}).get("number_of_episodes") or 0)
     tv_orig_lang = str((tv_basic or {}).get("original_language") or "en")
 
     season_ep_limits = {}
@@ -394,16 +399,30 @@ def aggregate_series_from_archive(
         if s_no >= 1 and ep_cnt > 0:
             season_ep_limits[s_no] = ep_cnt
 
-    queries = [(f'title:"{clean_q}" AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review', 75)]
-    if first_air_year > 0:
-        queries.append((f'title:"{clean_q}" AND year:[{first_air_year - 1} TO {first_air_year + 2}] AND mediatype:movies AND -subject:trailer', 30))
+    if len(clean_q) <= 3 and first_air_year > 0:
+        queries = [(
+            f'title:"{clean_q}" AND year:[{first_air_year - 1} TO {max(first_air_year + 2, last_air_year)}] '
+            f'AND mediatype:movies AND -subject:trailer AND -subject:news',
+            25
+        )]
+    else:
+        queries = [(
+            f'title:"{clean_q}" AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review',
+            30
+        )]
+        if first_air_year > 0:
+            queries.append((
+                f'title:"{clean_q}" AND year:[{first_air_year - 1} TO {first_air_year + 2}] AND mediatype:movies AND -subject:trailer',
+                15
+            ))
+
     if missing_seasons:
-        for s_target in sorted(set(missing_seasons))[:6]:
+        for s_target in sorted(set(missing_seasons))[:4]:
             s_query = (
                 f'title:"{clean_q}" AND (title:"Season {s_target}" OR title:"S{s_target:02d}" OR title:"Series {s_target}") '
                 f'AND mediatype:movies AND -subject:trailer AND -subject:news'
             )
-            queries.append((s_query, 25))
+            queries.append((s_query, 15))
 
     docs_by_id = {}
     for q, rows_limit in queries:
@@ -431,8 +450,13 @@ def aggregate_series_from_archive(
 
     raw_candidates = []
     detected_seasons = set()
+    unique_se_pairs = set()
+    target_se_cap = max(total_tmdb_eps, 180) if total_tmdb_eps > 0 else 180
 
     for doc in docs:
+        if len(unique_se_pairs) >= target_se_cap:
+            break
+
         ident = doc.get("identifier") or ""
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
             continue
@@ -492,7 +516,6 @@ def aggregate_series_from_archive(
                 max_ep_by_season[s_num] = max(max_ep_by_season.get(s_num, 0), e_num)
                 item_parsed.append((s_num, e_num, m))
 
-        # Ako Archive.org paket ima npr. 29 epizoda za S1, a ova verzija serije ima samo 10 (remake), preskoči cijeli paket
         season_overflow = any(
             s_no in season_ep_limits and max_ep > (season_ep_limits[s_no] + 2)
             for s_no, max_ep in max_ep_by_season.items()
@@ -502,6 +525,7 @@ def aggregate_series_from_archive(
 
         for s_num, e_num, m in item_parsed:
             detected_seasons.add(s_num)
+            unique_se_pairs.add((s_num, e_num))
             raw_candidates.append({
                 "season": s_num,
                 "episode": e_num,
@@ -575,7 +599,7 @@ def aggregate_series_from_archive(
 
 
 def series_has_foreign_dub_episodes(row):
-    """Provjerava sadrže li postojeće epizode serije u bazi stranu sinkronizaciju (npr. ALF njemački/španjolski/poljski)."""
+    """Provjerava sadrže li postojeće epizode serije u bazi stranu sinkronizaciju."""
     urls_to_check = [row.get("stream_url") or ""]
     for ep in (row.get("episodes") or [])[:12]:
         if isinstance(ep, dict) and ep.get("url"):
@@ -593,7 +617,7 @@ def format_series_display_title(hr_name, orig_name, year):
     return clean_base
 
 
-def refresh_incomplete_series(existing_series_rows):
+def refresh_incomplete_series(existing_series_rows, deadline_ts):
     """Provjerava postojeće serije u bazi: zamjenjuje strane sinkronizacije, upisuje godinu/remake oznaku i dopunjuje epizode."""
     candidates = [
         r for r in existing_series_rows
@@ -603,6 +627,8 @@ def refresh_incomplete_series(existing_series_rows):
     updated_count = [0]
 
     def check_and_replenish(row):
+        if time.monotonic() > deadline_ts:
+            return None
         tmdb_id = int(row.get("tmdb_id") or 0)
         if tmdb_id <= 0:
             return None
@@ -707,7 +733,7 @@ def refresh_incomplete_series(existing_series_rows):
             updated_count[0] += 1
         return f"  ↻ Dopunjena serija: {desired_title} ({len(existing_map)} -> {len(merged_list)} ep. / {seasons_now} sez.)"
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=16) as pool:
         futures = [pool.submit(check_and_replenish, r) for r in candidates]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -717,7 +743,7 @@ def refresh_incomplete_series(existing_series_rows):
     print(f"  Ažurirano ukupno {updated_count[0]} postojećih serija.", flush=True)
 
 
-def sync_short_cartoons(existing_archive_ids):
+def sync_short_cartoons(existing_archive_ids, deadline_ts):
     print("1/4 Sinkronizacija Disney i klasičnih kratkih crtića...", flush=True)
     added_counter = [0]
     seen_short_titles = set()
@@ -730,6 +756,8 @@ def sync_short_cartoons(existing_archive_ids):
 
     candidate_docs = {}
     for cartoon_query in CLASSIC_SHORT_CARTOON_QUERIES:
+        if time.monotonic() > deadline_ts:
+            break
         is_disney_q = cartoon_query in DISNEY_SHORT_CARTOON_QUERIES
         if is_disney_q:
             query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons OR collection:opensource_movies OR collection:community_media) AND -subject:trailer'
@@ -742,7 +770,7 @@ def sync_short_cartoons(existing_archive_ids):
                 "q": query,
                 "fl[]": ["identifier", "title", "year", "downloads", "description"],
                 "sort[]": "downloads desc",
-                "rows": 45,
+                "rows": 35,
                 "output": "json"
             }
         )
@@ -752,6 +780,8 @@ def sync_short_cartoons(existing_archive_ids):
                 candidate_docs[ident] = (doc, is_disney_q)
 
     def process_short_doc(item):
+        if time.monotonic() > deadline_ts:
+            return
         doc, is_disney_q = item
         ident = doc.get("identifier") or ""
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
@@ -816,60 +846,16 @@ def sync_short_cartoons(existing_archive_ids):
         with state_lock:
             added_counter[0] += 1
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=16) as pool:
         list(pool.map(process_short_doc, candidate_docs.values()))
 
     print(f"  Dodano {added_counter[0]} novih Disney i klasičnih kratkih crtića.", flush=True)
 
 
-def sync_all_series(seen_tmdb_series):
+def sync_all_series(seen_tmdb_series, deadline_ts):
     print("3/4 Duboka TMDB pretraga svih žanrova serija...", flush=True)
     candidate_shows = {}
-
-    for endpoint in ["tv/popular", "tv/top_rated"]:
-        for page in range(1, 13):
-            data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
-            for s in (data or {}).get("results", []):
-                if s["id"] not in seen_tmdb_series:
-                    candidate_shows[s["id"]] = s
-
-    for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
-        for sort_by in ["popularity.desc", "vote_count.desc"]:
-            for page in range(1, 9):
-                data = safe_get(
-                    f"{TMDB_BASE}/discover/tv",
-                    {
-                        "api_key": TMDB_API_KEY,
-                        "language": "hr-HR",
-                        "with_genres": tv_genre,
-                        "first_air_date.gte": "1960-01-01",
-                        "first_air_date.lte": "1999-12-31",
-                        "vote_count.gte": 10,
-                        "sort_by": sort_by,
-                        "page": page
-                    }
-                )
-                for s in (data or {}).get("results", []):
-                    if s["id"] not in seen_tmdb_series:
-                        candidate_shows[s["id"]] = s
-
-    for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
-        for page in range(1, 8):
-            data = safe_get(
-                f"{TMDB_BASE}/discover/tv",
-                {
-                    "api_key": TMDB_API_KEY,
-                    "language": "hr-HR",
-                    "with_genres": tv_genre,
-                    "first_air_date.gte": "2000-01-01",
-                    "vote_count.gte": 25,
-                    "sort_by": "popularity.desc",
-                    "page": page
-                }
-            )
-            for s in (data or {}).get("results", []):
-                if s["id"] not in seen_tmdb_series:
-                    candidate_shows[s["id"]] = s
+    priority_ids = set()
 
     def fetch_tv_seeds_all_versions(seed_title):
         res = safe_get(f"{TMDB_BASE}/search/tv", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR"})
@@ -881,17 +867,14 @@ def sync_all_series(seen_tmdb_series):
                 matches.append(item)
         return matches
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
-        for hits in pool.map(fetch_tv_seeds_all_versions, CLASSIC_TV_SEED_TITLES):
-            for hit in hits:
-                if hit and hit["id"] not in seen_tmdb_series:
-                    candidate_shows[hit["id"]] = hit
-
+    # 1. Prioritet: serije stvarno pronađene u Archive.org kolekcijama
     print("4/4 Rudarenje TV kolekcija na Archive.org...", flush=True)
     discovered_cores = {}
     for col in ARCHIVE_TV_COLLECTIONS:
+        if time.monotonic() > deadline_ts:
+            break
         query = f"mediatype:movies AND collection:{col} AND -subject:trailer AND -subject:news"
-        for page in [1, 2, 3, 4]:
+        for page in [1, 2, 3]:
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
@@ -914,17 +897,77 @@ def sync_all_series(seen_tmdb_series):
                 if len(core) >= 3 and core not in discovered_cores:
                     discovered_cores[core] = str(raw_t)
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=18) as pool:
         for hits in pool.map(fetch_tv_seeds_all_versions, list(discovered_cores.keys())):
             for hit in hits:
                 if hit and hit["id"] not in seen_tmdb_series:
                     candidate_shows[hit["id"]] = hit
+                    priority_ids.add(hit["id"])
 
-    print(f"  Ukupno {len(candidate_shows)} novih serija za provjeru na Archive.org...", flush=True)
+    # 2. Prioritet: kurirani popis TV klasika
+    with ThreadPoolExecutor(max_workers=18) as pool:
+        for hits in pool.map(fetch_tv_seeds_all_versions, CLASSIC_TV_SEED_TITLES):
+            for hit in hits:
+                if hit and hit["id"] not in seen_tmdb_series:
+                    candidate_shows[hit["id"]] = hit
+                    priority_ids.add(hit["id"])
+
+    # 3. Dodatna TMDB pretraga po žanrovima (umjeren opseg za bržu provjeru)
+    for endpoint in ["tv/popular", "tv/top_rated"]:
+        for page in range(1, 8):
+            data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
+            for s in (data or {}).get("results", []):
+                if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
+                    candidate_shows[s["id"]] = s
+
+    for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
+        for page in range(1, 5):
+            data = safe_get(
+                f"{TMDB_BASE}/discover/tv",
+                {
+                    "api_key": TMDB_API_KEY,
+                    "language": "hr-HR",
+                    "with_genres": tv_genre,
+                    "first_air_date.gte": "1960-01-01",
+                    "first_air_date.lte": "1999-12-31",
+                    "vote_count.gte": 15,
+                    "sort_by": "popularity.desc",
+                    "page": page
+                }
+            )
+            for s in (data or {}).get("results", []):
+                if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
+                    candidate_shows[s["id"]] = s
+
+    ordered_candidates = sorted(
+        candidate_shows.items(),
+        key=lambda item: (
+            0 if item[0] in priority_ids else 1,
+            -float(item[1].get("popularity") or 0.0)
+        )
+    )
+
+    total_candidates = len(ordered_candidates)
+    print(f"  Ukupno {total_candidates} novih serija za provjeru na Archive.org...", flush=True)
+
+    checked_counter = [0]
+    added_series_counter = [0]
+    time_limit_notified = [False]
 
     def process_series(item):
+        if time.monotonic() > deadline_ts:
+            with state_lock:
+                if not time_limit_notified[0]:
+                    time_limit_notified[0] = True
+                    print("  ⏱ Dostignut sigurnosni vremenski limit — uredno spremanje i završetak...", flush=True)
+            return None
+
         tv_id, s = item
         with state_lock:
+            checked_counter[0] += 1
+            c_now = checked_counter[0]
+            if c_now % 100 == 0:
+                print(f"  ... Provjereno {c_now}/{total_candidates} kandidata (dodano {added_series_counter[0]} serija)...", flush=True)
             if tv_id in seen_tmdb_series:
                 return None
 
@@ -947,6 +990,7 @@ def sync_all_series(seen_tmdb_series):
             if tv_id in seen_tmdb_series:
                 return None
             seen_tmdb_series.add(tv_id)
+            added_series_counter[0] += 1
 
         if not overview:
             en_tv = safe_get(f"{TMDB_BASE}/tv/{tv_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
@@ -980,8 +1024,8 @@ def sync_all_series(seen_tmdb_series):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + Serija: {row['title']} ({seasons_found} sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
-        futures = [pool.submit(process_series, item) for item in candidate_shows.items()]
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = [pool.submit(process_series, item) for item in ordered_candidates]
         for fut in as_completed(futures):
             msg = fut.result()
             if msg:
@@ -989,14 +1033,17 @@ def sync_all_series(seen_tmdb_series):
 
 
 def run_series_and_cartoons_sync():
+    start_ts = time.monotonic()
+    deadline_ts = start_ts + MAX_SYNC_DURATION_SECONDS
     print("=== [SERIJE I CRTIĆI] Pokretanje brze sinkronizacije serija i kratkih crtića ===", flush=True)
     existing_archive_ids, _, _, _ = fetch_existing_catalog_state("movie")
     _, seen_tmdb_series, _, existing_series_rows = fetch_existing_catalog_state("series")
     print(f"  U bazi već postoji {len(seen_tmdb_series)} potvrđenih serija.", flush=True)
-    sync_short_cartoons(existing_archive_ids)
-    refresh_incomplete_series(existing_series_rows)
-    sync_all_series(seen_tmdb_series)
-    print(f"=== [SERIJE I CRTIĆI] Završeno! Ukupno serija u katalogu: {len(seen_tmdb_series)} ===", flush=True)
+    sync_short_cartoons(existing_archive_ids, deadline_ts)
+    refresh_incomplete_series(existing_series_rows, deadline_ts)
+    sync_all_series(seen_tmdb_series, deadline_ts)
+    elapsed_mins = (time.monotonic() - start_ts) / 60.0
+    print(f"=== [SERIJE I CRTIĆI] Završeno za {elapsed_mins:.1f} min! Ukupno serija u katalogu: {len(seen_tmdb_series)} ===", flush=True)
 
 
 if __name__ == "__main__":
