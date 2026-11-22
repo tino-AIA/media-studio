@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -124,14 +125,14 @@ private data class ParsedEpisodeContext(
 /**
  * Ubrzava reprodukciju velikih HD datoteka s Archive.org-a:
  * - Jednokratno razrješava 302 preusmjeravanje na ciljni storage poslužitelj
- * - Preuzima 20 MB unaprijed u blokovima od 1 MB kroz 4 paralelne Range HTTP veze
+ * - Preuzima 12 MB unaprijed u blokovima od 1 MB kroz 4 paralelne Range HTTP veze
  * - Poslužuje ExoPlayer iz RAM/disk kliznog spremnika bez mrežnih zastoja
  */
 private class ParallelStreamCacheManager(context: Context) {
     companion object {
         const val CHUNK_SIZE = 1_048_576L // 1 MB po bloku
-        const val PREFETCH_AHEAD_CHUNKS = 20 // 20 MB unaprijed
-        const val KEEP_BEHIND_CHUNKS = 4 // 4 MB iza pozicije gledanja
+        const val PREFETCH_AHEAD_CHUNKS = 12 // 12 MB unaprijed (štedi RAM na Firesticku)
+        const val KEEP_BEHIND_CHUNKS = 2 // 2 MB iza pozicije gledanja
     }
 
     private val cacheRoot = File(context.cacheDir, "parallel_stream_${System.nanoTime()}").apply {
@@ -347,7 +348,7 @@ private class ParallelStreamCacheManager(context: Context) {
         return try {
             if (!file.exists()) return null
             val bytes = file.readBytes()
-            if (ramChunkCache.size > 6) {
+            if (ramChunkCache.size > 3) {
                 ramChunkCache.clear()
             }
             ramChunkCache[ramKey] = bytes
@@ -536,14 +537,14 @@ fun PlayerScreen(
 
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
-            .setAllocator(DefaultAllocator(true, 64 * 1024))
+            .setAllocator(DefaultAllocator(true, 32 * 1024))
             .setBufferDurationsMs(
-                25_000,
-                90_000,
-                2_500,
-                5_000
+                15_000,
+                45_000,
+                2_000,
+                4_000
             )
-            .setBackBuffer(15_000, true)
+            .setBackBuffer(8_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -567,14 +568,22 @@ fun PlayerScreen(
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
 
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
+
         val player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(parallelDataSourceFactory))
             .build()
 
+        player.setAudioAttributes(audioAttributes, true)
+
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setPreferredAudioLanguages("hr", "hrv", "en", "eng")
+            .setMaxAudioChannelCount(2)
             .build()
 
         player
