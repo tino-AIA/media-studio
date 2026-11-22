@@ -221,13 +221,35 @@ def supabase_upsert(table, rows, conflict_col):
 
     url = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict_col}"
     try:
-        r = session.post(url, headers=SB_HEADERS, json=rows, timeout=20)
+        r = session.post(url, headers=SB_HEADERS, json=rows, timeout=25)
         if r.status_code in (200, 201):
             return r.json()
-        print(f"[Supabase greška {table}] {r.status_code}: {r.text[:250]}", flush=True)
+        print(
+            f"[Supabase greška {table}] HTTP {r.status_code} (paket {len(rows)}): {r.text}",
+            flush=True
+        )
     except Exception as e:
         print(f"[Supabase iznimka {table}] {e}", flush=True)
-    return []
+
+    # Ako je cijeli paket odbijen (npr. zbog jednog spornog retka), spremi redak po redak i ispiši točan uzrok
+    saved_rows = []
+    for single in rows:
+        try:
+            r_one = session.post(url, headers=SB_HEADERS, json=[single], timeout=20)
+            if r_one.status_code in (200, 201):
+                saved_rows.extend(r_one.json())
+            else:
+                ident = single.get("archive_id") or single.get("name") or single.get("id")
+                title = single.get("title") or single.get("name") or ""
+                tmdb = single.get("tmdb_id") or ""
+                print(
+                    f"  [ODBACEN ZAPIS {table}] title='{title}' | archive_id='{ident}' | tmdb_id={tmdb} | "
+                    f"HTTP {r_one.status_code}: {r_one.text}",
+                    flush=True
+                )
+        except Exception as e_one:
+            print(f"  [IZNIMKA POJEDINACNOG ZAPISA {table}] {e_one}", flush=True)
+    return saved_rows
 
 
 def supabase_patch_row(table, row_id, payload):
@@ -235,7 +257,7 @@ def supabase_patch_row(table, row_id, payload):
     try:
         r = session.patch(url, headers=SB_HEADERS, json=payload, timeout=15)
         if r.status_code not in (200, 204):
-            print(f"[Supabase PATCH greška {table} id={row_id}] {r.status_code}: {r.text[:200]}", flush=True)
+            print(f"[Supabase PATCH greška {table} id={row_id}] {r.status_code}: {r.text}", flush=True)
     except Exception as e:
         print(f"[Supabase PATCH iznimka] {e}", flush=True)
 
@@ -253,16 +275,18 @@ def fetch_existing_catalog_state(media_type_filter=None):
     existing_archive_ids = set()
     seen_tmdb_ids = set()
     seen_title_years = set()
-    all_rows = []
+    filtered_rows = []
 
     offset = 0
     page_size = 1000
     while True:
         headers = dict(SB_HEADERS)
         headers["Range"] = f"{offset}-{offset + page_size - 1}"
-        query_url = f"{SUPABASE_URL}/rest/v1/catalog_items?select=id,archive_id,tmdb_id,title,media_type,release_year,genres,description_hr,stream_url,episodes,is_valid&order=id.asc"
-        if media_type_filter:
-            query_url += f"&media_type=eq.{media_type_filter}"
+        query_url = (
+            f"{SUPABASE_URL}/rest/v1/catalog_items"
+            f"?select=id,archive_id,tmdb_id,title,media_type,release_year,genres,description_hr,stream_url,episodes,is_valid"
+            f"&order=id.asc"
+        )
         try:
             r = session.get(query_url, headers=headers, timeout=20)
             if r.status_code not in (200, 206):
@@ -270,17 +294,20 @@ def fetch_existing_catalog_state(media_type_filter=None):
             batch = r.json()
             if not batch:
                 break
-            all_rows.extend(batch)
+            for row in batch:
+                ident = row.get("archive_id") or ""
+                if ident:
+                    existing_archive_ids.add(ident)
+                if not media_type_filter or row.get("media_type") == media_type_filter:
+                    filtered_rows.append(row)
             if len(batch) < page_size:
                 break
             offset += page_size
         except Exception:
             break
 
-    for row in all_rows:
+    for row in filtered_rows:
         ident = row.get("archive_id") or ""
-        if ident:
-            existing_archive_ids.add(ident)
         if not row.get("is_valid", True):
             continue
         if contains_hentai_or_adult(row.get("title"), row.get("description_hr"), ident) or \
@@ -295,7 +322,7 @@ def fetch_existing_catalog_state(media_type_filter=None):
         if norm_t:
             seen_title_years.add((norm_t, row.get("release_year") or 0))
 
-    return existing_archive_ids, seen_tmdb_ids, seen_title_years, all_rows
+    return existing_archive_ids, seen_tmdb_ids, seen_title_years, filtered_rows
 
 
 def contains_hentai_or_adult(*texts):
