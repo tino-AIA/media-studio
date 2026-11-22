@@ -1,5 +1,6 @@
 package com.example.mediastudio.ui.screens
 
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -28,13 +29,17 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.Coil
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import coil.size.Scale
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -49,6 +54,7 @@ fun GenreScreen(
     onMovieClick: (ArchiveMovie) -> Unit,
     onBackClick: () -> Unit
 ) {
+    val context = LocalContext.current
     val selectedGenre by viewModel.selectedGenre.collectAsState()
     val movies by viewModel.genreMovies.collectAsState()
     val isLoading by viewModel.isGenreLoading.collectAsState()
@@ -67,6 +73,11 @@ fun GenreScreen(
         onDispose {
             viewModel.savedGenreScrollIndex = gridState.firstVisibleItemIndex
             viewModel.savedGenreScrollOffset = gridState.firstVisibleItemScrollOffset
+            // Oslobodi RAM predmemoriju slika pri izlasku iz žanra
+            try {
+                Coil.imageLoader(context).memoryCache?.clear()
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -137,6 +148,10 @@ fun GenreScreen(
                             viewModel.savedGenreScrollIndex = 0
                             viewModel.savedGenreScrollOffset = 0
                             viewModel.clearLastFocusedMovie()
+                            try {
+                                Coil.imageLoader(context).memoryCache?.clear()
+                            } catch (_: Exception) {
+                            }
                             viewModel.loadGenrePage(currentPage - 1)
                         }
                     )
@@ -156,6 +171,10 @@ fun GenreScreen(
                             viewModel.savedGenreScrollIndex = 0
                             viewModel.savedGenreScrollOffset = 0
                             viewModel.clearLastFocusedMovie()
+                            try {
+                                Coil.imageLoader(context).memoryCache?.clear()
+                            } catch (_: Exception) {
+                            }
                             viewModel.loadGenrePage(currentPage + 1)
                         }
                     )
@@ -270,6 +289,7 @@ fun RatedMovieGridCard(
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
 ) {
+    val context = LocalContext.current
     val movie = ratedMovie.movie
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -351,7 +371,16 @@ fun RatedMovieGridCard(
                         )
                     }
                 } else {
-                    val painter = rememberAsyncImagePainter(model = activeImageUrl)
+                    val imageRequest = remember(activeImageUrl) {
+                        ImageRequest.Builder(context)
+                            .data(activeImageUrl)
+                            .size(240, 360)
+                            .scale(Scale.FILL)
+                            .bitmapConfig(Bitmap.Config.RGB_565)
+                            .allowHardware(false)
+                            .build()
+                    }
+                    val painter = rememberAsyncImagePainter(model = imageRequest)
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (painter.state is AsyncImagePainter.State.Loading) {
                             CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
@@ -370,8 +399,17 @@ fun RatedMovieGridCard(
                                     )
                                 }
                             } else {
+                                val fallbackRequest = remember(fallbackUrl) {
+                                    ImageRequest.Builder(context)
+                                        .data(fallbackUrl)
+                                        .size(240, 360)
+                                        .scale(Scale.FILL)
+                                        .bitmapConfig(Bitmap.Config.RGB_565)
+                                        .allowHardware(false)
+                                        .build()
+                                }
                                 Image(
-                                    painter = rememberAsyncImagePainter(fallbackUrl),
+                                    painter = rememberAsyncImagePainter(fallbackRequest),
                                     contentDescription = movie.title,
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop
