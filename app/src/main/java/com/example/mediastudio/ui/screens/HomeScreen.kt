@@ -1,6 +1,7 @@
 package com.example.mediastudio.ui.screens
 
 import android.app.Activity
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -54,6 +55,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
+import coil.size.Scale
 import com.example.mediastudio.data.api.PosterFetcher
 import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
@@ -196,8 +199,17 @@ fun HomeScreen(
     ) {
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             if (currentHeroPosterUrl.isNotEmpty()) {
+                val heroBgRequest = remember(currentHeroPosterUrl) {
+                    ImageRequest.Builder(context)
+                        .data(currentHeroPosterUrl)
+                        .size(480, 320)
+                        .scale(Scale.FILL)
+                        .bitmapConfig(Bitmap.Config.RGB_565)
+                        .allowHardware(false)
+                        .build()
+                }
                 Image(
-                    painter = rememberAsyncImagePainter(currentHeroPosterUrl),
+                    painter = rememberAsyncImagePainter(heroBgRequest),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().alpha(0.35f)
@@ -893,6 +905,7 @@ fun NetflixTop10Card(
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "top10_scale")
@@ -945,9 +958,17 @@ fun NetflixTop10Card(
                 interactionSource = interactionSource,
                 onClick = { onMovieClick(movie) }
             ) {
-                val painter = rememberAsyncImagePainter(
-                    model = posterUrl.ifBlank { fallbackUrl }
-                )
+                val activeUrl = posterUrl.ifBlank { fallbackUrl }
+                val imageRequest = remember(activeUrl) {
+                    ImageRequest.Builder(context)
+                        .data(activeUrl)
+                        .size(240, 360)
+                        .scale(Scale.FILL)
+                        .bitmapConfig(Bitmap.Config.RGB_565)
+                        .allowHardware(false)
+                        .build()
+                }
+                val painter = rememberAsyncImagePainter(model = imageRequest)
 
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
@@ -960,8 +981,17 @@ fun NetflixTop10Card(
                         contentScale = ContentScale.Crop
                     )
                     if (painter.state is AsyncImagePainter.State.Error) {
+                        val fallbackReq = remember(fallbackUrl) {
+                            ImageRequest.Builder(context)
+                                .data(fallbackUrl)
+                                .size(240, 360)
+                                .scale(Scale.FILL)
+                                .bitmapConfig(Bitmap.Config.RGB_565)
+                                .allowHardware(false)
+                                .build()
+                        }
                         Image(
-                            painter = rememberAsyncImagePainter(fallbackUrl),
+                            painter = rememberAsyncImagePainter(fallbackReq),
                             contentDescription = movie.title,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Crop
@@ -1028,6 +1058,7 @@ fun MovieCard(
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "card_scale")
@@ -1100,7 +1131,16 @@ fun MovieCard(
             onClick = { onMovieClick(movie) }
         ) {
             if (posterUrl.isNotEmpty()) {
-                val painter = rememberAsyncImagePainter(model = posterUrl)
+                val imageRequest = remember(posterUrl) {
+                    ImageRequest.Builder(context)
+                        .data(posterUrl)
+                        .size(240, 360)
+                        .scale(Scale.FILL)
+                        .bitmapConfig(Bitmap.Config.RGB_565)
+                        .allowHardware(false)
+                        .build()
+                }
+                val painter = rememberAsyncImagePainter(model = imageRequest)
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
                         CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(24.dp))
@@ -1121,8 +1161,17 @@ fun MovieCard(
                         } else {
                             val fallbackId = movie.identifier.split(",").first()
                             val fallback = "https://archive.org/services/img/$fallbackId"
+                            val fallbackReq = remember(fallback) {
+                                ImageRequest.Builder(context)
+                                    .data(fallback)
+                                    .size(240, 360)
+                                    .scale(Scale.FILL)
+                                    .bitmapConfig(Bitmap.Config.RGB_565)
+                                    .allowHardware(false)
+                                    .build()
+                            }
                             Image(
-                                painter = rememberAsyncImagePainter(fallback),
+                                painter = rememberAsyncImagePainter(fallbackReq),
                                 contentDescription = movie.title,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
