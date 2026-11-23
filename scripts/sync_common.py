@@ -21,7 +21,8 @@ adapter = HTTPAdapter(pool_connections=48, pool_maxsize=48, max_retries=1)
 session.mount("https://", adapter)
 session.mount("http://", adapter)
 session.headers.update({
-    "User-Agent": "MediaStudioCatalogSync/4.0 (AndroidTV App; contact@mediastudio.local)"
+    "User-Agent": "MediaStudioCatalogSync/4.0 (AndroidTV App; contact@mediastudio.local)",
+    "Accept-Encoding": "gzip, deflate"
 })
 
 state_lock = threading.Lock()
@@ -146,16 +147,18 @@ TMDB_MOVIE_GENRE_MAP = {
 }
 
 
-def safe_get(url, params=None, timeout=12):
-    for attempt in range(3):
+def safe_get(url, params=None, timeout=14):
+    for attempt in range(4):
         try:
             r = session.get(url, params=params, timeout=timeout)
             if r.status_code == 200:
                 return r.json()
-            if r.status_code == 429:
-                time.sleep(2.0 * (attempt + 1))
+            if r.status_code in (429, 502, 503, 504):
+                time.sleep(2.5 * (attempt + 1))
+                continue
+            return None
         except Exception:
-            time.sleep(0.4)
+            time.sleep(0.8 * (attempt + 1))
     return None
 
 
@@ -231,7 +234,6 @@ def supabase_upsert(table, rows, conflict_col):
     except Exception as e:
         print(f"[Supabase iznimka {table}] {e}", flush=True)
 
-    # Ako je cijeli paket odbijen (npr. zbog jednog spornog retka), spremi redak po redak i ispiši točan uzrok
     saved_rows = []
     for single in rows:
         try:
@@ -508,7 +510,7 @@ def clean_filename_to_title(filename, fallback_to_stem=False):
     base = filename.rsplit("/", 1)[-1]
     name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
 
-    paren_year = re.search(r"[\(\[]\s*(19\d{2}|20\d{2})\s*[\)\]]", name)
+    paren_year = re.search(r"[\(\[]\s*[^)\]]*?\b(19\d{2}|20\d{2})\b[^)\]]*?[\)\]]", name)
     lead_year = re.match(r"^\s*(19\d{2}|20\d{2})(?=[\s\-_.:])", name)
     all_years = re.findall(r"\b(19\d{2}|20\d{2})\b", name)
 
@@ -527,12 +529,12 @@ def clean_filename_to_title(filename, fallback_to_stem=False):
     clean = re.sub(r"[._]+", " ", clean)
 
     if year:
-        clean = re.sub(rf"[\(\[]\s*{year}\s*[\)\]]", " ", clean)
+        clean = re.sub(rf"[\(\[]\s*[^)\]]*?\b{year}\b[^)\]]*?[\)\]]", " ", clean)
         clean = re.sub(rf"^\s*\(?\b{year}\b\)?[\s\-_.:)]*(?:\d{{1,2}}[\s\-_.:)]+)?(?=[A-Za-zČĆŽŠĐ])", " ", clean)
         clean = re.sub(rf"(?<=\S)\s+\b{year}\b\s*$", " ", clean)
 
     clean = RELEASE_TAG_PATTERN.sub(" ", clean)
-    clean = re.sub(r"\(\s*(?:cut|version|edition)?\s*\)|\[\s*\]", " ", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\(\s*(?:cut|version|edition|b&w|bw|color|hd|sd)?\s*\)|\[\s*\]", " ", clean, flags=re.IGNORECASE)
     clean = re.sub(r"^\s*\d{1,3}\s*[\.\-\)\]]+\s*", "", clean)
     clean = re.sub(r"^\s*[12]\s+(?=[A-ZČĆŽŠĐ])", "", clean)
     clean = re.sub(r"\s+", " ", clean).strip(" -–—.")
@@ -794,17 +796,20 @@ def validate_movie_match(
     ):
         return False, f"title_mismatch ('{arch_norm_title}' != {list(norm_candidates)})"
 
-    arch_year = 0
-    if expected_year > 0:
-        arch_year = (
-            extract_year_from_text(raw_arch_title)
-            or extract_year_from_text(archive_md.get("year") or archive_md.get("date") or "")
-            or extract_year_from_text(identifier)
-        )
-        if arch_year > 0:
-            max_diff = 0 if expected_year >= 2024 else 1
-            if abs(arch_year - expected_year) > max_diff:
-                return False, f"year_mismatch (archive={arch_year} vs tmdb={expected_year})"
+    # Godinu iz archive_md["year"] uzimamo samo ako nije riječ o godini učitavanja (upload date)
+    title_or_id_year = (
+        extract_year_from_text(raw_arch_title)
+        or extract_year_from_text(identifier)
+        or extract_year_from_text(chosen_filename)
+    )
+    meta_year = extract_year_from_text(archive_md.get("year") or "")
+    added_year = extract_year_from_text(archive_md.get("addeddate") or archive_md.get("publicdate") or "")
+    arch_year = title_or_id_year or (meta_year if meta_year > 0 and meta_year != added_year else 0)
+
+    if expected_year > 0 and arch_year > 0:
+        max_diff = 0 if expected_year >= 2024 else 1
+        if abs(arch_year - expected_year) > max_diff:
+            return False, f"year_mismatch (archive={arch_year} vs tmdb={expected_year})"
 
     is_anim = 16 in (tmdb_details.get("genre_ids") or []) if tmdb_details else False
     is_extended_cut = bool(EXTENDED_CUT_TAG_RE.search(f"{ident_lower} {raw_arch_title.lower()} {chosen_filename.lower()}"))
@@ -817,13 +822,13 @@ def validate_movie_match(
             if archive_mins < min_allowed or archive_mins > max_allowed:
                 return False, f"runtime_mismatch (archive={archive_mins}m vs tmdb={tmdb_runtime}m)"
         else:
-            min_size_when_no_runtime = 120 if is_anim else 350
+            min_size_when_no_runtime = 90 if is_anim else 180
             if chosen_size_mb < min_size_when_no_runtime:
                 return False, f"too_small_without_runtime ({chosen_size_mb:.0f}MB)"
     else:
         if archive_mins > 0 and archive_mins < 65:
             return False, f"too_short_no_tmdb_runtime ({archive_mins}m)"
-        if archive_mins <= 0 and chosen_size_mb < 350:
+        if archive_mins <= 0 and chosen_size_mb < 180:
             return False, f"too_small_no_runtime ({chosen_size_mb:.0f}MB)"
 
     year_confirmed = (expected_year > 0 and arch_year > 0 and abs(arch_year - expected_year) <= 1)
