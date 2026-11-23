@@ -22,10 +22,13 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -48,6 +51,12 @@ import com.example.mediastudio.data.api.SeriesSeason
 import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
     var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
@@ -68,7 +77,54 @@ private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Mod
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private fun looksLikeEnglishText(text: String): Boolean {
+    if (text.isBlank()) return false
+    val padded = " ${text.lowercase()} "
+    val englishMarkers = listOf(
+        " the ", " and ", " with ", " from ", " into ", " their ",
+        " his ", " her ", " show ", " story ", " when ", " where ",
+        " which ", " while ", " after ", " before ", " through ", " against ",
+        " of ", " in ", " to "
+    )
+    val hits = englishMarkers.count { padded.contains(it) }
+    val hasCroatianChars = text.any { it in "čćžšđČĆŽŠĐ" }
+    return hits >= 2 && !hasCroatianChars
+}
+
+private suspend fun translateSeriesDescriptionToCroatian(text: String): String = withContext(Dispatchers.IO) {
+    if (text.isBlank() || text.startsWith("Opis za ovaj naslov") || !looksLikeEnglishText(text)) {
+        return@withContext text
+    }
+    try {
+        val limitedText = text.take(1500)
+        val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
+        val translatedBuilder = StringBuilder()
+
+        for (sentence in sentences) {
+            val trimmed = sentence.trim()
+            if (trimmed.isEmpty()) continue
+            val encoded = URLEncoder.encode(trimmed, "UTF-8")
+            val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
+            val conn = URL(urlStr).openConnection() as HttpURLConnection
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+
+            val response = conn.inputStream.bufferedReader().use { it.readText() }
+            val jsonArray = JSONArray(response)
+            val parts = jsonArray.getJSONArray(0)
+            for (i in 0 until parts.length()) {
+                translatedBuilder.append(parts.getJSONArray(i).getString(0))
+            }
+            translatedBuilder.append(" ")
+        }
+        translatedBuilder.toString().trim().ifBlank { text }
+    } catch (_: Exception) {
+        text
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SeriesScreen(
     series: ArchiveMovie,
@@ -116,9 +172,10 @@ fun SeriesScreen(
         val dbDesc = SupabaseRepository.loadItemDescription(series.identifier)
         SupabaseRepository.loadSeriesEpisodes(series.identifier)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
-        seriesDescription = fullInfo.description.takeIf {
+        val rawDesc = fullInfo.description.takeIf {
             it.isNotBlank() && !it.startsWith("Opis za ovaj naslov")
         } ?: dbDesc.ifBlank { fullInfo.description }
+        seriesDescription = translateSeriesDescriptionToCroatian(rawDesc)
         seasons = fullInfo.seasons
         selectedSeasonIndex = 0
         isLoading = false
@@ -130,6 +187,10 @@ fun SeriesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                modifier = Modifier.focusProperties {
+                    up = FocusRequester.Cancel
+                    left = FocusRequester.Cancel
+                },
                 title = {
                     Column {
                         Text(
@@ -155,7 +216,8 @@ fun SeriesScreen(
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
-                        contentDescription = "Povratak"
+                        contentDescription = "Povratak",
+                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
@@ -239,6 +301,7 @@ fun SeriesScreen(
                                 Box(
                                     modifier = Modifier
                                         .height(44.dp)
+                                        .focusProperties { left = FocusRequester.Cancel }
                                         .background(
                                             color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                             shape = RoundedCornerShape(8.dp)
@@ -294,6 +357,11 @@ fun SeriesScreen(
                                     SeasonChipButton(
                                         title = "${season.seasonTitle} (${season.episodes.size})",
                                         isSelected = index == selectedSeasonIndex,
+                                        modifier = if (index == 0) {
+                                            Modifier.focusProperties { left = FocusRequester.Cancel }
+                                        } else {
+                                            Modifier
+                                        },
                                         onClick = { selectedSeasonIndex = index }
                                     )
                                 }
@@ -317,13 +385,14 @@ fun SeriesScreen(
 private fun SeasonChipButton(
     title: String,
     isSelected: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .background(
                 color = if (isSelected) Color.Red else if (isFocused) Color(0xFF2B2B2B) else Color(0xFF1A1A1A),
                 shape = RoundedCornerShape(8.dp)
@@ -346,6 +415,7 @@ private fun SeasonChipButton(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun EpisodeRowItem(
     episode: SeriesEpisode,
@@ -357,6 +427,7 @@ private fun EpisodeRowItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .focusProperties { left = FocusRequester.Cancel }
             .background(
                 color = if (isFocused) Color(0xFF2A2A2A) else Color(0xFF161616),
                 shape = RoundedCornerShape(10.dp)
