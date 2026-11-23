@@ -9,6 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.GZIPInputStream
 
 data class SupabaseEpisodeItem(
     val season: Int = 1,
@@ -62,7 +63,6 @@ object SupabaseRepository {
     private const val SUPABASE_REST_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
     private const val SUPABASE_PUBLISHABLE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGAQ_hlCwfwh5"
 
-    // Samo lagana polja potrebna za kartice i filtriranje (bez opisnih tekstova, backdropa i epizoda)
     private const val CATALOG_ULTRA_LITE_COLUMNS =
         "id,archive_id,tmdb_id,title,media_type,genres,release_year,rating,popularity_score," +
             "poster_url,stream_url,is_featured,is_valid,tmdb_runtime,archive_runtime"
@@ -81,7 +81,6 @@ object SupabaseRepository {
     private val itemByArchiveId = ConcurrentHashMap<String, SupabaseCatalogItem>()
     private val itemByStreamUrl = ConcurrentHashMap<String, SupabaseCatalogItem>()
 
-    // Ograničene priručne memorije koje se učitavaju tek na klik i redovito čiste
     private val episodesByArchiveId = ConcurrentHashMap<String, List<SupabaseEpisodeItem>>()
     private val descriptionByArchiveId = ConcurrentHashMap<String, String>()
     private val authorMoviesByAuthorId = ConcurrentHashMap<Long, List<SupabaseAuthorMovie>>()
@@ -98,10 +97,7 @@ object SupabaseRepository {
                 "supabase_catalog_lite_v2.json",
                 "supabase_author_movies_cache.json"
             ).forEach { oldName ->
-                try {
-                    File(fDir, oldName).delete()
-                } catch (_: Exception) {
-                }
+                try { File(fDir, oldName).delete() } catch (_: Exception) { }
             }
             loadFromDiskCache()
         }
@@ -127,16 +123,10 @@ object SupabaseRepository {
 
     private fun loadFromDiskCache() {
         readCacheFile("supabase_catalog_ultralite_v3.json")?.let { jsonStr ->
-            try {
-                updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr)))
-            } catch (_: Exception) {
-            }
+            try { updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr))) } catch (_: Exception) { }
         }
         readCacheFile("supabase_authors_cache.json")?.let { jsonStr ->
-            try {
-                authors = parseAuthorsArray(JSONArray(jsonStr))
-            } catch (_: Exception) {
-            }
+            try { authors = parseAuthorsArray(JSONArray(jsonStr)) } catch (_: Exception) { }
         }
     }
 
@@ -239,9 +229,6 @@ object SupabaseRepository {
         }
     }
 
-    /**
-     * Oslobađa nakupljene opise, epizode i stare privremene datoteke s diska kako bi Firestick radio stabilno.
-     */
     fun trimMemoryCaches() {
         episodesByArchiveId.clear()
         descriptionByArchiveId.clear()
@@ -305,7 +292,6 @@ object SupabaseRepository {
     }
 
     fun getCatalogItems(): List<SupabaseCatalogItem> = catalogItems
-
     fun getAuthors(): List<SupabaseAuthor> = authors
 
     fun getAuthorWithMovies(authorName: String): Pair<SupabaseAuthor?, List<SupabaseAuthorMovie>> {
@@ -394,13 +380,22 @@ object SupabaseRepository {
             conn.requestMethod = "GET"
             conn.setRequestProperty("apikey", SUPABASE_PUBLISHABLE_KEY)
             conn.setRequestProperty("Accept", "application/json")
+            // Uključena GZIP kompresija za drastično ubrzanje skidanja
+            conn.setRequestProperty("Accept-Encoding", "gzip") 
             conn.setRequestProperty("Range-Unit", "items")
             conn.setRequestProperty("Range", "$rangeStart-$rangeEnd")
             conn.connectTimeout = 10000
             conn.readTimeout = 12000
+            
             val code = conn.responseCode
             if (code == 200 || code == 206) {
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val encoding = conn.contentEncoding
+                val inputStream = if (encoding != null && encoding.contains("gzip", ignoreCase = true)) {
+                    GZIPInputStream(conn.inputStream)
+                } else {
+                    conn.inputStream
+                }
+                val body = inputStream.bufferedReader().use { it.readText() }
                 JSONArray(body)
             } else {
                 null
@@ -409,10 +404,7 @@ object SupabaseRepository {
             e.printStackTrace()
             null
         } finally {
-            try {
-                conn?.disconnect()
-            } catch (_: Exception) {
-            }
+            try { conn?.disconnect() } catch (_: Exception) {}
         }
     }
 
