@@ -41,20 +41,23 @@ MAX_MOVIES_SYNC_SECONDS = 185 * 60
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
 _GENRES_ACCEPTS_ORIG_LANG = "orig_lang" in inspect.signature(determine_primary_genres).parameters
 
+EX_YU_DETECTION_KEYWORDS = (
+    "zagreb film", "jadran film", "avala film", "centar film", "sutjeska film",
+    "bosna film", "vardar film", "triglav film", "vesna film", "dunav film",
+    "zvezda film", "adriatic film", "croatia film", "rtv zagreb", "rtv beograd",
+    "tv titograd", "rtv sarajevo", "rtv ljubljana", "yugoslavia", "jugoslavija",
+    "jugoslovenski", "jugoslavenski", "hrvatski film", "srpski film",
+    "domaci film", "domaći film", "ex-yu", "ex yu", "baltazar", "balthazar",
+    "šegrt hlapić", "segrt hlapic", "čudesna šuma", "cudesna suma",
+    "čarobnjakov šešir", "carobnjakov sesir", "surogat"
+)
+
 
 def check_ex_yu(*texts, orig_lang=""):
-    if hasattr(sc, "is_ex_yu_content"):
-        return sc.is_ex_yu_content(*texts, orig_lang=orig_lang)
     if orig_lang and orig_lang.lower() in EX_YU_LANGS:
         return True
     blob = " ".join(str(t) for t in texts if t).lower()
-    return any(
-        kw in blob for kw in (
-            "zagreb film", "jadran film", "avala film", "centar film", "sutjeska film",
-            "bosna film", "vardar film", "croatia film", "yugoslavia", "jugoslavija",
-            "domaci film", "domaći film", "ex-yu", "ex yu", "baltazar", "šegrt hlapić", "čudesna šuma"
-        )
-    )
+    return any(kw in blob for kw in EX_YU_DETECTION_KEYWORDS)
 
 
 def resolve_movie_genres(details, final_title, hint_genre=None):
@@ -905,7 +908,6 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
     def fetch_col_page(col_page):
         col, page = col_page
         if col == "popcornmaker":
-            # Samo Popcorn Maker zapisi s godinom filma u naslovu (izbjegava tisuće kratkih web projekata)
             query = 'mediatype:(movies OR web) AND collection:popcornmaker AND title:(19* OR 20*) AND -subject:trailer AND -subject:news'
         else:
             query = f"mediatype:movies AND collection:{col} AND -collection:television AND -subject:trailer AND -subject:news"
@@ -930,7 +932,6 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 if ident and ident not in existing_archive_ids and ident not in archive_docs:
                     archive_docs[ident] = doc
 
-    # Predfiltriranje prije bilo kakvog HTTP upita po stavci (eliminira duplikate koji su već u bazi)
     filtered_docs = []
     skipped_pre = 0
     for doc in archive_docs.values():
