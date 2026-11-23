@@ -12,7 +12,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -95,6 +95,9 @@ fun GenreScreen(
         initialFirstVisibleItemScrollOffset = viewModel.savedGenreScrollOffset
     )
 
+    val firstItemFocusRequester = remember { FocusRequester() }
+    var targetPageForFirstFocus by remember { mutableIntStateOf(0) }
+
     DisposableEffect(gridState) {
         onDispose {
             viewModel.savedGenreScrollIndex = gridState.firstVisibleItemIndex
@@ -110,9 +113,26 @@ fun GenreScreen(
         onBackClick()
     }
 
+    // Automatsko pomicanje na vrh i prebacivanje fokusa na prvu karticu nove stranice
+    LaunchedEffect(movies, isLoading, currentPage, targetPageForFirstFocus) {
+        if (targetPageForFirstFocus > 0 &&
+            !isLoading &&
+            currentPage == targetPageForFirstFocus &&
+            movies.isNotEmpty()
+        ) {
+            gridState.scrollToItem(0)
+            delay(80L)
+            try {
+                firstItemFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
+            targetPageForFirstFocus = 0
+        }
+    }
+
     LaunchedEffect(movies, lastFocusedMovieId) {
         val targetId = lastFocusedMovieId
-        if (movies.isNotEmpty() && !targetId.isNullOrBlank()) {
+        if (targetPageForFirstFocus == 0 && movies.isNotEmpty() && !targetId.isNullOrBlank()) {
             val targetIndex = movies.indexOfFirst { it.movie.identifier == targetId }
             if (targetIndex >= 0) {
                 val isAlreadyVisible = gridState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
@@ -126,7 +146,10 @@ fun GenreScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                modifier = Modifier.focusProperties { up = FocusRequester.Cancel },
+                modifier = Modifier.focusProperties {
+                    up = FocusRequester.Cancel
+                    left = FocusRequester.Cancel
+                },
                 title = {
                     Column {
                         Text(
@@ -147,7 +170,8 @@ fun GenreScreen(
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
-                        contentDescription = "Povratak"
+                        contentDescription = "Povratak",
+                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
@@ -169,7 +193,10 @@ fun GenreScreen(
                         text = "◀ Prethodna",
                         enabled = currentPage > 1 && !isLoading,
                         isPrimary = false,
+                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel },
                         onClick = {
+                            val nextPage = currentPage - 1
+                            targetPageForFirstFocus = nextPage
                             viewModel.savedGenreScrollIndex = 0
                             viewModel.savedGenreScrollOffset = 0
                             viewModel.clearLastFocusedMovie()
@@ -177,7 +204,7 @@ fun GenreScreen(
                                 Coil.imageLoader(context).memoryCache?.clear()
                             } catch (_: Exception) {
                             }
-                            viewModel.loadGenrePage(currentPage - 1)
+                            viewModel.loadGenrePage(nextPage)
                         }
                     )
 
@@ -192,7 +219,10 @@ fun GenreScreen(
                         text = "Sljedeća ▶",
                         enabled = currentPage < totalPages && !isLoading,
                         isPrimary = true,
+                        modifier = Modifier.focusProperties { right = FocusRequester.Cancel },
                         onClick = {
+                            val nextPage = currentPage + 1
+                            targetPageForFirstFocus = nextPage
                             viewModel.savedGenreScrollIndex = 0
                             viewModel.savedGenreScrollOffset = 0
                             viewModel.clearLastFocusedMovie()
@@ -200,7 +230,7 @@ fun GenreScreen(
                                 Coil.imageLoader(context).memoryCache?.clear()
                             } catch (_: Exception) {
                             }
-                            viewModel.loadGenrePage(currentPage + 1)
+                            viewModel.loadGenrePage(nextPage)
                         }
                     )
                 }
@@ -235,10 +265,10 @@ fun GenreScreen(
                     .clipToBounds()
                     .throttleGenreVerticalDpad()
             ) {
-                items(
+                itemsIndexed(
                     items = movies,
-                    key = { it.movie.identifier }
-                ) { ratedMovie ->
+                    key = { _, rated -> rated.movie.identifier }
+                ) { index, ratedMovie ->
                     val authorPhoto = if (ratedMovie.movie.identifier.startsWith("AUTHOR|")) {
                         val authorName = ratedMovie.movie.identifier.removePrefix("AUTHOR|")
                         SupabaseRepository.getAuthors()
@@ -254,6 +284,11 @@ fun GenreScreen(
                         ratedMovie = ratedMovie,
                         isSeries = isSeries,
                         authorPhotoUrl = authorPhoto,
+                        modifier = if (index == 0) {
+                            Modifier.focusRequester(firstItemFocusRequester)
+                        } else {
+                            Modifier
+                        },
                         shouldRestoreFocus = ratedMovie.movie.identifier == lastFocusedMovieId,
                         onFocusRestored = { viewModel.clearLastFocusedMovie() },
                         onMovieClick = { clickedMovie ->
@@ -274,13 +309,14 @@ private fun PaginationNavButton(
     text: String,
     enabled: Boolean,
     isPrimary: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .background(
                 color = when {
                     !enabled -> Color(0xFF1A1A1A)
@@ -313,6 +349,7 @@ fun RatedMovieGridCard(
     ratedMovie: RatedMovie,
     isSeries: Boolean,
     authorPhotoUrl: String = "",
+    modifier: Modifier = Modifier,
     shouldRestoreFocus: Boolean = false,
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
@@ -368,9 +405,8 @@ fun RatedMovieGridCard(
         }
     }
 
-    // Fokus na cijelom Columnu osigurava da se plakat i naziv filma uvijek zajedno pomiču u vidljivo polje
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scaleVal
