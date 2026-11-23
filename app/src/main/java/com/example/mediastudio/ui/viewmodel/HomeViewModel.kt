@@ -47,6 +47,17 @@ data class RatedMovie(
     val relevanceScore: Double = 0.0
 )
 
+private data class CatalogSnapshot(
+    val sourceItemsRef: List<SupabaseCatalogItem>,
+    val deduplicatedAll: List<SupabaseCatalogItem>,
+    val adultMovies: List<SupabaseCatalogItem>,
+    val liveActionMovies: List<SupabaseCatalogItem>,
+    val animatedMoviesAndShorts: List<SupabaseCatalogItem>,
+    val liveActionSeries: List<SupabaseCatalogItem>,
+    val animatedSeries: List<SupabaseCatalogItem>,
+    val concerts: List<SupabaseCatalogItem>
+)
+
 private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
 private data class ArchiveResponseBody(
     val numFound: Int?,
@@ -115,6 +126,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "histoire d'o", "story of o", "lady chatterley", "ai no corrida"
     )
 
+    private val adultShortRegexes = adultEroticKeywords
+        .filter { it.length <= 5 }
+        .map { Regex("\\b${Regex.escape(it)}\\b") }
+
+    private val adultLongKeywords = adultEroticKeywords.filter { it.length > 5 }
+
     private val blockedSpecificAdultKeywords = listOf(
         "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay porn", "boy love"
     )
@@ -124,6 +141,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
         "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh"
     )
+
+    private val blockedUnicodeScriptRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u0900-\\u0D7F]")
+    private val blockedRegionalWordRegex = Regex(
+        "\\b(${blockedRegionalAndArabicKeywords.joinToString("|") { Regex.escape(it) }})\\b"
+    )
+    private val yearParenRegex = Regex("\\(\\d{4}\\)")
+    private val nonAlnumTitleRegex = Regex("[^a-z0-9čćžšđ]")
+    private val nonSearchCharRegex = Regex("[^a-z0-9čćžšđ\\s]")
+    private val multiSpaceRegex = Regex("\\s+")
+    private val seriesIndicatorRegex = Regex("(?i)\\b(s\\d{1,2}e\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|\\d+x\\d+|tv\\s*series)\\b")
+    private val numericCleanRegex = Regex("[^0-9.]")
 
     private val blockedSearchNoiseKeywords = listOf(
         "all 6", "movies 1 -", "movies 1-", "n64", "ps1", "ps2", "snes", "nes",
@@ -139,6 +167,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "koralina", "coraline", "angry birds", "mačak u čizmama", "puss in boots",
         "evangelion", "wolfwalkers", "klaus", "bojack", "phineas", "gumball", "dr.stone",
         "batman: crtana", "animated series", "south park", "simpsons"
+    )
+
+    private val animGenresSet = setOf(
+        "animirani klasici",
+        "disney i pixar klasici",
+        "disney kratki crtići",
+        "animirani filmovi",
+        "klasični crtići",
+        "animirane serije"
+    )
+
+    private val disneyPixarKeywords = listOf(
+        "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
+        "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
     )
 
     val exactAuthorOrder = listOf(
@@ -368,6 +410,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val currentSearchQuery: StateFlow<String> = _currentSearchQuery
 
     private var searchJob: Job? = null
+    private var genreJob: Job? = null
 
     private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
     val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
@@ -409,17 +452,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _lastFocusedMovieId.value = null
     }
 
-    // Manja stranica (36 kartica) sprječava preopterećenje memorije na Fire TV Sticku
     val pageSize = 36
 
     private var isAdultCategoryUnlocked = false
     private var unlockedAdultMovies: List<ArchiveMovie> = emptyList()
 
+    @Volatile
+    private var cachedSnapshot: CatalogSnapshot? = null
+
+    @Volatile
+    private var cachedGenreKey: String? = null
+
+    @Volatile
+    private var cachedGenreFullRated: List<RatedMovie> = emptyList()
+
     init {
-        SupabaseRepository.init(application)
         loadFavorites()
 
         viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                SupabaseRepository.init(application)
+            }
             if (SupabaseRepository.getCatalogItems().isNotEmpty()) {
                 rebuildCategoriesFromSupabase()
                 _isLoading.value = false
@@ -427,7 +480,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             loadAllContent()
         }
 
-        // Automatsko održavanje memorije: svake 3 minute prazni nakupljeni RAM slika i privremeni cache
         viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(180_000L)
@@ -477,7 +529,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         _favoriteMovies.value = currentList
         prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
-        refreshHeroItems(currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
+        val snap = cachedSnapshot
+        if (snap != null) {
+            refreshHeroItems(snap, currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
+        }
     }
 
     fun selectTab(tab: ContentTab) {
@@ -496,13 +551,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isBlockedRegionalOrArabic(textBlob: String): Boolean {
-        if (Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u0900-\\u0D7F]").containsMatchIn(textBlob)) {
+        if (blockedUnicodeScriptRegex.containsMatchIn(textBlob)) {
             return true
         }
         val lower = textBlob.lowercase()
-        return blockedRegionalAndArabicKeywords.any { kw ->
-            Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(lower)
-        }
+        return blockedRegionalWordRegex.containsMatchIn(lower)
     }
 
     private fun isBlockedSpecificAdult(item: SupabaseCatalogItem): Boolean {
@@ -519,25 +572,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
         val titleAndId = "${item.title} ${item.archiveId}".lowercase()
-        return adultEroticKeywords.any { kw ->
-            if (kw.length <= 5) {
-                Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(titleAndId)
-            } else {
-                titleAndId.contains(kw)
-            }
-        }
+        return adultLongKeywords.any { titleAndId.contains(it) } ||
+            adultShortRegexes.any { it.containsMatchIn(titleAndId) }
     }
 
     private fun isAnimatedItem(item: SupabaseCatalogItem): Boolean {
-        val animGenres = setOf(
-            "animirani klasici",
-            "disney i pixar klasici",
-            "disney kratki crtići",
-            "animirani filmovi",
-            "klasični crtići",
-            "animirane serije"
-        )
-        if (item.genres.any { it.lowercase() in animGenres }) return true
+        if (item.genres.any { it.lowercase() in animGenresSet }) return true
         val blob = "${item.title} ${item.archiveId}".lowercase()
         return animationKeywords.any { blob.contains(it) }
     }
@@ -551,17 +591,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
         val blob = "${item.title} ${item.archiveId}".lowercase()
-        return listOf(
-            "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
-            "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
-        ).any {
-            blob.contains(it)
-        }
+        return disneyPixarKeywords.any { blob.contains(it) }
     }
 
     private fun deduplicateCatalogItems(items: List<SupabaseCatalogItem>): List<SupabaseCatalogItem> {
-        val seenTitleYears = mutableSetOf<String>()
-        val seenTmdbTokens = mutableSetOf<String>()
+        val seenTitleYears = HashSet<String>(items.size)
+        val seenTmdbTokens = HashSet<String>(items.size / 2)
         return items
             .sortedWith(
                 compareBy<SupabaseCatalogItem> { it.archiveId.contains(",tmdb-") }
@@ -572,12 +607,57 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (tmdbPart.isNotEmpty() && !seenTmdbTokens.add(tmdbPart)) {
                     return@filter false
                 }
-                val cleanTitle = item.title.lowercase()
-                    .replace(Regex("\\(\\d{4}\\)"), "")
-                    .replace(Regex("[^a-z0-9čćžšđ]"), "")
+                val cleanTitle = yearParenRegex.replace(item.title.lowercase(), "")
+                    .replace(nonAlnumTitleRegex, "")
                 val titleKey = "${item.mediaType}:${cleanTitle}_${item.releaseYear}"
                 seenTitleYears.add(titleKey)
             }
+    }
+
+    private fun getOrBuildCatalogSnapshot(): CatalogSnapshot {
+        val rawItems = SupabaseRepository.getCatalogItems()
+        val existing = cachedSnapshot
+        if (existing != null && existing.sourceItemsRef === rawItems) {
+            return existing
+        }
+
+        val deduplicated = deduplicateCatalogItems(rawItems.filter { !isBlockedSpecificAdult(it) })
+        val adultList = ArrayList<SupabaseCatalogItem>()
+        val liveMovies = ArrayList<SupabaseCatalogItem>()
+        val animMovies = ArrayList<SupabaseCatalogItem>()
+        val liveSeries = ArrayList<SupabaseCatalogItem>()
+        val animSeries = ArrayList<SupabaseCatalogItem>()
+        val concertList = ArrayList<SupabaseCatalogItem>()
+
+        for (item in deduplicated) {
+            when (item.mediaType) {
+                "concert" -> concertList.add(item)
+                "series" -> {
+                    if (isAnimatedItem(item)) animSeries.add(item)
+                    else if (!isAdultOrEroticItem(item)) liveSeries.add(item)
+                }
+                else -> {
+                    if (isAdultOrEroticItem(item)) adultList.add(item)
+                    else if (isAnimatedItem(item)) animMovies.add(item)
+                    else liveMovies.add(item)
+                }
+            }
+        }
+
+        val snapshot = CatalogSnapshot(
+            sourceItemsRef = rawItems,
+            deduplicatedAll = deduplicated,
+            adultMovies = adultList,
+            liveActionMovies = liveMovies,
+            animatedMoviesAndShorts = animMovies,
+            liveActionSeries = liveSeries,
+            animatedSeries = animSeries,
+            concerts = concertList
+        )
+        cachedSnapshot = snapshot
+        cachedGenreKey = null
+        cachedGenreFullRated = emptyList()
+        return snapshot
     }
 
     private suspend fun loadAllContent() {
@@ -595,9 +675,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun rebuildCategoriesFromSupabase() = withContext(Dispatchers.Default) {
-        val allItems = deduplicateCatalogItems(
-            SupabaseRepository.getCatalogItems().filter { !isBlockedSpecificAdult(it) }
-        )
+        val snap = getOrBuildCatalogSnapshot()
         val sbAuthors = SupabaseRepository.getAuthors()
 
         val mergedAuthorPhotos = fallbackAuthorImages.toMutableMap()
@@ -608,12 +686,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         staticAuthorImages = mergedAuthorPhotos
 
-        val supabaseAdultMovies = allItems.filter { it.mediaType == "movie" && isAdultOrEroticItem(it) }
-        val liveActionMovies = allItems.filter { it.mediaType == "movie" && !isAnimatedItem(it) && !isAdultOrEroticItem(it) }
-        val animatedMoviesAndShorts = allItems.filter { it.mediaType == "movie" && isAnimatedItem(it) }
-        val liveActionSeries = allItems.filter { it.mediaType == "series" && !isAnimatedItem(it) && !isAdultOrEroticItem(it) }
-        val animatedSeries = allItems.filter { it.mediaType == "series" && isAnimatedItem(it) }
-        val concerts = allItems.filter { it.mediaType == "concert" }
+        val supabaseAdultMovies = snap.adultMovies
+        val liveActionMovies = snap.liveActionMovies
+        val animatedMoviesAndShorts = snap.animatedMoviesAndShorts
+        val liveActionSeries = snap.liveActionSeries
+        val animatedSeries = snap.animatedSeries
+        val concerts = snap.concerts
 
         val authorList = if (sbAuthors.isNotEmpty()) {
             sbAuthors.map { ArchiveMovie(identifier = "AUTHOR|${it.name}", title = it.name) }
@@ -756,23 +834,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (builtSeriesCategories.isNotEmpty()) _seriesCategories.value = builtSeriesCategories
         if (builtConcertCategories.isNotEmpty()) _concertCategories.value = builtConcertCategories
 
-        refreshHeroItems(_favoriteMovies.value, builtMovieCategories, builtSeriesCategories, builtConcertCategories)
+        refreshHeroItems(snap, _favoriteMovies.value, builtMovieCategories, builtSeriesCategories, builtConcertCategories)
     }
 
     private fun refreshHeroItems(
+        snap: CatalogSnapshot,
         favs: List<ArchiveMovie>,
         movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
         series: List<Pair<GenreOption, List<ArchiveMovie>>>,
         concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
     ) {
-        val featuredFromDb = deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
-            .filter {
-                it.isFeatured &&
-                    it.posterUrl.isNotBlank() &&
-                    !isBlockedSpecificAdult(it) &&
-                    !isAdultOrEroticItem(it) &&
-                    !isAnimatedItem(it)
-            }
+        val featuredFromDb = (snap.liveActionMovies + snap.liveActionSeries)
+            .filter { it.isFeatured && it.posterUrl.isNotBlank() }
+            .sortedByDescending { it.popularityScore }
             .take(5)
             .map { it.toArchiveMovie() to (it.mediaType == "series") }
 
@@ -815,11 +889,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         isFromSupabase: Boolean,
         baseQualityScore: Double
     ): Double {
-        val qClean = rawQuery.lowercase().replace(Regex("[^a-z0-9čćžšđ\\s]"), " ").replace(Regex("\\s+"), " ").trim()
-        val tClean = title.lowercase()
-            .replace(Regex("\\(\\d{4}\\)"), "")
-            .replace(Regex("[^a-z0-9čćžšđ\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
+        val qClean = rawQuery.lowercase().replace(nonSearchCharRegex, " ").replace(multiSpaceRegex, " ").trim()
+        val tClean = yearParenRegex.replace(title.lowercase(), "")
+            .replace(nonSearchCharRegex, " ")
+            .replace(multiSpaceRegex, " ")
             .trim()
         val idClean = identifier.lowercase().replace("_", " ").replace("-", " ")
 
@@ -863,21 +936,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         searchJob = viewModelScope.launch {
-            delay(300L)
+            delay(250L)
             _isSearchingGlobal.value = true
             try {
                 val qLower = trimmed.lowercase()
-                val words = qLower.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                val words = qLower.split(multiSpaceRegex).filter { it.isNotEmpty() }
 
                 val sbMatches = withContext(Dispatchers.Default) {
-                    deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
+                    val snap = getOrBuildCatalogSnapshot()
+                    val pool = if (isAdultCategoryUnlocked) {
+                        snap.deduplicatedAll
+                    } else {
+                        snap.deduplicatedAll.filter { !isAdultOrEroticItem(it) }
+                    }
+                    pool
                         .filter { item ->
-                            !isBlockedSpecificAdult(item) &&
-                                (isAdultCategoryUnlocked || !isAdultOrEroticItem(item)) && (
-                                item.title.lowercase().contains(qLower) ||
-                                    item.archiveId.lowercase().contains(qLower) ||
-                                    (words.size > 1 && words.all { w -> item.title.lowercase().contains(w) })
-                                )
+                            val tLower = item.title.lowercase()
+                            tLower.contains(qLower) ||
+                                item.archiveId.lowercase().contains(qLower) ||
+                                (words.size > 1 && words.all { w -> tLower.contains(w) })
                         }
                         .map { item ->
                             val rel = computeSearchRelevance(
@@ -918,7 +995,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 _globalSearchResults.value = (sbMatches + archiveMatches)
                     .distinctBy { it.movie.identifier }
-                    .distinctBy { it.movie.title.lowercase().replace(Regex("\\(\\d{4}\\)"), "").trim() }
+                    .distinctBy { yearParenRegex.replace(it.movie.title.lowercase(), "").trim() }
                     .sortedByDescending { it.relevanceScore }
                     .take(40)
             } catch (e: Exception) {
@@ -937,6 +1014,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         savedGenreScrollIndex = 0
         savedGenreScrollOffset = 0
         _lastFocusedMovieId.value = null
+        cachedGenreKey = null
+        cachedGenreFullRated = emptyList()
         _genreMovies.value = emptyList()
         loadGenrePage(1)
     }
@@ -945,10 +1024,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val genre = _selectedGenre.value ?: return
         if (page < 1) return
 
-        viewModelScope.launch {
-            if (_genreMovies.value.isEmpty()) {
-                _isGenreLoading.value = true
-            }
+        genreJob?.cancel()
+        genreJob = viewModelScope.launch {
             _currentGenrePage.value = page
 
             try {
@@ -962,13 +1039,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     _genreMovies.value = list
                     _totalGenreMoviesCount.value = list.size
                     _totalGenrePages.value = 1
+                    _isGenreLoading.value = false
                     return@launch
                 }
 
                 if (genre.isAdultCategory) {
+                    if (_genreMovies.value.isEmpty()) {
+                        _isGenreLoading.value = true
+                    }
                     val sbAdultRated = withContext(Dispatchers.Default) {
-                        deduplicateCatalogItems(SupabaseRepository.getCatalogItems())
-                            .filter { it.mediaType == "movie" && !isBlockedSpecificAdult(it) && isAdultOrEroticItem(it) }
+                        getOrBuildCatalogSnapshot().adultMovies
                             .sortedWith(
                                 compareByDescending<SupabaseCatalogItem> { it.rating }
                                     .thenByDescending { it.popularityScore }
@@ -992,7 +1072,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                     val combinedAdult = (if (page == 1) sbAdultRated + archiveAdult else archiveAdult)
                         .distinctBy { it.movie.identifier }
-                        .distinctBy { it.movie.title.lowercase().replace(Regex("\\(\\d{4}\\)"), "").trim() }
+                        .distinctBy { yearParenRegex.replace(it.movie.title.lowercase(), "").trim() }
 
                     _genreMovies.value = combinedAdult.take(pageSize)
                     _totalGenreMoviesCount.value = combinedAdult.size
@@ -1006,19 +1086,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val sbMatches = withContext(Dispatchers.Default) {
-                    findSupabaseItemsForGenre(genre)
-                }
-                if (sbMatches.isNotEmpty()) {
-                    val isTop10 = genre.title.startsWith("Top 10")
-                    val allRated = sbMatches.map { item ->
-                        RatedMovie(
-                            movie = item.toArchiveMovie(),
-                            rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
-                            relevanceScore = item.popularityScore
-                        )
+                val targetKey = "${genre.title}_${genre.isSeriesCategory}_${genre.isAnimationCategory}_${genre.isConcertCategory}"
+                val allRated = if (cachedGenreKey == targetKey && cachedGenreFullRated.isNotEmpty()) {
+                    cachedGenreFullRated
+                } else {
+                    if (_genreMovies.value.isEmpty()) {
+                        _isGenreLoading.value = true
                     }
+                    withContext(Dispatchers.Default) {
+                        val matches = findSupabaseItemsForGenre(genre)
+                        val mapped = matches.map { item ->
+                            RatedMovie(
+                                movie = item.toArchiveMovie(),
+                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                relevanceScore = item.popularityScore
+                            )
+                        }
+                        if (mapped.isNotEmpty()) {
+                            cachedGenreKey = targetKey
+                            cachedGenreFullRated = mapped
+                        }
+                        mapped
+                    }
+                }
 
+                if (allRated.isNotEmpty()) {
+                    val isTop10 = genre.title.startsWith("Top 10")
                     if (isTop10) {
                         _genreMovies.value = allRated.take(10)
                         _totalGenreMoviesCount.value = 10
@@ -1026,14 +1119,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         val total = allRated.size
                         val pages = ceil(total.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
-                        val fromIdx = ((page - 1) * pageSize).coerceAtMost(total)
+                        val safePage = page.coerceIn(1, pages)
+                        val fromIdx = ((safePage - 1) * pageSize).coerceAtMost(total)
                         val toIdx = (fromIdx + pageSize).coerceAtMost(total)
 
+                        _currentGenrePage.value = safePage
                         _genreMovies.value = allRated.subList(fromIdx, toIdx)
                         _totalGenreMoviesCount.value = total
                         _totalGenrePages.value = pages
                     }
                 } else {
+                    _isGenreLoading.value = true
                     val results = fetchFromArchiveFallback(
                         query = genre.query,
                         rows = 80,
@@ -1054,12 +1150,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun findSupabaseItemsForGenre(genre: GenreOption): List<SupabaseCatalogItem> {
-        val all = deduplicateCatalogItems(
-            SupabaseRepository.getCatalogItems().filter { !isBlockedSpecificAdult(it) }
-        )
+        val snap = getOrBuildCatalogSnapshot()
 
         if (genre.isAnimationCategory) {
-            val animMovies = all.filter { it.mediaType == "movie" && isAnimatedItem(it) }
+            val animMovies = snap.animatedMoviesAndShorts
             val shortCartoons = animMovies.filter { item ->
                 item.genres.any { g ->
                     g.equals("Klasični crtići", ignoreCase = true) ||
@@ -1072,7 +1166,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         g.equals("Disney kratki crtići", ignoreCase = true)
                 }
             }
-            val animSeries = all.filter { it.mediaType == "series" && isAnimatedItem(it) }
+            val animSeries = snap.animatedSeries
 
             return when (genre.title) {
                 "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
@@ -1099,14 +1193,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val targetType = when {
-            genre.isConcertCategory -> "concert"
-            genre.isSeriesCategory -> "series"
-            else -> "movie"
-        }
-        val typedItems = all.filter {
-            it.mediaType == targetType &&
-                (targetType == "concert" || (!isAnimatedItem(it) && !isAdultOrEroticItem(it)))
+        val typedItems = when {
+            genre.isConcertCategory -> snap.concerts
+            genre.isSeriesCategory -> snap.liveActionSeries
+            else -> snap.liveActionMovies
         }
 
         return when {
@@ -1156,10 +1246,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
                 if (isBlockedRegionalOrArabic(combined)) return@mapNotNull null
-                if (excludeAdult && adultEroticKeywords.any { kw ->
-                        if (kw.length <= 5) Regex("\\b${Regex.escape(kw)}\\b").containsMatchIn(combined)
-                        else combined.contains(kw)
-                    }
+                if (excludeAdult && (
+                        adultLongKeywords.any { combined.contains(it) } ||
+                            adultShortRegexes.any { it.containsMatchIn(combined) }
+                        )
                 ) return@mapNotNull null
                 if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
                 if (!isAdultCategory && blockedSearchNoiseKeywords.any { combined.contains(it) }) return@mapNotNull null
@@ -1170,8 +1260,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (isAdultCategory && runtimeSeconds in 1..600) return@mapNotNull null
 
                 if (enforceFullLength) {
-                    val looksLikeSeries = Regex("(?i)\\b(s\\d{1,2}e\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|\\d+x\\d+|tv\\s*series)\\b")
-                        .containsMatchIn(combined)
+                    val looksLikeSeries = seriesIndicatorRegex.containsMatchIn(combined)
                     val minSeconds = if (looksLikeSeries) 18 * 60 else 50 * 60
 
                     if (runtimeSeconds >= 0) {
@@ -1229,7 +1318,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 else -> -1
             }
         }
-        val numeric = raw.replace(Regex("[^0-9.]"), "").toDoubleOrNull() ?: return -1
+        val numeric = numericCleanRegex.replace(raw, "").toDoubleOrNull() ?: return -1
         return if (numeric <= 300.0) (numeric * 60.0).toInt() else numeric.toInt()
     }
 
