@@ -7,6 +7,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 data class VideoQualityOption(
     val label: String,
@@ -44,6 +45,12 @@ data class SeriesFullInfo(
     val episodes: List<SeriesEpisode>
 )
 
+private data class TmdbSeriesValidationMeta(
+    val originalName: String,
+    val overviewHr: String,
+    val requiredEpisodesBySeason: Map<Int, Int>
+)
+
 object PosterFetcher {
     private val cache = mutableMapOf<String, String>()
     private const val TMDB_API_KEY = "0eb677c7b027f3fc1502856e48f4da97"
@@ -51,7 +58,6 @@ object PosterFetcher {
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     suspend fun fetchPoster(title: String, isSeries: Boolean, archiveId: String): String = withContext(Dispatchers.IO) {
-        // 1. Trenutni dohvat iz Supabase predmemorije (0 ms čekanja)
         SupabaseRepository.getCachedPoster(archiveId, title)?.let { sbPoster ->
             return@withContext sbPoster
         }
@@ -60,7 +66,7 @@ object PosterFetcher {
             .replace(Regex("\\(\\d{4}\\)"), "")
             .replace(Regex("(?i)\\b(video|hd|sd|hq|uncut|director's\\s*cut|restored|remastered|colorized|complete|series|full|uncensored|collection|vol\\.?\\s*\\d+|part\\s*\\d+|episode\\s*\\d+)\\b.*"), "")
             .replace(Regex("(?i)season\\s*\\d+.*"), "")
-            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+            .replace(Regex("[^\\p{L}\\p{N}\\s']"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
 
@@ -122,12 +128,19 @@ object PosterFetcher {
 }
 
 object ArchiveMetadataModule {
+    private const val TMDB_API_KEY = "0eb677c7b027f3fc1502856e48f4da97"
+    private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     private val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".m4v", ".mov", ".ogv", ".webm")
 
     suspend fun fetchMovieFullInfo(identifier: String): MovieFullInfo = withContext(Dispatchers.IO) {
-        // 1. Provjeri Supabase bazu za instantni stream i hrvatski opis
         SupabaseRepository.getCatalogItem(identifier)?.let { sbItem ->
             if (sbItem.streamUrl.isNotBlank()) {
+                val rawDesc = sbItem.descriptionHr.ifBlank { "Opis za ovaj naslov trenutno nije dostupan." }
+                val finalDesc = if (looksLikeEnglish(rawDesc)) {
+                    translateToCroatianSentenceBySentence(rawDesc)
+                } else {
+                    rawDesc
+                }
                 return@withContext MovieFullInfo(
                     qualities = listOf(
                         VideoQualityOption(
@@ -137,20 +150,24 @@ object ArchiveMetadataModule {
                             sizeBytes = 0L
                         )
                     ),
-                    description = sbItem.descriptionHr.ifBlank { "Opis za ovaj naslov trenutno nije dostupan." },
+                    description = finalDesc,
                     year = if (sbItem.releaseYear > 0) sbItem.releaseYear.toString() else "",
                     director = ""
                 )
             }
         }
 
-        // 2. Rezerva: izravni dohvat s Archive.org
         try {
             val jsonStr = URL("https://archive.org/metadata/$identifier").readText()
             val root = JSONObject(jsonStr)
             val metadata = root.optJSONObject("metadata")
 
-            val cleanDesc = parseCleanDescription(metadata)
+            val rawDesc = parseCleanDescription(metadata)
+            val cleanDesc = if (looksLikeEnglish(rawDesc)) {
+                translateToCroatianSentenceBySentence(rawDesc)
+            } else {
+                rawDesc
+            }
 
             val rawDate = metadata?.optString("date", "")?.takeIf { it.isNotEmpty() }
                 ?: metadata?.optString("year", "") ?: ""
@@ -172,9 +189,9 @@ object ArchiveMetadataModule {
                     val format = fileObj.optString("format")
 
                     val isVideoFile = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
-                            format.contains("MPEG4", ignoreCase = true) ||
-                            format.contains("h.264", ignoreCase = true) ||
-                            format.contains("Matroska", ignoreCase = true)
+                        format.contains("MPEG4", ignoreCase = true) ||
+                        format.contains("h.264", ignoreCase = true) ||
+                        format.contains("Matroska", ignoreCase = true)
 
                     if (isVideoFile) {
                         val height = fileObj.optString("height").toIntOrNull() ?: 0
@@ -192,7 +209,7 @@ object ArchiveMetadataModule {
                         }
 
                         val sizeText = if (sizeMb >= 1024) {
-                            String.format("%.1f GB", sizeMb / 1024.0)
+                            String.format(Locale.US, "%.1f GB", sizeMb / 1024.0)
                         } else if (sizeMb > 0) {
                             "$sizeMb MB"
                         } else {
@@ -238,43 +255,96 @@ object ArchiveMetadataModule {
     }
 
     suspend fun fetchSeriesFullInfo(identifiersStr: String, seriesTitleHint: String = ""): SeriesFullInfo = withContext(Dispatchers.IO) {
-        // 1. Provjeri Supabase bazu za gotove sezone i epizode serije
         SupabaseRepository.getCatalogItem(identifiersStr)?.let { sbSeries ->
             if (sbSeries.episodes.isNotEmpty()) {
-                val distinctSeasons = sbSeries.episodes.map { it.season }.distinct().sorted()
-                val seasonsList = distinctSeasons.map { seasonNum ->
-                    val epsInSeason = sbSeries.episodes
-                        .filter { it.season == seasonNum }
+                val resolvedTmdbId = sbSeries.tmdbId.takeIf { it > 0 }
+                    ?: Regex("(?i)tmdb-tv-(\\d+)").find(sbSeries.archiveId)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: 0
+
+                val tmdbMeta = if (resolvedTmdbId > 0) {
+                    fetchTmdbSeriesValidationMeta(resolvedTmdbId)
+                } else {
+                    null
+                }
+
+                val groupedBySeasonRaw = sbSeries.episodes
+                    .filter { it.season >= 1 && it.url.isNotBlank() }
+                    .groupBy { it.season }
+
+                val validSeasonNumbers = mutableListOf<Int>()
+                if (tmdbMeta != null && tmdbMeta.requiredEpisodesBySeason.isNotEmpty()) {
+                    val maxSeasonToCheck = maxOf(
+                        groupedBySeasonRaw.keys.maxOrNull() ?: 0,
+                        tmdbMeta.requiredEpisodesBySeason.keys.maxOrNull() ?: 0
+                    )
+                    for (sNum in 1..maxSeasonToCheck) {
+                        val reqCount = tmdbMeta.requiredEpisodesBySeason[sNum] ?: break
+                        val epsForSeason = groupedBySeasonRaw[sNum].orEmpty()
+                        val distinctEpNums = epsForSeason.mapIndexed { idx, ep ->
+                            if (ep.episode > 0) ep.episode else idx + 1
+                        }.toSet()
+                        if (reqCount <= 0 || distinctEpNums.size < reqCount) {
+                            break
+                        }
+                        validSeasonNumbers.add(sNum)
+                    }
+                } else if (groupedBySeasonRaw.containsKey(1)) {
+                    var sNum = 1
+                    while (groupedBySeasonRaw.containsKey(sNum)) {
+                        validSeasonNumbers.add(sNum)
+                        sNum++
+                    }
+                }
+
+                val subtitleSeriesName = (tmdbMeta?.originalName?.takeIf { it.isNotBlank() } ?: sbSeries.title)
+                    .replace(Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)"), "")
+                    .trim()
+
+                val seasonsList = validSeasonNumbers.map { seasonNum ->
+                    val epsInSeason = groupedBySeasonRaw[seasonNum].orEmpty()
                         .sortedBy { if (it.episode > 0) it.episode else Int.MAX_VALUE }
+                        .distinctBy { if (it.episode > 0) it.episode else it.url.hashCode() }
                         .mapIndexed { idx, ep ->
                             val epNum = if (ep.episode > 0) ep.episode else idx + 1
                             SeriesEpisode(
                                 seasonNumber = seasonNum,
                                 episodeNumber = epNum,
                                 title = ep.title,
-                                subtitleSearchQuery = "${sbSeries.title} S${String.format("%02d", seasonNum)}E${String.format("%02d", epNum)}",
+                                subtitleSearchQuery = String.format(Locale.US, "%s S%02dE%02d", subtitleSeriesName, seasonNum, epNum),
                                 fileUrl = ep.url,
                                 itemIdentifier = sbSeries.archiveId,
                                 durationText = ep.duration
                             )
                         }
-                    val label = if (distinctSeasons.size == 1 && seasonNum == 1) "Epizode" else "Sezona $seasonNum"
+                    val label = if (validSeasonNumbers.size == 1 && seasonNum == 1) "Epizode" else "Sezona $seasonNum"
                     SeriesSeason(
                         seasonNumber = seasonNum,
                         seasonTitle = label,
                         episodes = epsInSeason
                     )
                 }
+
+                val rawDesc = sbSeries.descriptionHr.ifBlank { tmdbMeta?.overviewHr.orEmpty() }
+                val translatedDesc = when {
+                    rawDesc.isBlank() -> if (seasonsList.isEmpty()) {
+                        "Sezona 1 se trenutno prikuplja i uskoro će biti dostupna."
+                    } else {
+                        "Opis nije dostupan."
+                    }
+                    looksLikeEnglish(rawDesc) -> translateToCroatianSentenceBySentence(rawDesc)
+                    else -> rawDesc
+                }
+
                 val flatEpisodes = seasonsList.flatMap { it.episodes }
                 return@withContext SeriesFullInfo(
-                    description = sbSeries.descriptionHr.ifBlank { "Opis nije dostupan." },
+                    description = translatedDesc,
                     seasons = seasonsList,
                     episodes = flatEpisodes
                 )
             }
         }
 
-        // 2. Rezerva: dohvat s Archive.org
+        // Rezerva: izravni dohvat s Archive.org
         try {
             val ids = identifiersStr.split(",")
             var firstDesc = ""
@@ -307,10 +377,10 @@ object ArchiveMetadataModule {
                             val format = fileObj.optString("format")
 
                             val isVideo = videoExtensions.any { name.endsWith(it, ignoreCase = true) } ||
-                                    format.contains("MPEG4", ignoreCase = true) ||
-                                    format.contains("h.264", ignoreCase = true) ||
-                                    format.contains("Matroska", ignoreCase = true) ||
-                                    format.contains("Ogg Video", ignoreCase = true)
+                                format.contains("MPEG4", ignoreCase = true) ||
+                                format.contains("h.264", ignoreCase = true) ||
+                                format.contains("Matroska", ignoreCase = true) ||
+                                format.contains("Ogg Video", ignoreCase = true)
 
                             if (!isVideo) continue
                             if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
@@ -333,8 +403,8 @@ object ArchiveMetadataModule {
                             val (seasonNum, epNum) = parseSeasonAndEpisode("$name $rawTitle $showTitle $cleanId")
                             val officialName = if (seasonNum > 0 && epNum > 0) officialEpisodeTitles[seasonNum to epNum] else null
 
-                            val cleanSeriesName = cleanSeriesTitleForSearch(seriesTitleHint.ifBlank { showTitle })
-                            val codeTag = if (seasonNum > 0 && epNum > 0) String.format("S%02dE%02d", seasonNum, epNum) else ""
+                            val cleanSeriesName = cleanSeriesTitleForSearch(showTitle.ifBlank { seriesTitleHint })
+                            val codeTag = if (seasonNum > 0 && epNum > 0) String.format(Locale.US, "S%02dE%02d", seasonNum, epNum) else ""
 
                             val displayTitle = when {
                                 officialName != null && codeTag.isNotEmpty() -> "$codeTag - $officialName"
@@ -352,7 +422,7 @@ object ArchiveMetadataModule {
                             val durationText = if (lengthSec > 0) {
                                 val mins = lengthSec / 60
                                 val secs = lengthSec % 60
-                                String.format("%d:%02d", mins, secs)
+                                String.format(Locale.US, "%d:%02d", mins, secs)
                             } else {
                                 ""
                             }
@@ -384,30 +454,38 @@ object ArchiveMetadataModule {
                 .sortedWith(
                     compareBy<SeriesEpisode> { it.seasonNumber }
                         .thenBy { if (it.episodeNumber > 0) it.episodeNumber else Int.MAX_VALUE }
-                        .thenBy { it.title.lowercase() }
+                        .thenBy { it.title.lowercase(Locale.ROOT) }
                         .thenBy { if (it.fileUrl.endsWith(".mp4", true) && !it.fileUrl.contains(".ia.mp4")) 0 else 1 }
                 )
-                .distinctBy { "${it.seasonNumber}_${it.episodeNumber}_${it.title.lowercase()}" }
+                .distinctBy { "${it.seasonNumber}_${it.episodeNumber}_${it.title.lowercase(Locale.ROOT)}" }
 
-            val groupedBySeason = distinctEpisodes
-                .groupBy { it.seasonNumber }
-                .toSortedMap()
-                .map { (seasonNum, epsInSeason) ->
-                    val numberedEps = epsInSeason.mapIndexed { idx, ep ->
-                        ep.copy(episodeNumber = if (ep.episodeNumber > 0) ep.episodeNumber else idx + 1)
-                    }.sortedBy { it.episodeNumber }
-
-                    val seasonLabel = if (distinctEpisodes.map { it.seasonNumber }.distinct().size == 1 && seasonNum == 1) {
-                        "Epizode"
-                    } else {
-                        "Sezona $seasonNum"
-                    }
-                    SeriesSeason(
-                        seasonNumber = seasonNum,
-                        seasonTitle = seasonLabel,
-                        episodes = numberedEps
-                    )
+            val allSeasonNums = distinctEpisodes.map { it.seasonNumber }.distinct().sorted()
+            val consecutiveSeasons = mutableListOf<Int>()
+            if (allSeasonNums.contains(1)) {
+                var s = 1
+                while (allSeasonNums.contains(s)) {
+                    consecutiveSeasons.add(s)
+                    s++
                 }
+            }
+
+            val groupedBySeason = consecutiveSeasons.map { seasonNum ->
+                val epsInSeason = distinctEpisodes.filter { it.seasonNumber == seasonNum }
+                val numberedEps = epsInSeason.mapIndexed { idx, ep ->
+                    ep.copy(episodeNumber = if (ep.episodeNumber > 0) ep.episodeNumber else idx + 1)
+                }.sortedBy { it.episodeNumber }
+
+                val seasonLabel = if (consecutiveSeasons.size == 1 && seasonNum == 1) {
+                    "Epizode"
+                } else {
+                    "Sezona $seasonNum"
+                }
+                SeriesSeason(
+                    seasonNumber = seasonNum,
+                    seasonTitle = seasonLabel,
+                    episodes = numberedEps
+                )
+            }
 
             val allFlatEpisodes = groupedBySeason.flatMap { it.episodes }
 
@@ -419,6 +497,73 @@ object ArchiveMetadataModule {
         } catch (e: Exception) {
             e.printStackTrace()
             SeriesFullInfo("Opis nije moguće učitati.", emptyList(), emptyList())
+        }
+    }
+
+    private fun fetchTmdbSeriesValidationMeta(tmdbId: Int): TmdbSeriesValidationMeta? {
+        return try {
+            val hrUrl = URL("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$TMDB_API_KEY&language=hr-HR")
+            val conn = hrUrl.openConnection() as HttpURLConnection
+            conn.setRequestProperty("User-Agent", USER_AGENT)
+            conn.connectTimeout = 3500
+            conn.readTimeout = 4000
+            if (conn.responseCode != 200) return null
+
+            val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            val origName = root.optString("original_name").ifBlank { root.optString("name") }.trim()
+            var overview = root.optString("overview").trim()
+
+            if (overview.isBlank()) {
+                val enUrl = URL("https://api.themoviedb.org/3/tv/$tmdbId?api_key=$TMDB_API_KEY&language=en-US")
+                val enConn = enUrl.openConnection() as HttpURLConnection
+                enConn.setRequestProperty("User-Agent", USER_AGENT)
+                enConn.connectTimeout = 3000
+                enConn.readTimeout = 3500
+                if (enConn.responseCode == 200) {
+                    val enRoot = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
+                    val enOv = enRoot.optString("overview").trim()
+                    if (enOv.isNotBlank()) {
+                        overview = translateToCroatianSentenceBySentence(enOv)
+                    }
+                }
+            } else if (looksLikeEnglish(overview)) {
+                overview = translateToCroatianSentenceBySentence(overview)
+            }
+
+            val lastAiredObj = root.optJSONObject("last_episode_to_air")
+            val lastAiredSeason = lastAiredObj?.optInt("season_number", 0) ?: 0
+            val lastAiredEp = lastAiredObj?.optInt("episode_number", 0) ?: 0
+
+            val requiredMap = mutableMapOf<Int, Int>()
+            val seasonsArr = root.optJSONArray("seasons")
+            if (seasonsArr != null) {
+                for (i in 0 until seasonsArr.length()) {
+                    val sObj = seasonsArr.optJSONObject(i) ?: continue
+                    val sNum = sObj.optInt("season_number", 0)
+                    val epCount = sObj.optInt("episode_count", 0)
+                    if (sNum < 1 || epCount <= 0) continue
+
+                    val requiredForSeason = when {
+                        lastAiredSeason > 0 && sNum < lastAiredSeason -> epCount
+                        lastAiredSeason > 0 && sNum == lastAiredSeason -> {
+                            if (lastAiredEp > 0) minOf(epCount, lastAiredEp) else epCount
+                        }
+                        lastAiredSeason > 0 && sNum > lastAiredSeason -> 0
+                        else -> epCount
+                    }
+                    if (requiredForSeason > 0) {
+                        requiredMap[sNum] = requiredForSeason
+                    }
+                }
+            }
+
+            TmdbSeriesValidationMeta(
+                originalName = origName,
+                overviewHr = overview,
+                requiredEpisodesBySeason = requiredMap
+            )
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -450,7 +595,7 @@ object ArchiveMetadataModule {
         return rawTitle
             .replace(Regex("(?i)(complete series|full series|season\\s*\\d+|seasons\\s*\\d+.*|uncensored|collection|colorized|\\(\\d{4}\\))"), "")
             .replace(Regex("(?i)presents\\s*\\d+\\s*episodes?.*"), "Presents")
-            .replace(Regex("[^a-zA-Z0-9\\s']"), " ")
+            .replace(Regex("[^\\p{L}\\p{N}\\s'!]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
     }
@@ -462,7 +607,7 @@ object ArchiveMetadataModule {
             val encoded = URLEncoder.encode(cleanName, "UTF-8")
             val searchUrl = "https://api.tvmaze.com/singlesearch/shows?q=$encoded&embed=episodes"
             val conn = URL(searchUrl).openConnection() as HttpURLConnection
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+            conn.setRequestProperty("User-Agent", USER_AGENT)
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
             if (conn.responseCode != 200) return emptyMap()
@@ -483,6 +628,20 @@ object ArchiveMetadataModule {
         } catch (_: Exception) {
             emptyMap()
         }
+    }
+
+    private fun looksLikeEnglish(text: String): Boolean {
+        if (text.length < 15) return false
+        val padded = " ${text.lowercase(Locale.ROOT)} "
+        val markers = listOf(
+            " the ", " and ", " with ", " from ", " into ", " their ",
+            " his ", " her ", " show ", " story ", " when ", " where ",
+            " which ", " while ", " after ", " before ", " through ", " against ",
+            " of ", " in ", " to "
+        )
+        val hits = markers.count { padded.contains(it) }
+        val hasHrChars = text.any { it in "čćžšđČĆŽŠĐ" }
+        return hits >= 2 && !hasHrChars
     }
 
     private fun parseCleanDescription(metadata: JSONObject?): String {
@@ -514,7 +673,7 @@ object ArchiveMetadataModule {
                 val encoded = URLEncoder.encode(trimmed, "UTF-8")
                 val urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=hr&dt=t&q=$encoded"
                 val conn = URL(urlStr).openConnection() as HttpURLConnection
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                conn.setRequestProperty("User-Agent", USER_AGENT)
                 conn.connectTimeout = 4000
                 conn.readTimeout = 4000
 
@@ -527,7 +686,7 @@ object ArchiveMetadataModule {
                 translatedBuilder.append(" ")
             }
             translatedBuilder.toString().trim().ifBlank { text }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             text
         }
     }
