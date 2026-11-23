@@ -186,8 +186,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     private val exYuGenreNames = setOf(
+        "ex-yu filmovi",
         "ex-yu klasici",
         "ex-yu crtići",
+        "ex-yu animirani",
         "ex-yu serije"
     )
 
@@ -197,7 +199,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "domaći film", "jugoslavija", "yugoslavia", "baltazar", "balthazar",
         "šegrt hlapić", "čudesna šuma", "čarobnjakov šešir", "surogat",
         "ko to tamo peva", "maratonci", "balkanski špijun", "tko pjeva zlo ne misli",
-        "vlak u snijegu", "družba pere kvržice", "bitka na neretvi", "valter brani sarajevo",
+        "vlak u snijegu", "družba pere kvržice", "bitka na neretvi",
+        "valter brani sarajevo", "walter brani sarajevo",
         "gosti iz galaksije", "izbavitelj", "gruntovčani", "malo misto", "velo misto",
         "smogovci", "otpisani", "bolji život", "vruć vetar", "kamiondžije"
     )
