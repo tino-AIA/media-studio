@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
@@ -119,6 +120,13 @@ fun HomeScreen(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    val moviesTabFR = remember { FocusRequester() }
+    val animTabFR = remember { FocusRequester() }
+    val seriesTabFR = remember { FocusRequester() }
+    val concertsTabFR = remember { FocusRequester() }
+    val favoritesTabFR = remember { FocusRequester() }
+    val heroPlayFocusRequester = remember { FocusRequester() }
 
     var showExitDialog by remember { mutableStateOf(false) }
 
@@ -275,15 +283,12 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .background(Color(0xFF0D0D0D).copy(alpha = 0.96f))
                             .padding(top = 4.dp, bottom = 4.dp)
-                            .focusProperties {
-                                up = FocusRequester.Cancel
-                                left = FocusRequester.Cancel
-                            }
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .focusProperties { up = FocusRequester.Cancel },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
@@ -305,7 +310,9 @@ fun HomeScreen(
 
                             SearchTriggerBar(
                                 onClick = onOpenSearch,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusProperties { right = FocusRequester.Cancel }
                             )
                         }
 
@@ -321,25 +328,47 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.MOVIES) },
                                 modifier = Modifier
                                     .weight(1f)
-                                    .focusProperties { left = FocusRequester.Cancel }
+                                    .focusRequester(moviesTabFR)
+                                    .focusProperties {
+                                        left = FocusRequester.Cancel
+                                        right = animTabFR
+                                    }
                             )
                             TabButton(
                                 title = "🎨 Animirani",
                                 isSelected = selectedTab == ContentTab.ANIMATION,
                                 onClick = { viewModel.selectTab(ContentTab.ANIMATION) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(animTabFR)
+                                    .focusProperties {
+                                        left = moviesTabFR
+                                        right = seriesTabFR
+                                    }
                             )
                             TabButton(
                                 title = "📺 Serije",
                                 isSelected = selectedTab == ContentTab.SERIES,
                                 onClick = { viewModel.selectTab(ContentTab.SERIES) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(seriesTabFR)
+                                    .focusProperties {
+                                        left = animTabFR
+                                        right = concertsTabFR
+                                    }
                             )
                             TabButton(
                                 title = "🎵 Koncerti",
                                 isSelected = selectedTab == ContentTab.CONCERTS,
                                 onClick = { viewModel.selectTab(ContentTab.CONCERTS) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(concertsTabFR)
+                                    .focusProperties {
+                                        left = seriesTabFR
+                                        right = favoritesTabFR
+                                    }
                             )
                             TabButton(
                                 title = "⭐ Favoriti",
@@ -347,7 +376,11 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.FAVORITES) },
                                 modifier = Modifier
                                     .weight(1f)
-                                    .focusProperties { right = FocusRequester.Cancel }
+                                    .focusRequester(favoritesTabFR)
+                                    .focusProperties {
+                                        left = concertsTabFR
+                                        right = FocusRequester.Cancel
+                                    }
                             )
                         }
                     }
@@ -510,7 +543,16 @@ fun HomeScreen(
                                                 text = "Gledaj odmah",
                                                 icon = Icons.Default.PlayArrow,
                                                 isPrimary = true,
-                                                modifier = Modifier.focusProperties { left = FocusRequester.Cancel },
+                                                modifier = Modifier
+                                                    .focusRequester(heroPlayFocusRequester)
+                                                    .focusProperties { left = FocusRequester.Cancel }
+                                                    .onFocusChanged { state ->
+                                                        if (state.isFocused &&
+                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                        ) {
+                                                            scope.launch { homeListState.scrollToItem(0) }
+                                                        }
+                                                    },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
@@ -520,6 +562,13 @@ fun HomeScreen(
                                                 text = "Detalji",
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
+                                                modifier = Modifier.onFocusChanged { state ->
+                                                    if (state.isFocused &&
+                                                        (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                    ) {
+                                                        scope.launch { homeListState.scrollToItem(0) }
+                                                    }
+                                                },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
@@ -556,6 +605,26 @@ fun HomeScreen(
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             val isRowSeries = isSeriesTab || genre.isSeriesCategory
+                            val firstRowUpModifier = if (index == 0 && heroMovies.isNotEmpty()) {
+                                Modifier.onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+                                        scope.launch {
+                                            homeListState.scrollToItem(0)
+                                            delay(40L)
+                                            try {
+                                                heroPlayFocusRequester.requestFocus()
+                                            } catch (_: Exception) {
+                                            }
+                                        }
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            }
+
                             MovieCategoryRow(
                                 genre = genre,
                                 movies = itemsList,
@@ -563,6 +632,7 @@ fun HomeScreen(
                                 isSeries = isRowSeries,
                                 viewModel = viewModel,
                                 authorImages = authorImages,
+                                modifier = firstRowUpModifier,
                                 lastFocusedMovieId = lastFocusedMovieId,
                                 lastFocusedRowTitle = lastFocusedRowTitle,
                                 onMovieClick = { item ->
@@ -843,6 +913,7 @@ fun MovieCategoryRow(
     isSeries: Boolean,
     viewModel: HomeViewModel,
     authorImages: Map<String, String>,
+    modifier: Modifier = Modifier,
     lastFocusedMovieId: String? = null,
     lastFocusedRowTitle: String? = null,
     onMovieClick: (ArchiveMovie) -> Unit,
@@ -868,7 +939,7 @@ fun MovieCategoryRow(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
