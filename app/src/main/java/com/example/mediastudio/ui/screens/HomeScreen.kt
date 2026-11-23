@@ -121,12 +121,24 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    val menuFocusRequester = remember { FocusRequester() }
+    val searchFocusRequester = remember { FocusRequester() }
+    val drawerFirstItemFocusRequester = remember { FocusRequester() }
+
     val moviesTabFR = remember { FocusRequester() }
     val animTabFR = remember { FocusRequester() }
     val seriesTabFR = remember { FocusRequester() }
     val concertsTabFR = remember { FocusRequester() }
     val favoritesTabFR = remember { FocusRequester() }
     val heroPlayFocusRequester = remember { FocusRequester() }
+
+    val activeTabFR = when (selectedTab) {
+        ContentTab.MOVIES -> moviesTabFR
+        ContentTab.ANIMATION -> animTabFR
+        ContentTab.SERIES -> seriesTabFR
+        ContentTab.CONCERTS -> concertsTabFR
+        ContentTab.FAVORITES -> favoritesTabFR
+    }
 
     var showExitDialog by remember { mutableStateOf(false) }
 
@@ -144,9 +156,29 @@ fun HomeScreen(
         }
     }
 
+    val isSeriesTab = selectedTab == ContentTab.SERIES
+    val isDrawerInteractive = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
+
+    LaunchedEffect(isDrawerInteractive) {
+        if (isDrawerInteractive) {
+            delay(80L)
+            try {
+                drawerFirstItemFocusRequester.requestFocus()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     BackHandler {
-        if (drawerState.isOpen) {
-            scope.launch { drawerState.close() }
+        if (isDrawerInteractive) {
+            scope.launch {
+                drawerState.close()
+                delay(50L)
+                try {
+                    menuFocusRequester.requestFocus()
+                } catch (_: Exception) {
+                }
+            }
         } else {
             showExitDialog = true
         }
@@ -168,9 +200,6 @@ fun HomeScreen(
         else -> emptyList()
     }
 
-    val isSeriesTab = selectedTab == ContentTab.SERIES
-    val isDrawerInteractive = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
-
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = isDrawerInteractive,
@@ -180,7 +209,32 @@ fun HomeScreen(
                 drawerContainerColor = Color(0xFF121212)
             ) {
                 if (isDrawerInteractive) {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 8.dp)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    when (event.key) {
+                                        Key.DirectionRight -> {
+                                            scope.launch {
+                                                drawerState.close()
+                                                delay(50L)
+                                                try {
+                                                    menuFocusRequester.requestFocus()
+                                                } catch (_: Exception) {
+                                                }
+                                            }
+                                            true
+                                        }
+                                        Key.DirectionLeft -> true
+                                        else -> false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                    ) {
                         Spacer(modifier = Modifier.height(24.dp))
                         Text(
                             text = "Izbornik",
@@ -195,6 +249,11 @@ fun HomeScreen(
                         DrawerFocusableItem(
                             title = "⭐ Moji Favoriti",
                             isAdult = false,
+                            modifier = Modifier
+                                .focusRequester(drawerFirstItemFocusRequester)
+                                .onPreviewKeyEvent { event ->
+                                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
+                                },
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
@@ -235,7 +294,12 @@ fun HomeScreen(
             }
         }
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .focusProperties { canFocus = !isDrawerInteractive }
+        ) {
             if (currentHeroPosterUrl.isNotEmpty()) {
                 val heroBgRequest = remember(currentHeroPosterUrl) {
                     ImageRequest.Builder(context)
@@ -288,13 +352,22 @@ fun HomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .focusProperties { up = FocusRequester.Cancel },
+                                .focusProperties { up = FocusRequester.Cancel }
+                                .onPreviewKeyEvent { event ->
+                                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
+                                },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             HomeTvHighlightIconButton(
                                 onClick = { scope.launch { drawerState.open() } },
-                                modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
+                                modifier = Modifier
+                                    .focusRequester(menuFocusRequester)
+                                    .focusProperties {
+                                        left = FocusRequester.Cancel
+                                        right = searchFocusRequester
+                                        down = activeTabFR
+                                    }
                             ) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
                             }
@@ -312,7 +385,12 @@ fun HomeScreen(
                                 onClick = onOpenSearch,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .focusProperties { right = FocusRequester.Cancel }
+                                    .focusRequester(searchFocusRequester)
+                                    .focusProperties {
+                                        left = menuFocusRequester
+                                        right = FocusRequester.Cancel
+                                        down = activeTabFR
+                                    }
                             )
                         }
 
@@ -332,6 +410,7 @@ fun HomeScreen(
                                     .focusProperties {
                                         left = FocusRequester.Cancel
                                         right = animTabFR
+                                        up = menuFocusRequester
                                     }
                             )
                             TabButton(
@@ -344,6 +423,7 @@ fun HomeScreen(
                                     .focusProperties {
                                         left = moviesTabFR
                                         right = seriesTabFR
+                                        up = menuFocusRequester
                                     }
                             )
                             TabButton(
@@ -356,6 +436,7 @@ fun HomeScreen(
                                     .focusProperties {
                                         left = animTabFR
                                         right = concertsTabFR
+                                        up = searchFocusRequester
                                     }
                             )
                             TabButton(
@@ -368,6 +449,7 @@ fun HomeScreen(
                                     .focusProperties {
                                         left = seriesTabFR
                                         right = favoritesTabFR
+                                        up = searchFocusRequester
                                     }
                             )
                             TabButton(
@@ -380,6 +462,7 @@ fun HomeScreen(
                                     .focusProperties {
                                         left = concertsTabFR
                                         right = FocusRequester.Cancel
+                                        up = searchFocusRequester
                                     }
                             )
                         }
@@ -545,7 +628,10 @@ fun HomeScreen(
                                                 isPrimary = true,
                                                 modifier = Modifier
                                                     .focusRequester(heroPlayFocusRequester)
-                                                    .focusProperties { left = FocusRequester.Cancel }
+                                                    .focusProperties {
+                                                        left = FocusRequester.Cancel
+                                                        up = activeTabFR
+                                                    }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
                                                             (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
@@ -562,13 +648,15 @@ fun HomeScreen(
                                                 text = "Detalji",
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
-                                                modifier = Modifier.onFocusChanged { state ->
-                                                    if (state.isFocused &&
-                                                        (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
-                                                    ) {
-                                                        scope.launch { homeListState.scrollToItem(0) }
-                                                    }
-                                                },
+                                                modifier = Modifier
+                                                    .focusProperties { up = activeTabFR }
+                                                    .onFocusChanged { state ->
+                                                        if (state.isFocused &&
+                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                        ) {
+                                                            scope.launch { homeListState.scrollToItem(0) }
+                                                        }
+                                                    },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
@@ -605,14 +693,18 @@ fun HomeScreen(
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             val isRowSeries = isSeriesTab || genre.isSeriesCategory
-                            val firstRowUpModifier = if (index == 0 && heroMovies.isNotEmpty()) {
+                            val firstRowUpModifier = if (index == 0) {
                                 Modifier.onPreviewKeyEvent { event ->
                                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                                         scope.launch {
                                             homeListState.scrollToItem(0)
                                             delay(40L)
                                             try {
-                                                heroPlayFocusRequester.requestFocus()
+                                                if (heroMovies.isNotEmpty()) {
+                                                    heroPlayFocusRequester.requestFocus()
+                                                } else {
+                                                    activeTabFR.requestFocus()
+                                                }
                                             } catch (_: Exception) {
                                             }
                                         }
@@ -796,13 +888,14 @@ private fun HomeTvHighlightIconButton(
 private fun DrawerFocusableItem(
     title: String,
     isAdult: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp)
             .background(
