@@ -37,6 +37,22 @@ SB_HEADERS = {
 if not SUPABASE_SERVICE_KEY.startswith("sb_"):
     SB_HEADERS["Authorization"] = f"Bearer {SUPABASE_SERVICE_KEY}"
 
+EX_YU_LANGUAGES = {"hr", "sr", "bs", "sl", "mk", "sh"}
+EX_YU_COUNTRIES = {"YU", "HR", "RS", "BA", "SI", "MK", "ME"}
+
+EX_YU_KEYWORDS = [
+    "yugoslavia", "jugoslavija", "jugoslavenski", "jugoslovenski",
+    "hrvatski", "srpski", "bosanski", "slovenski", "makedonski",
+    "zagreb film", "avala film", "jadran film", "centar film",
+    "sutjeska film", "bosna film", "viba film", "vardar film",
+    "zeta film", "kosovo film", "rtv zagreb", "rtv beograd",
+    "tv zagreb", "tv beograd", "tv sarajevo", "tv ljubljana",
+    "profesor baltazar", "professor balthazar", "šegrt hlapić", "segrt hlapic",
+    "čudesna šuma", "cudesna suma", "čarobnjakov šešir", "carobnjakov sesir",
+    "dušan vukotić", "dusan vukotic", "surogat", "mali leteći medvjedići",
+    "mali leteci medvjedici", "cipelići", "cipelici", "inspektor maska"
+]
+
 BLOCKED_ORIGINAL_LANGS = {
     "ar", "hi", "ta", "te", "ml", "bn", "ur", "pa", "mr", "gu", "kn", "si", "ne", "fa",
     "id", "ms", "jv", "su", "tl"
@@ -328,6 +344,17 @@ def fetch_existing_catalog_state(media_type_filter=None):
     return existing_archive_ids, seen_tmdb_ids, seen_title_years, filtered_rows
 
 
+def is_ex_yu_content(orig_lang="", countries=None, *texts):
+    if orig_lang and orig_lang.lower() in EX_YU_LANGUAGES:
+        return True
+    if countries:
+        for c in countries:
+            if str(c).upper() in EX_YU_COUNTRIES:
+                return True
+    blob = " ".join(str(t) for t in texts if t).lower()
+    return any(kw in blob for kw in EX_YU_KEYWORDS)
+
+
 def contains_hentai_or_adult(*texts):
     blob = " ".join(str(t) for t in texts if t).lower()
     return any(kw in blob for kw in HENTAI_AND_ADULT_KEYWORDS)
@@ -344,6 +371,9 @@ def contains_blocked_regional_or_arabic(*texts, orig_lang=""):
 
 
 def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lang=""):
+    if orig_lang and orig_lang.lower() in EX_YU_LANGUAGES:
+        return False
+
     parts = [identifier, filename]
     for field in ["title", "description", "subject", "language"]:
         val = archive_md.get(field)
@@ -414,9 +444,25 @@ def pick_best_video_file(video_files):
     return ordered[0]
 
 
-def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overview, hint_genre=None):
+def determine_primary_genres(
+    genre_ids,
+    companies,
+    orig_title,
+    hr_title,
+    overview,
+    hint_genre=None,
+    orig_lang="",
+    countries=None
+):
+    company_blob = " ".join(str(c).lower() for c in companies)
+    ex_yu_flag = (
+        hint_genre in ("Ex-Yu filmovi", "Ex-Yu crtići")
+        or is_ex_yu_content(orig_lang, countries, orig_title, hr_title, overview, company_blob)
+    )
+
     if 16 in genre_ids:
-        company_blob = " ".join(str(c).lower() for c in companies)
+        if ex_yu_flag:
+            return ["Animirani klasici", "Ex-Yu crtići"]
         text_blob = f"{orig_title} {hr_title} {overview} {company_blob}".lower()
         is_disney_or_pixar = any(
             kw in text_blob for kw in ["disney", "pixar", "walt disney", "mickey mouse", "donald duck"]
@@ -425,6 +471,9 @@ def determine_primary_genres(genre_ids, companies, orig_title, hr_title, overvie
         return ["Animirani klasici", sub_genre]
 
     mapped_ordered = []
+    if ex_yu_flag:
+        mapped_ordered.append("Ex-Yu filmovi")
+
     for gid in genre_ids:
         g_name = TMDB_MOVIE_GENRE_MAP.get(gid)
         if g_name and g_name not in mapped_ordered:
@@ -655,7 +704,6 @@ def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
             "aspect_tier": compute_aspect_tier(fname, width, height)
         })
 
-    # Dodaj i izravne stream linkove iz Popcorn Maker shotlist koda (ako postoje)
     popcorn_videos = _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv)
     if popcorn_videos:
         existing_urls = {v["stream_url"] for v in videos}
@@ -691,6 +739,7 @@ def get_tmdb_movie_details(tmdb_id):
     ]
     genre_ids = [g.get("id") for g in (data.get("genres") or []) if g.get("id")]
     companies = [c.get("name", "") for c in (data.get("production_companies") or []) if c.get("name")]
+    countries = [c.get("iso_3166_1", "") for c in (data.get("production_countries") or []) if c.get("iso_3166_1")]
 
     en_data = None
     orig_title = str(data.get("original_title") or data.get("title") or "").strip()
@@ -745,6 +794,7 @@ def get_tmdb_movie_details(tmdb_id):
         "cast": cast,
         "genre_ids": genre_ids,
         "companies": companies,
+        "countries": countries,
         "adult": bool(data.get("adult", False))
     }
 
@@ -888,13 +938,13 @@ def validate_movie_match(
             if archive_mins < min_allowed or archive_mins > max_allowed:
                 return False, f"runtime_mismatch (archive={archive_mins}m vs tmdb={tmdb_runtime}m)"
         else:
-            min_size_when_no_runtime = 90 if is_anim else 180
+            min_size_when_no_runtime = 90 if is_anim else 150
             if chosen_size_mb < min_size_when_no_runtime:
                 return False, f"too_small_without_runtime ({chosen_size_mb:.0f}MB)"
     else:
-        if archive_mins > 0 and archive_mins < 65:
+        if archive_mins > 0 and archive_mins < 60:
             return False, f"too_short_no_tmdb_runtime ({archive_mins}m)"
-        if archive_mins <= 0 and chosen_size_mb < 180:
+        if archive_mins <= 0 and chosen_size_mb < 150:
             return False, f"too_small_no_runtime ({chosen_size_mb:.0f}MB)"
 
     year_confirmed = (expected_year > 0 and arch_year > 0 and abs(arch_year - expected_year) <= 1)
