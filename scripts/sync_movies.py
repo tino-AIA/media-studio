@@ -20,6 +20,7 @@ from sync_common import (
     get_archive_item_details,
     get_tmdb_movie_details,
     has_multiple_tmdb_versions,
+    is_ex_yu_content,
     is_foreign_dub_without_english,
     is_future_release,
     normalize_for_exact_title_compare,
@@ -67,6 +68,27 @@ TMDB_DISCOVER_GENRE_SEEDS = [
     ("28", "Akcija i avantura", 35),
     ("12", "Akcija i avantura", 35),
     ("18", "Drama", 45),
+]
+
+EX_YU_MOVIE_SEEDS = [
+    "Ko to tamo peva", "Maratonci trče počasni krug", "Balkanski špijun",
+    "Valter brani Sarajevo", "Bitka na Neretvi", "Sutjeska",
+    "Tko pjeva zlo ne misli", "Vlak u snijegu", "Družba Pere Kvržice",
+    "Vuk samotnjak", "Kapetan Mikula Mali", "Salaš u Malom Ritu",
+    "Otpisani", "Povratak otpisanih", "Nacionalna klasa", "Varljivo leto '68",
+    "Davitelj protiv davitelja", "Sabirni centar", "Lepota poroka",
+    "Čudo neviđeno", "U ime naroda", "Dom za vešanje",
+    "Otac na službenom putu", "Sjećaš li se Dolly Bell", "Kuduz",
+    "Ničija zemlja", "Lepa sela lepo gore", "Rane", "Mi nismo anđeli",
+    "Tesna koža", "Žikina dinastija", "Lude godine", "Hajde da se volimo",
+    "Čovjek koga treba ubiti", "Izgubljeni zavičaj", "Ritam zločina",
+    "Izbavitelj", "Kiklop", "Glembajevi", "U raljama života",
+    "Samo jednom se ljubi", "Kaja, ubit ću te!", "Breza", "H-8...",
+    "Ne okreći se, sine", "Deveti krug", "Kozara", "Most",
+    "Diverzanti", "Partizanska eskadrila", "Boško Buha", "Orlovi rano lete",
+    "Kekec", "Srečno, Kekec!", "Dolina miru", "Tistega lepega dne",
+    "Makedonska krvava svadba", "Pred doždot", "Gosti iz galaksije",
+    "Čudesna šuma", "Čarobnjakov šešir", "Čudnovate zgode šegrta Hlapića",
 ]
 
 CULT_AND_ANIMATION_SEEDS = [
@@ -117,7 +139,7 @@ CULT_AND_ANIMATION_SEEDS = [
     "Anastasia", "The Prince of Egypt", "The Land Before Time", "An American Tail",
     "All Dogs Go to Heaven", "The Secret of NIMH", "Akira", "Ghost in the Shell",
     "Watership Down", "Animal Farm", "Heavy Metal"
-]
+] + EX_YU_MOVIE_SEEDS
 
 CURATED_MOVIE_EXCEPTIONS = [
     {
@@ -169,7 +191,7 @@ def extract_archive_title_candidates(raw_title, ident):
 
 def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years):
     """Ubacuje ručno odobrene verzije filmova (uključujući produžena izdanja) u Sci-Fi klasike i katalog."""
-    print("0/3 Provjera ručno odobrenih izdanja filmova...", flush=True)
+    print("0/4 Provjera ručno odobrenih izdanja filmova...", flush=True)
     valid_archive_ids = {
         r.get("archive_id") for r in all_movie_rows
         if r.get("is_valid", True) and r.get("archive_id")
@@ -220,7 +242,9 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
             details["orig_title"],
             final_title,
             details["overview_hr"],
-            "Sci-Fi klasici"
+            "Sci-Fi klasici",
+            orig_lang=details.get("original_language", ""),
+            countries=details.get("countries")
         )
         row = {
             "archive_id": ident,
@@ -253,33 +277,49 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
 
 
 def find_best_archive_movie_match(details, year, exclude_ids):
-    """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u (uključujući Popcorn Maker zapise)."""
+    """Traži najkvalitetniju izvornu verziju filma na Archive.org-u (uključujući Popcorn Maker i Ex-Yu zapise)."""
     orig_title = details["orig_title"]
     hr_title = details["hr_title"]
-    clean_q = re.sub(r"[^\w\s]", " ", orig_title).strip()
-    if len(clean_q) < 2:
+    search_titles = []
+    for t in (orig_title, hr_title):
+        cleaned = re.sub(r"[^\w\s]", " ", t).strip()
+        if len(cleaned) >= 2 and cleaned not in search_titles:
+            search_titles.append(cleaned)
+    if not search_titles:
         return None
 
     is_anim = 16 in (details.get("genre_ids") or [])
-    min_mb = 80 if is_anim else 180
-    require_credits = has_multiple_tmdb_versions(orig_title)
-    year_clause = f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else ""
-    query = f'title:"{clean_q}"{year_clause} AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news AND -subject:review'
-
-    data = safe_get(
-        "https://archive.org/advancedsearch.php",
-        params={
-            "q": query,
-            "fl[]": ["identifier", "title", "downloads"],
-            "sort[]": "downloads desc",
-            "rows": 10,
-            "output": "json"
-        }
+    is_ex_yu = is_ex_yu_content(
+        details.get("original_language", ""),
+        details.get("countries"),
+        orig_title,
+        hr_title
     )
+    min_mb = 60 if (is_anim or is_ex_yu) else 160
+    require_credits = has_multiple_tmdb_versions(orig_title) and not is_ex_yu
+    year_clause = f" AND year:[{year - 1} TO {year + 1}]" if (year > 0 and not is_ex_yu) else ""
+
+    docs_by_id = {}
+    for q_title in search_titles[:2]:
+        query = f'title:"{q_title}"{year_clause} AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news AND -subject:review'
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": query,
+                "fl[]": ["identifier", "title", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 10,
+                "output": "json"
+            }
+        )
+        for doc in (data or {}).get("response", {}).get("docs", []):
+            ident = doc.get("identifier")
+            if ident and ident not in docs_by_id:
+                docs_by_id[ident] = doc
+
     valid_candidates = []
-    for doc in (data or {}).get("response", {}).get("docs", []):
-        ident = doc.get("identifier")
-        if not ident or ident in exclude_ids or ident.lower().startswith(("youtube-", "yt-")):
+    for ident, doc in docs_by_id.items():
+        if ident in exclude_ids or ident.lower().startswith(("youtube-", "yt-")):
             continue
         videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
         if not videos:
@@ -318,12 +358,13 @@ def find_best_archive_movie_match(details, year, exclude_ids):
 
 
 def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years):
-    """Provjerava postojeće filmove u bazi: zamjenjuje strane sinkronizacije originalom i prevodi nelatinične naslove."""
+    """Provjerava postojeće filmove u bazi: označava Ex-Yu filmove, zamjenjuje strane sinkronizacije i prevodi nelatinične naslove."""
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/3 Provjera jezika i naslova za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
+    print(f"1/4 Provjera jezika, Ex-Yu oznaka i naslova za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
+    ex_yu_tagged_count = [0]
 
     def inspect_movie_row(row):
         row_id = row["id"]
@@ -332,8 +373,19 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
         stream_url = row.get("stream_url") or ""
         tmdb_id = int(row.get("tmdb_id") or 0)
         rel_year = int(row.get("release_year") or 0)
+        cur_genres = list(row.get("genres") or [])
         is_author_promoted = ",tmdb-" in ident
         base_ident = ident.split(",tmdb-")[0].strip()
+
+        # Brza provjera je li postojeći film u bazi Ex-Yu bez potrebne oznake kategorije
+        if "Ex-Yu filmovi" not in cur_genres and "Ex-Yu crtići" not in cur_genres:
+            if is_ex_yu_content("", None, title, ident, row.get("description_hr") or ""):
+                is_anim_row = any("anim" in g.lower() or "crti" in g.lower() for g in cur_genres)
+                target_tag = "Ex-Yu crtići" if is_anim_row else "Ex-Yu filmovi"
+                new_genres = [target_tag] + [g for g in cur_genres if g != target_tag]
+                supabase_patch_row("catalog_items", row_id, {"genres": new_genres[:3]})
+                with state_lock:
+                    ex_yu_tagged_count[0] += 1
 
         arch_md = {}
         if not is_author_promoted and base_ident:
@@ -429,7 +481,8 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
 
     print(
         f"  Provjera završena: {replaced_count[0]} zamijenjeno originalom, "
-        f"{removed_count[0]} uklonjeno, {translated_count[0]} prevedeno.",
+        f"{removed_count[0]} uklonjeno, {translated_count[0]} prevedeno, "
+        f"{ex_yu_tagged_count[0]} označeno kao Ex-Yu.",
         flush=True
     )
 
@@ -466,7 +519,9 @@ def save_verified_movie_row(
         details["orig_title"],
         details["hr_title"],
         details["overview_hr"],
-        hint_genre
+        hint_genre,
+        orig_lang=details.get("original_language", ""),
+        countries=details.get("countries")
     )
     row = {
         "archive_id": arch_id,
@@ -478,7 +533,7 @@ def save_verified_movie_row(
         "rating": round(details["vote_average"], 1),
         "popularity_score": pop_score,
         "description_hr": details["overview_hr"],
-        "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}",
+        "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}" if details["poster_path"] else "",
         "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
         "stream_url": stream_url,
         "is_featured": details["vote_average"] >= 7.8 and 16 not in details["genre_ids"],
@@ -491,8 +546,188 @@ def save_verified_movie_row(
     return True
 
 
+def mine_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years):
+    """Ciljano rudari Ex-Yu igrane i animirane filmove na Archive.org-u i TMDB-u."""
+    print("2/4 Pretraga Ex-Yu igranih i animiranih filmova...", flush=True)
+    ex_yu_queries = [
+        'mediatype:(movies OR web) AND language:(Croatian OR Serbian OR "Serbo-Croatian" OR Bosnian OR Slovenian OR Macedonian) AND -subject:trailer AND -subject:news',
+        'mediatype:(movies OR web) AND (subject:Yugoslavia OR subject:"Zagreb Film" OR subject:"Avala Film" OR subject:"Jadran Film" OR subject:"Centar Film" OR subject:"Sutjeska Film" OR subject:"Viba Film" OR subject:"Vardar Film") AND -subject:trailer AND -subject:news',
+        'mediatype:(movies OR web) AND (title:"domaci film" OR title:"domaći film" OR title:"jugoslovenski" OR title:"jugoslavenski" OR title:"hrvatski film" OR title:"srpski film" OR title:"zagreb film") AND -subject:trailer AND -subject:news',
+    ]
+
+    ex_yu_docs = {}
+    for q in ex_yu_queries:
+        for page in [1, 2, 3]:
+            data = safe_get(
+                "https://archive.org/advancedsearch.php",
+                params={
+                    "q": q,
+                    "fl[]": ["identifier", "title", "year", "downloads"],
+                    "sort[]": "downloads desc",
+                    "rows": 150,
+                    "page": page,
+                    "output": "json"
+                }
+            )
+            for doc in (data or {}).get("response", {}).get("docs", []):
+                ident = doc.get("identifier")
+                if ident and ident not in existing_archive_ids and ident not in ex_yu_docs:
+                    ex_yu_docs[ident] = doc
+
+    added = [0]
+
+    def process_ex_yu_doc(doc):
+        ident = doc.get("identifier") or ""
+        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+            return
+        raw_title = doc.get("title") or ident
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0]
+        if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
+            return
+
+        title_candidates, parsed_y = extract_archive_title_candidates(str(raw_title), ident)
+        if not title_candidates:
+            return
+
+        results = []
+        for cand_q in title_candidates[:2]:
+            if parsed_y > 0:
+                res_y = safe_get(
+                    f"{TMDB_BASE}/search/movie",
+                    params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "false"}
+                )
+                results = (res_y or {}).get("results", [])
+            if not results:
+                res_any = safe_get(
+                    f"{TMDB_BASE}/search/movie",
+                    params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "false"}
+                )
+                results = (res_any or {}).get("results", [])
+            if results:
+                break
+
+        if not results:
+            return
+
+        chosen_hit = None
+        for hit in results[:5]:
+            if is_future_release(hit.get("release_date") or ""):
+                continue
+            orig_l = (hit.get("original_language") or "").lower()
+            if orig_l in {"hr", "sr", "bs", "sl", "mk", "sh"}:
+                chosen_hit = hit
+                break
+        if chosen_hit is None:
+            chosen_hit = results[0]
+
+        mid = chosen_hit["id"]
+        with state_lock:
+            if mid in seen_tmdb_ids:
+                return
+
+        details = get_tmdb_movie_details(mid)
+        if not details or not details["poster_path"]:
+            return
+
+        if not is_ex_yu_content(
+            details.get("original_language", ""),
+            details.get("countries"),
+            details["orig_title"],
+            details["hr_title"],
+            raw_title,
+            ident
+        ):
+            return
+
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=40, allow_mkv=True)
+        if not videos:
+            return
+        best = pick_best_video_file(videos)
+        arch_mins = best["duration_mins"]
+        rel_year = extract_year_from_text(details["release_date"]) or parsed_y
+
+        ok, _ = validate_movie_match(
+            ident,
+            arch_md,
+            arch_mins,
+            details,
+            [details["orig_title"], details["hr_title"]] + title_candidates,
+            rel_year,
+            require_credits=False,
+            chosen_filename=best["filename"],
+            chosen_size_mb=best["size_mb"]
+        )
+        if not ok or not verify_stream_url_playable(best["stream_url"]):
+            return
+
+        is_anim = 16 in (details.get("genre_ids") or [])
+        hint = "Ex-Yu crtići" if is_anim else "Ex-Yu filmovi"
+        downloads = float(doc.get("downloads") or 0)
+        pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + 2500.0
+        if save_verified_movie_row(
+            ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
+            seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre=hint
+        ):
+            with state_lock:
+                added[0] += 1
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(process_ex_yu_doc, ex_yu_docs.values()))
+
+    # Dodatno: TMDB Discover za sve Ex-Yu jezike
+    tmdb_ex_yu_candidates = {}
+    for lang_code in ["hr", "sr", "bs", "sl", "mk"]:
+        for page in [1, 2, 3]:
+            data = safe_get(
+                f"{TMDB_BASE}/discover/movie",
+                {
+                    "api_key": TMDB_API_KEY,
+                    "language": "hr-HR",
+                    "with_original_language": lang_code,
+                    "include_adult": "false",
+                    "sort_by": "popularity.desc",
+                    "page": page
+                }
+            )
+            for m in (data or {}).get("results", []):
+                mid = m["id"]
+                if mid not in seen_tmdb_ids and mid not in tmdb_ex_yu_candidates and not is_future_release(m.get("release_date") or ""):
+                    tmdb_ex_yu_candidates[mid] = m
+
+    def process_tmdb_ex_yu(m):
+        mid = m["id"]
+        with state_lock:
+            if mid in seen_tmdb_ids:
+                return
+        rel_date = m.get("release_date") or ""
+        year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
+        details = get_tmdb_movie_details(mid)
+        if not details or not details["poster_path"]:
+            return
+        with state_lock:
+            exclude_snapshot = set(existing_archive_ids)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot)
+        if match:
+            best_ident, best_file, best_mins = match
+            is_anim = 16 in (details.get("genre_ids") or [])
+            hint = "Ex-Yu crtići" if is_anim else "Ex-Yu filmovi"
+            pop_score = float(m.get("popularity") or 10.0) * 100.0 + 2500.0
+            if save_verified_movie_row(
+                best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
+                seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre=hint
+            ):
+                with state_lock:
+                    added[0] += 1
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(process_tmdb_ex_yu, tmdb_ex_yu_candidates.values()))
+
+    print(f"  Dodano {added[0]} Ex-Yu igranih i animiranih filmova.", flush=True)
+
+
 def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years):
-    print("2/3 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
+    print("3/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
     archive_docs = {}
 
     def fetch_col_page(col_page):
@@ -667,7 +902,7 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
 
 
 def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years):
-    print("3/3 Ciljana pretraga kultnih klasika, animiranih filmova i TMDB žanrova...", flush=True)
+    print("4/4 Ciljana pretraga kultnih klasika, Ex-Yu naslova, animiranih filmova i TMDB žanrova...", flush=True)
     candidates = {}
 
     def fetch_seed(seed_title):
@@ -740,11 +975,12 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
 
 
 def run_movies_sync():
-    print("=== [FILMOVI] Pokretanje brze sinkronizacije igranih i animiranih filmova ===", flush=True)
+    print("=== [FILMOVI] Pokretanje brze sinkronizacije igranih, Ex-Yu i animiranih filmova ===", flush=True)
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova.", flush=True)
     audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years)
     sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years)
+    mine_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years)
     mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years)
     search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years)
     print(f"=== [FILMOVI] Završeno! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ===", flush=True)
