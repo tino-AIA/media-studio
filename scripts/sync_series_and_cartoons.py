@@ -22,6 +22,7 @@ from sync_common import (
     format_duration_text,
     get_archive_item_details,
     has_multiple_tmdb_tv_versions,
+    is_ex_yu_content,
     is_foreign_dub_without_english,
     normalize_for_exact_title_compare,
     pick_best_video_file,
@@ -33,7 +34,6 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Sigurnosni limit od 195 min (3h 15m) kako bi skripta uvijek uredno završila prije GitHub limita
 MAX_SYNC_DURATION_SECONDS = 195 * 60
 
 ARCHIVE_TV_COLLECTIONS = [
@@ -77,7 +77,15 @@ DISNEY_SHORT_CARTOON_QUERIES = [
     "Scrooge McDuck", "Huey Dewey Louie", "Minnie Mouse", "Daisy Duck",
 ]
 
-CLASSIC_SHORT_CARTOON_QUERIES = DISNEY_SHORT_CARTOON_QUERIES + [
+EX_YU_SHORT_CARTOON_QUERIES = [
+    "Profesor Baltazar", "Professor Balthazar", "Zagreb Film", "Surogat",
+    "Dušan Vukotić", "Dusan Vukotic", "Mali leteći medvjedići", "Mali leteci medvjedici",
+    "Cipelići", "Cipelici", "Šegrt Hlapić", "Segrt Hlapic",
+    "Čudesna šuma", "Cudesna suma", "Čarobnjakov šešir", "Carobnjakov sesir",
+    "Inspektor Maska", "crtani film sinhronizovano", "crtani film sinkronizirano",
+]
+
+CLASSIC_SHORT_CARTOON_QUERIES = DISNEY_SHORT_CARTOON_QUERIES + EX_YU_SHORT_CARTOON_QUERIES + [
     "Tom and Jerry", "Looney Tunes", "Merrie Melodies", "Bugs Bunny",
     "Popeye", "Woody Woodpecker", "Pink Panther",
     "Droopy", "Betty Boop", "Felix the Cat", "Casper the Friendly Ghost",
@@ -86,7 +94,19 @@ CLASSIC_SHORT_CARTOON_QUERIES = DISNEY_SHORT_CARTOON_QUERIES + [
     "Top Cat", "The Flintstones", "The Jetsons", "Scooby-Doo",
 ]
 
-CLASSIC_TV_SEED_TITLES = [
+EX_YU_TV_SEED_TITLES = [
+    "Gruntovčani", "Naše malo misto", "Velo misto", "Smogovci",
+    "Kapelski kresovi", "Kuda idu divlje svinje", "Prosjaci i sinovi",
+    "U registraturi", "Putovanje u Vučjak", "Nepokoreni grad",
+    "Bolji život", "Vruć vetar", "Kamiondžije", "Povratak otpisanih",
+    "Otpisani", "Grlom u jagode", "Sivi dom", "Pozorište u kući",
+    "Policajac sa Petlovog brda", "Srećni ljudi", "Porodično blago",
+    "Otvorena vrata", "Vratiće se rode", "Lud, zbunjen, normalan",
+    "Bitange i princeze", "Odmori se, zaslužio si", "Stipe u gostima",
+    "Crno-bijeli svijet", "Novine", "Profesor Baltazar", "Mali leteći medvjedići",
+]
+
+CLASSIC_TV_SEED_TITLES = EX_YU_TV_SEED_TITLES + [
     "Columbo", "Murder, She Wrote", "Agatha Christie's Poirot", "Agatha Christie's Marple",
     "Sherlock", "The Adventures of Sherlock Holmes", "Inspector Morse", "Midsomer Murders",
     "Taggart", "Cracker", "Prime Suspect", "A Touch of Frost", "Jonathan Creek",
@@ -216,7 +236,8 @@ def determine_tv_primary_genres(genre_ids, orig_name, hr_name):
         "darkwing duck", "gargoyles", "ninja turtles", "he-man", "transformers",
         "inspector gadget", "animaniacs", "pinky and the brain", "tiny toon",
         "rugrats", "hey arnold", "dexter", "powerpuff", "johnny bravo",
-        "samurai jack", "dragon ball", "pokémon", "pokemon"
+        "samurai jack", "dragon ball", "pokémon", "pokemon",
+        "profesor baltazar", "professor balthazar", "mali leteći medvjedići", "cipelići"
     ]
     blob = f"{orig_name} {hr_name}".lower()
     if 16 in genre_ids or 10762 in genre_ids or any(kw in blob for kw in animated_or_kids_keywords):
@@ -247,7 +268,6 @@ def determine_tv_primary_genres(genre_ids, orig_name, hr_name):
 def extract_series_core_title(raw_title):
     s = str(raw_title).rsplit("/", 1)[-1]
     s = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", s, flags=re.IGNORECASE)
-    # Odreži naziv epizode ili podnaslov nakon razdjelnika s razmacima (npr. "Columbo - Murder by the Book")
     s = re.split(r"\s+(?:-|–|—|\||/)\s+", s, maxsplit=1)[0].strip()
     s = s.replace("&", " and ")
     s = re.sub(r"(?i)\bdr\.?\s+", "doctor ", s)
@@ -279,7 +299,6 @@ def series_core_matches(candidate_core, valid_cores):
 
 
 def parse_season_and_episodes(item_title, filename, total_seasons_hint=0):
-    """Vraća (season_num, [ep_nums]) i prepoznaje dvostruke epizode poput S01E01E02 ili S01E01-E02."""
     combined = f"{item_title} / {filename}"
 
     multi_m = re.search(r"(?i)\bS(\d{1,2})\s*[-_.]?\s*E(\d{1,3})\s*[-_.]?\s*E?(\d{1,3})\b", combined)
@@ -395,11 +414,6 @@ def fetch_tmdb_series_guide(tmdb_id, season_numbers, tv_details=None):
 
 
 def filter_consecutive_complete_seasons(episodes_list, aired_eps_by_season):
-    """
-    Zadržava isključivo uzastopne kompletne sezone počevši od 1. sezone.
-    Ako 1. sezona nije kompletna, vraća prazan popis [].
-    Ako 1. sezona jest kompletna, a 2. nije, vraća samo epizode 1. sezone.
-    """
     s1_required = aired_eps_by_season.get(1) or set()
     if not s1_required:
         return []
@@ -445,7 +459,6 @@ def filename_episode_title_conflicts(filename, hr_ep_name, en_ep_name):
 
 
 def year_conflicts_with_series_era(explicit_year, first_year, last_year):
-    """Provjerava pripada li godina u nazivu/datoteci drugom remakeu iste serije (npr. 1965 vs 2018)."""
     if explicit_year <= 0 or first_year <= 0:
         return False
     end_y = last_year if last_year >= first_year else (first_year + 12)
@@ -578,7 +591,6 @@ def aggregate_series_from_archive(
         if year_conflicts_with_series_era(doc_explicit_year, first_air_year, last_air_year):
             continue
 
-        # Prag od 15 MB omogućuje dohvat 20-minutnih sitcoma i crtića u 360p/480p formatu
         videos, arch_md = get_archive_item_details(ident, min_size_mb=15, allow_mkv=True)
         if not videos:
             continue
@@ -659,7 +671,6 @@ def aggregate_series_from_archive(
         ep_list = list(cand["episodes"])
         dur = cand["duration_mins"]
 
-        # Ako je datoteka spojeni dvodijelni pilot/epizoda (npr. S01E01 od 90 min za seriju od 45 min)
         if len(ep_list) == 1 and dur > 0:
             first_key = (s_num, ep_list[0])
             second_key = (s_num, ep_list[0] + 1)
@@ -735,7 +746,6 @@ def aggregate_series_from_archive(
 
 
 def series_has_foreign_dub_episodes(row):
-    """Provjerava sadrže li postojeće epizode serije u bazi stranu sinkronizaciju."""
     urls_to_check = [row.get("stream_url") or ""]
     for ep in (row.get("episodes") or [])[:12]:
         if isinstance(ep, dict) and ep.get("url"):
@@ -754,7 +764,6 @@ def format_series_display_title(hr_name, orig_name, year):
 
 
 def refresh_incomplete_series(existing_series_rows, deadline_ts):
-    """Provjerava postojeće serije: skriva one bez kompletne 1. sezone, zadržava samo kompletne sezone i prevodi opise na HR."""
     candidates = [
         r for r in existing_series_rows
         if (r.get("tmdb_id") or 0) > 0
@@ -876,7 +885,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
 
 
 def sync_short_cartoons(existing_archive_ids, deadline_ts):
-    print("1/4 Sinkronizacija Disney i klasičnih kratkih crtića...", flush=True)
+    print("1/4 Sinkronizacija Disney, Ex-Yu i klasičnih kratkih crtića...", flush=True)
     added_counter = [0]
     seen_short_titles = set()
 
@@ -885,13 +894,18 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         "steamboat willie", "oswald", "winnie the pooh", "scrooge", "chip and dale",
         "chip 'n' dale", "minnie mouse", "daisy duck"
     }
+    ex_yu_set = set(EX_YU_SHORT_CARTOON_QUERIES)
 
     candidate_docs = {}
     for cartoon_query in CLASSIC_SHORT_CARTOON_QUERIES:
         if time.monotonic() > deadline_ts:
             break
         is_disney_q = cartoon_query in DISNEY_SHORT_CARTOON_QUERIES
-        if is_disney_q:
+        is_ex_yu_q = cartoon_query in ex_yu_set
+
+        if is_ex_yu_q:
+            query = f'title:"{cartoon_query}" AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news'
+        elif is_disney_q:
             query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons OR collection:opensource_movies OR collection:community_media) AND -subject:trailer'
         else:
             query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons) AND -subject:trailer'
@@ -909,12 +923,12 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = doc.get("identifier")
             if ident and ident not in existing_archive_ids and ident not in candidate_docs:
-                candidate_docs[ident] = (doc, is_disney_q)
+                candidate_docs[ident] = (doc, is_disney_q, is_ex_yu_q)
 
     def process_short_doc(item):
         if time.monotonic() > deadline_ts:
             return
-        doc, is_disney_q = item
+        doc, is_disney_q, is_ex_yu_q = item
         ident = doc.get("identifier") or ""
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
             return
@@ -941,11 +955,15 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         if not videos:
             return
         best = pick_best_video_file(videos)
-        if is_foreign_dub_without_english(arch_md, ident, best["filename"], orig_lang="en"):
+        blob_check = f"{ident} {raw_title} {clean_t}".lower()
+        is_ex_yu_item = is_ex_yu_q or is_ex_yu_content("", None, blob_check)
+
+        if not is_ex_yu_item and is_foreign_dub_without_english(arch_md, ident, best["filename"], orig_lang="en"):
             return
 
         dur = best["duration_mins"]
-        if dur > 0 and (dur < 2 or dur > 35):
+        max_allowed_dur = 95 if is_ex_yu_item else 35
+        if dur > 0 and (dur < 2 or dur > max_allowed_dur):
             return
 
         if not verify_stream_url_playable(best["stream_url"]):
@@ -956,9 +974,16 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
             desc = " ".join(str(x) for x in desc)
         hr_desc = ensure_croatian_overview(str(desc)[:800])
 
-        blob_check = f"{ident} {raw_title} {clean_t}".lower()
         is_disney_item = is_disney_q or any(tok in blob_check for tok in disney_tokens)
-        genres = ["Animirani klasici", "Klasični crtići", "Disney kratki crtići"] if is_disney_item else ["Animirani klasici", "Klasični crtići"]
+        genres = when_genres = (
+            ["Animirani klasici", "Ex-Yu crtići", "Klasični crtići"]
+            if is_ex_yu_item
+            else (
+                ["Animirani klasici", "Klasični crtići", "Disney kratki crtići"]
+                if is_disney_item
+                else ["Animirani klasici", "Klasični crtići"]
+            )
+        )
 
         row = {
             "archive_id": ident,
@@ -982,7 +1007,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
     with ThreadPoolExecutor(max_workers=10) as pool:
         list(pool.map(process_short_doc, candidate_docs.values()))
 
-    print(f"  Dodano {added_counter[0]} novih Disney i klasičnih kratkih crtića.", flush=True)
+    print(f"  Dodano {added_counter[0]} novih Disney, Ex-Yu i klasičnih crtića.", flush=True)
 
 
 def sync_all_series(seen_tmdb_series, deadline_ts):
@@ -1000,7 +1025,6 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
                 matches.append(item)
         return matches
 
-    # 1. Prioritet: serije stvarno pronađene u Archive.org kolekcijama
     print("4/4 Rudarenje TV kolekcija na Archive.org...", flush=True)
     discovered_cores = {}
     for col in ARCHIVE_TV_COLLECTIONS:
@@ -1037,7 +1061,6 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
                     candidate_shows[hit["id"]] = hit
                     priority_ids.add(hit["id"])
 
-    # 2. Prioritet: kurirani popis TV klasika
     with ThreadPoolExecutor(max_workers=12) as pool:
         for hits in pool.map(fetch_tv_seeds_all_versions, CLASSIC_TV_SEED_TITLES):
             for hit in hits:
@@ -1045,7 +1068,6 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
                     candidate_shows[hit["id"]] = hit
                     priority_ids.add(hit["id"])
 
-    # 3. Dodatna TMDB pretraga po žanrovima
     for endpoint in ["tv/popular", "tv/top_rated"]:
         for page in range(1, 8):
             data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
@@ -1187,7 +1209,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
 def run_series_and_cartoons_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_SYNC_DURATION_SECONDS
-    print("=== [SERIJE I CRTIĆI] Pokretanje brze sinkronizacije serija i kratkih crtića ===", flush=True)
+    print("=== [SERIJE I CRTIĆI] Pokretanje sinkronizacije serija, Ex-Yu i klasičnih crtića ===", flush=True)
     existing_archive_ids, _, _, _ = fetch_existing_catalog_state("movie")
     _, seen_tmdb_series, _, existing_series_rows = fetch_existing_catalog_state("series")
     print(f"  U bazi već postoji {len(seen_tmdb_series)} potvrđenih serija.", flush=True)
