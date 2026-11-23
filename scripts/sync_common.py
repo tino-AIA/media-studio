@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import threading
@@ -475,6 +476,8 @@ def format_duration_text(mins):
 
 def normalize_for_exact_title_compare(raw_title):
     s = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", str(raw_title), flags=re.IGNORECASE)
+    s = re.sub(r"(?i)^popcornarchive[-_]+", "", s)
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
     s = s.replace("&", " and ")
     s = re.sub(r"\[[^\]]*\]", " ", s)
     s = VARIANT_TAG_RE.sub(" ", s)
@@ -509,6 +512,8 @@ def extract_year_from_text(text):
 def clean_filename_to_title(filename, fallback_to_stem=False):
     base = filename.rsplit("/", 1)[-1]
     name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
+    name = re.sub(r"(?i)^popcornarchive[-_]+", "", name)
+    name = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
 
     paren_year = re.search(r"[\(\[]\s*[^)\]]*?\b(19\d{2}|20\d{2})\b[^)\]]*?[\)\]]", name)
     lead_year = re.match(r"^\s*(19\d{2}|20\d{2})(?=[\s\-_.:])", name)
@@ -541,6 +546,60 @@ def clean_filename_to_title(filename, fallback_to_stem=False):
     if not clean and fallback_to_stem:
         clean = re.sub(r"[._]+", " ", name).strip()
     return clean.strip(), year
+
+
+def _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv):
+    """Izvlači izravne archive.org/download/...mp4 linkove iz Popcorn Maker shotlist zapisa."""
+    shotlist_raw = md.get("shotlist")
+    if not shotlist_raw:
+        return []
+
+    if isinstance(shotlist_raw, (dict, list)):
+        shotlist_blob = json.dumps(shotlist_raw)
+    else:
+        shotlist_blob = str(shotlist_raw)
+
+    allowed_exts = (".mp4", ".mkv") if allow_mkv else (".mp4",)
+    dur_match = re.search(r'"duration"\s*:\s*(\d+(?:\.\d+)?)', shotlist_blob)
+    shotlist_mins = parse_duration_minutes(dur_match.group(1)) if dur_match else 0
+    resolved_mins = shotlist_mins or meta_runtime
+
+    extracted = []
+    seen_urls = set()
+    for raw_url in re.findall(r'https?://archive\.org/download/[^"\s\\]+', shotlist_blob):
+        clean_raw = raw_url.strip()
+        if not clean_raw.lower().endswith(allowed_exts):
+            continue
+        if any(skip in clean_raw.lower() for skip in ["trailer", "sample", "teaser", "preview", "promo"]):
+            continue
+
+        after_dl = clean_raw.split("/download/", 1)[-1]
+        if "/" not in after_dl:
+            continue
+        ref_ident, ref_path = after_dl.split("/", 1)
+        unquoted_path = urllib.parse.unquote(ref_path)
+        encoded_path = "/".join(urllib.parse.quote(p) for p in unquoted_path.split("/"))
+        encoded_url = f"https://archive.org/download/{ref_ident}/{encoded_path}"
+
+        if encoded_url in seen_urls:
+            continue
+        seen_urls.add(encoded_url)
+
+        ref_fname = unquoted_path.rsplit("/", 1)[-1]
+        est_size_mb = max(min_size_mb + 200, 1400 if "1080p" in ref_fname.lower() else 850)
+        extracted.append({
+            "filename": ref_fname,
+            "size_mb": est_size_mb,
+            "duration_mins": resolved_mins,
+            "stream_url": encoded_url,
+            "is_derivative": ".ia.mp4" in ref_fname.lower(),
+            "width": 1920 if "1080p" in ref_fname.lower() else (1280 if "720p" in ref_fname.lower() else 0),
+            "height": 1080 if "1080p" in ref_fname.lower() else (720 if "720p" in ref_fname.lower() else 0),
+            "aspect_ratio": 1.778 if ("1080p" in ref_fname.lower() or "720p" in ref_fname.lower()) else 0.0,
+            "aspect_tier": compute_aspect_tier(ref_fname)
+        })
+
+    return extracted
 
 
 def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
@@ -595,6 +654,14 @@ def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
             "aspect_ratio": aspect_ratio,
             "aspect_tier": compute_aspect_tier(fname, width, height)
         })
+
+    # Dodaj i izravne stream linkove iz Popcorn Maker shotlist koda (ako postoje)
+    popcorn_videos = _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv)
+    if popcorn_videos:
+        existing_urls = {v["stream_url"] for v in videos}
+        for pv in popcorn_videos:
+            if pv["stream_url"] not in existing_urls:
+                videos.append(pv)
 
     return videos, md
 
@@ -796,7 +863,6 @@ def validate_movie_match(
     ):
         return False, f"title_mismatch ('{arch_norm_title}' != {list(norm_candidates)})"
 
-    # Godinu iz archive_md["year"] uzimamo samo ako nije riječ o godini učitavanja (upload date)
     title_or_id_year = (
         extract_year_from_text(raw_arch_title)
         or extract_year_from_text(identifier)
