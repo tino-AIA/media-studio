@@ -93,7 +93,6 @@ object SupabaseRepository {
             val fDir = appCtx.filesDir
             filesDirRef = fDir
             cacheDirRef = appCtx.cacheDir
-            // Ukloni stare teške cache datoteke s diska
             listOf(
                 "supabase_catalog_cache.json",
                 "supabase_catalog_lite_v2.json",
@@ -203,7 +202,9 @@ object SupabaseRepository {
                         authorMovieByStreamUrl[m.streamUrl] = m
                     }
                     if (m.posterUrl.isNotBlank()) {
-                        posterByTitle[m.title.lowercase().trim()] = m.posterUrl
+                        val lowerTitle = m.title.lowercase().trim()
+                        posterByTitle[lowerTitle] = m.posterUrl
+                        posterByTitle[lowerTitle.replace(Regex("\\(\\d{4}\\)"), "").trim()] = m.posterUrl
                     }
                 }
             }
@@ -219,8 +220,12 @@ object SupabaseRepository {
         episodesByArchiveId[cleanId]?.takeIf { it.isNotEmpty() }?.let { return@withContext it }
 
         try {
-            val encodedId = URLEncoder.encode(cleanId, "UTF-8")
-            val arr = fetchJsonArrayPage("catalog_items?select=episodes&archive_id=eq.$encodedId&limit=1", 0, 0)
+            val encodedFull = URLEncoder.encode(archiveId, "UTF-8")
+            var arr = fetchJsonArrayPage("catalog_items?select=episodes&archive_id=eq.$encodedFull&limit=1", 0, 0)
+            if ((arr == null || arr.length() == 0) && cleanId != archiveId) {
+                val encodedClean = URLEncoder.encode(cleanId, "UTF-8")
+                arr = fetchJsonArrayPage("catalog_items?select=episodes&archive_id=eq.$encodedClean&limit=1", 0, 0)
+            }
             val obj = arr?.optJSONObject(0)
             val parsed = parseEpisodesArray(obj?.optJSONArray("episodes"))
             if (parsed.isNotEmpty()) {
@@ -282,7 +287,12 @@ object SupabaseRepository {
                 if (baseId.isNotEmpty() && !nextPosterById.containsKey(baseId)) {
                     nextPosterById[baseId] = item.posterUrl
                 }
-                posterByTitle[item.title.lowercase().trim()] = item.posterUrl
+                val lowerTitle = item.title.lowercase().trim()
+                posterByTitle[lowerTitle] = item.posterUrl
+                val strippedTitle = lowerTitle.replace(Regex("\\(\\d{4}\\)"), "").trim()
+                if (strippedTitle.isNotEmpty()) {
+                    posterByTitle[strippedTitle] = item.posterUrl
+                }
             }
         }
 
@@ -319,6 +329,16 @@ object SupabaseRepository {
         )
     }
 
+    fun findCatalogItemByStreamUrl(streamUrl: String): SupabaseCatalogItem? {
+        val base = itemByStreamUrl[streamUrl] ?: return null
+        val cachedEps = episodesByArchiveId[base.archiveId]
+        val cachedDesc = descriptionByArchiveId[base.archiveId]
+        return base.copy(
+            episodes = if (!cachedEps.isNullOrEmpty()) cachedEps else base.episodes,
+            descriptionHr = cachedDesc?.takeIf { it.isNotBlank() } ?: base.descriptionHr
+        )
+    }
+
     fun findByStreamUrl(streamUrl: String): Pair<String, String>? {
         authorMovieByStreamUrl[streamUrl]?.let {
             return it.posterUrl to it.descriptionHr
@@ -336,7 +356,10 @@ object SupabaseRepository {
         val cleanId = archiveId.substringBefore(",tmdb-").trim()
         posterByArchiveId[cleanId]?.takeIf { it.isNotBlank() }?.let { return it }
 
-        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").lowercase().trim()
+        val lowerTitle = title.lowercase().trim()
+        posterByTitle[lowerTitle]?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val cleanTitle = lowerTitle.replace(Regex("\\(\\d{4}\\)"), "").trim()
         posterByTitle[cleanTitle]?.takeIf { it.isNotBlank() }?.let { return it }
 
         return null
