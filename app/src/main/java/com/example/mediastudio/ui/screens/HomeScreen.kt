@@ -161,64 +161,68 @@ fun HomeScreen(
     }
 
     val isSeriesTab = selectedTab == ContentTab.SERIES
+    val isDrawerInteractive = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = isDrawerInteractive,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(280.dp),
                 drawerContainerColor = Color(0xFF121212)
             ) {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Text(
-                        text = "Izbornik",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                    Divider(color = Color.DarkGray)
-                    Spacer(modifier = Modifier.height(8.dp))
+                if (isDrawerInteractive) {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "Izbornik",
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                        Divider(color = Color.DarkGray)
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                    DrawerFocusableItem(
-                        title = "⭐ Moji Favoriti",
-                        isAdult = false,
-                        onClick = {
-                            scope.launch {
-                                drawerState.close()
-                                viewModel.selectTab(ContentTab.FAVORITES)
-                            }
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = when (selectedTab) {
-                            ContentTab.ANIMATION -> "Kategorije crtića"
-                            ContentTab.SERIES -> "Kategorije serija"
-                            ContentTab.CONCERTS -> "Kategorije glazbe"
-                            else -> "Žanrovi filmova"
-                        },
-                        color = Color.Gray,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
-                    )
-
-                    activeDrawerList.forEach { genre ->
                         DrawerFocusableItem(
-                            title = genre.title,
-                            isAdult = genre.title.startsWith("18+"),
+                            title = "⭐ Moji Favoriti",
+                            isAdult = false,
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
-                                    onGenreSelect(genre)
+                                    viewModel.selectTab(ContentTab.FAVORITES)
                                 }
                             }
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = when (selectedTab) {
+                                ContentTab.ANIMATION -> "Kategorije crtića"
+                                ContentTab.SERIES -> "Kategorije serija"
+                                ContentTab.CONCERTS -> "Kategorije glazbe"
+                                else -> "Žanrovi filmova"
+                            },
+                            color = Color.Gray,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
+                        )
+
+                        activeDrawerList.forEach { genre ->
+                            DrawerFocusableItem(
+                                title = genre.title,
+                                isAdult = genre.title.startsWith("18+"),
+                                onClick = {
+                                    scope.launch {
+                                        drawerState.close()
+                                        onGenreSelect(genre)
+                                    }
+                                }
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(32.dp))
                     }
-                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
@@ -271,7 +275,10 @@ fun HomeScreen(
                             .fillMaxWidth()
                             .background(Color(0xFF0D0D0D).copy(alpha = 0.96f))
                             .padding(top = 4.dp, bottom = 4.dp)
-                            .focusProperties { up = FocusRequester.Cancel }
+                            .focusProperties {
+                                up = FocusRequester.Cancel
+                                left = FocusRequester.Cancel
+                            }
                     ) {
                         Row(
                             modifier = Modifier
@@ -281,7 +288,8 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             HomeTvHighlightIconButton(
-                                onClick = { scope.launch { drawerState.open() } }
+                                onClick = { scope.launch { drawerState.open() } },
+                                modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
                             ) {
                                 Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
                             }
@@ -311,7 +319,9 @@ fun HomeScreen(
                                 title = "🎬 Filmovi",
                                 isSelected = selectedTab == ContentTab.MOVIES,
                                 onClick = { viewModel.selectTab(ContentTab.MOVIES) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusProperties { left = FocusRequester.Cancel }
                             )
                             TabButton(
                                 title = "🎨 Animirani",
@@ -335,7 +345,9 @@ fun HomeScreen(
                                 title = "⭐ Favoriti",
                                 isSelected = selectedTab == ContentTab.FAVORITES,
                                 onClick = { viewModel.selectTab(ContentTab.FAVORITES) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusProperties { right = FocusRequester.Cancel }
                             )
                         }
                     }
@@ -498,6 +510,7 @@ fun HomeScreen(
                                                 text = "Gledaj odmah",
                                                 icon = Icons.Default.PlayArrow,
                                                 isPrimary = true,
+                                                modifier = Modifier.focusProperties { left = FocusRequester.Cancel },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
@@ -609,6 +622,7 @@ private fun HeroButton(
     text: String,
     icon: ImageVector,
     isPrimary: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -619,7 +633,7 @@ private fun HeroButton(
     val borderColor = if (isFocused) Color.Red else Color.Transparent
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .height(44.dp)
             .background(color = bgColor, shape = RoundedCornerShape(22.dp))
             .border(width = if (isFocused) 3.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(22.dp))
@@ -820,6 +834,7 @@ private fun TabButton(
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MovieCategoryRow(
     genre: GenreOption,
@@ -858,6 +873,7 @@ fun MovieCategoryRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 4.dp)
+                .focusProperties { left = FocusRequester.Cancel }
                 .background(
                     color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
                     shape = RoundedCornerShape(8.dp)
@@ -904,11 +920,17 @@ fun MovieCategoryRow(
                 key = { _, m -> m.identifier }
             ) { index, movie ->
                 val shouldRestore = isTargetRow && movie.identifier == lastFocusedMovieId
+                val edgeModifier = if (index == 0) {
+                    Modifier.focusProperties { left = FocusRequester.Cancel }
+                } else {
+                    Modifier
+                }
                 if (isNetflixTop10) {
                     NetflixTop10Card(
                         movie = movie,
                         rankNumber = index + 1,
                         isSeries = isSeries,
+                        modifier = edgeModifier,
                         shouldRestoreFocus = shouldRestore,
                         onFocusRestored = { viewModel.clearLastFocusedMovie() },
                         onMovieClick = onMovieClick
@@ -919,6 +941,7 @@ fun MovieCategoryRow(
                         isSeries = isSeries,
                         viewModel = viewModel,
                         authorImages = authorImages,
+                        modifier = edgeModifier,
                         shouldRestoreFocus = shouldRestore,
                         onFocusRestored = { viewModel.clearLastFocusedMovie() },
                         onMovieClick = onMovieClick
@@ -934,6 +957,7 @@ fun NetflixTop10Card(
     movie: ArchiveMovie,
     rankNumber: Int,
     isSeries: Boolean,
+    modifier: Modifier = Modifier,
     shouldRestoreFocus: Boolean = false,
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
@@ -973,9 +997,8 @@ fun NetflixTop10Card(
         }
     }
 
-    // Fokus na cijelom Columnu osigurava da i plakat i naziv filma uvijek ostanu unutar ekrana
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(162.dp)
             .graphicsLayer {
                 scaleX = scaleVal
@@ -1096,6 +1119,7 @@ fun MovieCard(
     isSeries: Boolean,
     viewModel: HomeViewModel,
     authorImages: Map<String, String>,
+    modifier: Modifier = Modifier,
     shouldRestoreFocus: Boolean = false,
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
@@ -1159,9 +1183,8 @@ fun MovieCard(
         }
     }
 
-    // Fokus na cijelom Columnu osigurava da i plakat i naziv filma uvijek ostanu unutar ekrana
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(120.dp)
             .graphicsLayer {
                 scaleX = scaleVal
