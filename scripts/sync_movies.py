@@ -69,7 +69,6 @@ TMDB_DISCOVER_GENRE_SEEDS = [
 ]
 
 CULT_AND_ANIMATION_SEEDS = [
-    # Kultni SF, mjuzikli, plesni i klasici
     "Dune", "Star Wars", "The Empire Strikes Back", "Return of the Jedi",
     "2001: A Space Odyssey", "2010: The Year We Make Contact", "Hair", "Footloose",
     "Dirty Dancing", "Grease", "Saturday Night Fever", "Flashdance", "Fame",
@@ -95,7 +94,6 @@ CULT_AND_ANIMATION_SEEDS = [
     "Lawrence of Arabia", "The Bridge on the River Kwai", "Doctor Zhivago",
     "Ben-Hur", "Spartacus", "Once Upon a Time in the West", "The Good, the Bad and the Ugly",
     "A Fistful of Dollars", "For a Few Dollars More", "Unforgiven", "True Grit",
-    # Disney, Pixar i ostali animirani klasici
     "Snow White and the Seven Dwarfs", "Pinocchio", "Fantasia", "Dumbo", "Bambi",
     "Cinderella", "Alice in Wonderland", "Peter Pan", "Lady and the Tramp",
     "Sleeping Beauty", "One Hundred and One Dalmatians", "The Sword in the Stone",
@@ -123,7 +121,7 @@ CURATED_MOVIE_EXCEPTIONS = [
     {
         "archive_query": "identifier:dune-david-lynch-1984",
         "tmdb_id": 841,
-        "custom_title": "",  # Službeni hrvatski naslov s TMDB-a ("Dina")
+        "custom_title": "",
         "min_mins": 115,
     },
     {
@@ -139,6 +137,30 @@ CURATED_MOVIE_EXCEPTIONS = [
         "min_mins": 150,
     },
 ]
+
+
+def extract_archive_title_candidates(raw_title, ident):
+    """Izvlači čiste varijante naziva filma i stvarnu godinu iz naslova/ID-a s Archive.org-a."""
+    raw_str = str(raw_title or "").strip()
+    year_in_title = extract_year_from_text(raw_str) or extract_year_from_text(ident)
+
+    # Ukloni sve nakon razdjelnika s redateljem, glumcima ili opisom
+    trimmed_sep = re.split(r"\s+(?:-|–|—|\||/)\s+", raw_str, maxsplit=1)[0].strip()
+    trimmed_credit = re.split(
+        r"(?i)\s+(?:directed\s+by|dir\.?|starring|feat\.?|with)\b",
+        trimmed_sep,
+        maxsplit=1
+    )[0].strip()
+
+    candidates = []
+    for variant in (trimmed_credit, trimmed_sep, raw_str, ident.replace("-", " ").replace("_", " ")):
+        cleaned, y = clean_filename_to_title(variant)
+        if cleaned and len(cleaned) >= 2 and cleaned not in candidates:
+            candidates.append(cleaned)
+        if not year_in_title and y:
+            year_in_title = y
+
+    return candidates, year_in_title
 
 
 def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years):
@@ -398,7 +420,7 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         list(pool.map(inspect_movie_row, valid_rows))
 
     print(
@@ -486,18 +508,40 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
         return (data or {}).get("response", {}).get("docs", [])
 
     tasks = [(col, p) for col, max_p in ARCHIVE_FEATURE_COLLECTIONS for p in range(1, max_p + 1)]
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         for docs in pool.map(fetch_col_page, tasks):
             for doc in docs:
                 ident = doc.get("identifier")
                 if ident and ident not in existing_archive_ids and ident not in archive_docs:
                     archive_docs[ident] = doc
 
-    print(f"  Pronađeno {len(archive_docs)} novih Archive.org stavki za obradu...", flush=True)
+    total_docs = len(archive_docs)
+    print(f"  Pronađeno {total_docs} novih Archive.org stavki za obradu...", flush=True)
+
     added = [0]
+    processed = [0]
+    stats = {
+        "no_tmdb_match": 0,
+        "already_in_db": 0,
+        "no_video_file": 0,
+        "validation_rejected": 0,
+    }
+
+    def inc_stat(key):
+        with state_lock:
+            stats[key] += 1
 
     def process_archive_doc(doc):
         ident = doc.get("identifier") or ""
+        with state_lock:
+            processed[0] += 1
+            p_now = processed[0]
+            if p_now % 500 == 0:
+                print(
+                    f"  ... Obrađeno {p_now}/{total_docs} stavki (dodano {added[0]} filmova)...",
+                    flush=True
+                )
+
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
             return
 
@@ -507,37 +551,75 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
             return
 
-        clean_t, parsed_y = clean_filename_to_title(str(raw_title))
-        if not parsed_y:
-            parsed_y = extract_year_from_text(doc.get("year") or ident)
-        if not clean_t or len(clean_t) < 2:
+        title_candidates, parsed_y = extract_archive_title_candidates(str(raw_title), ident)
+        if not title_candidates:
             return
 
-        params = {"api_key": TMDB_API_KEY, "query": clean_t, "language": "hr-HR", "include_adult": "false"}
-        if parsed_y > 0:
-            params["year"] = parsed_y
-        res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
-        results = (res or {}).get("results", [])
-        if not results and parsed_y > 0:
-            params.pop("year")
-            res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
-            results = (res or {}).get("results", [])
+        # Pretraži TMDB po čistim varijantama naziva (prvo s godinom iz naslova/ID-a, zatim bez godine)
+        results = []
+        for cand_q in title_candidates[:2]:
+            if parsed_y > 0:
+                res_y = safe_get(
+                    f"{TMDB_BASE}/search/movie",
+                    params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "false"}
+                )
+                results = (res_y or {}).get("results", [])
+            if not results:
+                res_any = safe_get(
+                    f"{TMDB_BASE}/search/movie",
+                    params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "false"}
+                )
+                results = (res_any or {}).get("results", [])
+            if results:
+                break
+
         if not results:
+            inc_stat("no_tmdb_match")
             return
 
-        hit = results[0]
-        mid = hit["id"]
+        # Odaberi najboljeg TMDB kandidata koji se poklapa po nazivu i godini
+        cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
+        cand_norms.discard("")
+        chosen_hit = None
+        for hit in results[:5]:
+            if is_future_release(hit.get("release_date") or ""):
+                continue
+            hit_orig_norm = normalize_for_exact_title_compare(hit.get("original_title") or "")
+            hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
+            hit_year = extract_year_from_text(hit.get("release_date") or "")
+            if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
+                continue
+            if cand_norms and (hit_orig_norm in cand_norms or hit_hr_norm in cand_norms):
+                chosen_hit = hit
+                break
+
+        if chosen_hit is None:
+            first_hit = results[0]
+            first_year = extract_year_from_text(first_hit.get("release_date") or "")
+            if not is_future_release(first_hit.get("release_date") or "") and (
+                parsed_y == 0 or first_year == 0 or abs(first_year - parsed_y) <= 1
+            ):
+                chosen_hit = first_hit
+
+        if chosen_hit is None:
+            inc_stat("no_tmdb_match")
+            return
+
+        mid = chosen_hit["id"]
         with state_lock:
             if mid in seen_tmdb_ids:
+                inc_stat("already_in_db")
                 return
 
         details = get_tmdb_movie_details(mid)
         if not details or not details["poster_path"]:
+            inc_stat("no_tmdb_match")
             return
 
         is_anim = 16 in (details.get("genre_ids") or [])
-        videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 180), allow_mkv=True)
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
         if not videos:
+            inc_stat("no_video_file")
             return
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
@@ -549,13 +631,14 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             arch_md,
             arch_mins,
             details,
-            [details["orig_title"], details["hr_title"]],
+            [details["orig_title"], details["hr_title"]] + title_candidates,
             rel_year,
             require_credits=require_credits,
             chosen_filename=best["filename"],
             chosen_size_mb=best["size_mb"]
         )
         if not ok or not verify_stream_url_playable(best["stream_url"]):
+            inc_stat("validation_rejected")
             return
 
         downloads = float(doc.get("downloads") or 0)
@@ -567,10 +650,15 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             with state_lock:
                 added[0] += 1
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         list(pool.map(process_archive_doc, archive_docs.values()))
 
-    print(f"  Dodano {added[0]} filmova iz Archive.org kolekcija.", flush=True)
+    print(
+        f"  Dodano {added[0]} filmova iz Archive.org kolekcija "
+        f"(već u bazi: {stats['already_in_db']}, bez TMDB podudaranja: {stats['no_tmdb_match']}, "
+        f"bez video datoteke: {stats['no_video_file']}, odbačeno provjerom: {stats['validation_rejected']}).",
+        flush=True
+    )
 
 
 def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years):
@@ -581,7 +669,7 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         for res_list in pool.map(fetch_seed, CULT_AND_ANIMATION_SEEDS):
             for m in res_list:
                 mid = m["id"]
@@ -640,7 +728,7 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                 with state_lock:
                     added[0] += 1
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         list(pool.map(process_candidate, candidates.values()))
 
     print(f"  Dodano {added[0]} kultnih i žanrovskih filmova.", flush=True)
