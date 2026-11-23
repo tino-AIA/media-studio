@@ -21,12 +21,19 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -44,6 +51,7 @@ import com.example.mediastudio.data.api.VideoQualityOption
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -52,7 +60,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun DetailsScreen(
     movie: ArchiveMovie,
@@ -68,9 +76,11 @@ fun DetailsScreen(
     var resolvedStreamUrl by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var isSupabaseAuthorList by remember { mutableStateOf(false) }
+    var lastSelectedAuthorItemUrl by remember(movie.identifier) { mutableStateOf<String?>(null) }
 
     val playButtonFocusRequester = remember { FocusRequester() }
     val firstEpisodeFocusRequester = remember { FocusRequester() }
+    val selectedAuthorItemFocusRequester = remember { FocusRequester() }
 
     val playInteractionSource = remember { MutableInteractionSource() }
     val isPlayFocused by playInteractionSource.collectIsFocusedAsState()
@@ -197,15 +207,21 @@ fun DetailsScreen(
         }
 
         isLoading = false
+        delay(60L)
         try {
             val hasCollectionList = !isDirectLinkMode &&
                 ((isAuthorMode && (movieInfo?.qualities?.isNotEmpty() == true)) || (movieInfo?.qualities?.size ?: 0) > 1)
             if (hasCollectionList) {
-                firstEpisodeFocusRequester.requestFocus()
+                if (lastSelectedAuthorItemUrl != null) {
+                    selectedAuthorItemFocusRequester.requestFocus()
+                } else {
+                    firstEpisodeFocusRequester.requestFocus()
+                }
             } else {
                 playButtonFocusRequester.requestFocus()
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     val showCollectionList = !isDirectLinkMode &&
@@ -214,6 +230,14 @@ fun DetailsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                modifier = Modifier
+                    .focusProperties {
+                        up = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                    }
+                    .onPreviewKeyEvent { event ->
+                        event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
+                    },
                 title = {
                     Text(
                         text = if (isAuthorMode || showCollectionList) "Kolekcija Autora" else "Detalji filma",
@@ -223,7 +247,8 @@ fun DetailsScreen(
                 navigationIcon = {
                     TvHighlightIconButton(
                         onClick = onBackClick,
-                        contentDescription = "Povratak"
+                        contentDescription = "Povratak",
+                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
@@ -316,6 +341,10 @@ fun DetailsScreen(
                             .fillMaxWidth(0.8f)
                             .height(50.dp)
                             .padding(bottom = 24.dp)
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                right = FocusRequester.Cancel
+                            }
                             .background(
                                 color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                 shape = RoundedCornerShape(12.dp)
@@ -355,7 +384,7 @@ fun DetailsScreen(
                         currentInfo.qualities.map { quality ->
                             val decodedUrl = try {
                                 URLDecoder.decode(quality.url.substringAfterLast("/"), "UTF-8")
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                                 quality.label
                             }
 
@@ -389,12 +418,22 @@ fun DetailsScreen(
                     formattedQualities.forEachIndexed { index, (quality, finalFormattedTitle, _) ->
                         val epInteractionSource = remember { MutableInteractionSource() }
                         val isEpFocused by epInteractionSource.collectIsFocusedAsState()
-                        val mod = if (index == 0) Modifier.focusRequester(firstEpisodeFocusRequester) else Modifier
+                        val directDownloadUrl = quality.url.replace("/details/", "/download/")
+                        val isPreviouslySelected = lastSelectedAuthorItemUrl == directDownloadUrl
+                        val focusMod = when {
+                            isPreviouslySelected -> Modifier.focusRequester(selectedAuthorItemFocusRequester)
+                            index == 0 -> Modifier.focusRequester(firstEpisodeFocusRequester)
+                            else -> Modifier
+                        }
 
                         Box(
-                            modifier = mod
+                            modifier = focusMod
                                 .fillMaxWidth()
                                 .padding(vertical = 6.dp)
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                }
                                 .background(
                                     color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
                                     shape = RoundedCornerShape(10.dp)
@@ -405,7 +444,7 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
-                                    val directDownloadUrl = quality.url.replace("/details/", "/download/")
+                                    lastSelectedAuthorItemUrl = directDownloadUrl
                                     if (onMovieSelectFromList != null) {
                                         onMovieSelectFromList(
                                             ArchiveMovie(
@@ -448,6 +487,7 @@ fun DetailsScreen(
                                 .weight(1f)
                                 .height(54.dp)
                                 .focusRequester(playButtonFocusRequester)
+                                .focusProperties { left = FocusRequester.Cancel }
                                 .background(
                                     color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
                                     shape = RoundedCornerShape(12.dp)
@@ -489,6 +529,7 @@ fun DetailsScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(54.dp)
+                                .focusProperties { right = FocusRequester.Cancel }
                                 .background(
                                     color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                     shape = RoundedCornerShape(12.dp)
@@ -586,6 +627,8 @@ private suspend fun fetchWikiInfo(authorName: String): String = withContext(Disp
         var url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
         var conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
         var response = conn.inputStream.bufferedReader().use { it.readText() }
 
         var jsonObject = JSONObject(response)
@@ -603,6 +646,8 @@ private suspend fun fetchWikiInfo(authorName: String): String = withContext(Disp
         url = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
         conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
         response = conn.inputStream.bufferedReader().use { it.readText() }
 
         jsonObject = JSONObject(response)
@@ -617,7 +662,7 @@ private suspend fun fetchWikiInfo(authorName: String): String = withContext(Disp
             }
         }
         return@withContext "Biografija nije pronađena na Wikipediji."
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         return@withContext "Greška prilikom preuzimanja biografije."
     }
 }
