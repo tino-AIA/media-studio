@@ -41,6 +41,7 @@ ARCHIVE_FEATURE_COLLECTIONS = [
     ("vhsvault", 6),
     ("laserdiscarchive", 5),
     ("colorized-and-upscaled-movies", 5),
+    ("popcornmaker", 15),
     ("miscellaneous_feature_films", 6),
     ("westerns", 6),
     ("war_films", 6),
@@ -94,6 +95,7 @@ CULT_AND_ANIMATION_SEEDS = [
     "Lawrence of Arabia", "The Bridge on the River Kwai", "Doctor Zhivago",
     "Ben-Hur", "Spartacus", "Once Upon a Time in the West", "The Good, the Bad and the Ugly",
     "A Fistful of Dollars", "For a Few Dollars More", "Unforgiven", "True Grit",
+    "Spider-Man: Into the Spider-Verse", "Spider-Man: Across the Spider-Verse",
     "Snow White and the Seven Dwarfs", "Pinocchio", "Fantasia", "Dumbo", "Bambi",
     "Cinderella", "Alice in Wonderland", "Peter Pan", "Lady and the Tramp",
     "Sleeping Beauty", "One Hundred and One Dalmatians", "The Sword in the Stone",
@@ -144,7 +146,6 @@ def extract_archive_title_candidates(raw_title, ident):
     raw_str = str(raw_title or "").strip()
     year_in_title = extract_year_from_text(raw_str) or extract_year_from_text(ident)
 
-    # Ukloni sve nakon razdjelnika s redateljem, glumcima ili opisom
     trimmed_sep = re.split(r"\s+(?:-|–|—|\||/)\s+", raw_str, maxsplit=1)[0].strip()
     trimmed_credit = re.split(
         r"(?i)\s+(?:directed\s+by|dir\.?|starring|feat\.?|with)\b",
@@ -152,8 +153,11 @@ def extract_archive_title_candidates(raw_title, ident):
         maxsplit=1
     )[0].strip()
 
+    clean_ident_str = re.sub(r"(?i)^popcornarchive[-_]+", "", ident)
+    clean_ident_str = re.sub(r"([a-z])([A-Z])", r"\1 \2", clean_ident_str).replace("-", " ").replace("_", " ")
+
     candidates = []
-    for variant in (trimmed_credit, trimmed_sep, raw_str, ident.replace("-", " ").replace("_", " ")):
+    for variant in (trimmed_credit, trimmed_sep, raw_str, clean_ident_str):
         cleaned, y = clean_filename_to_title(variant)
         if cleaned and len(cleaned) >= 2 and cleaned not in candidates:
             candidates.append(cleaned)
@@ -249,7 +253,7 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
 
 
 def find_best_archive_movie_match(details, year, exclude_ids):
-    """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u."""
+    """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u (uključujući Popcorn Maker zapise)."""
     orig_title = details["orig_title"]
     hr_title = details["hr_title"]
     clean_q = re.sub(r"[^\w\s]", " ", orig_title).strip()
@@ -260,7 +264,7 @@ def find_best_archive_movie_match(details, year, exclude_ids):
     min_mb = 80 if is_anim else 180
     require_credits = has_multiple_tmdb_versions(orig_title)
     year_clause = f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else ""
-    query = f'title:"{clean_q}"{year_clause} AND mediatype:movies AND -subject:trailer AND -subject:news AND -subject:review'
+    query = f'title:"{clean_q}"{year_clause} AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news AND -subject:review'
 
     data = safe_get(
         "https://archive.org/advancedsearch.php",
@@ -268,7 +272,7 @@ def find_best_archive_movie_match(details, year, exclude_ids):
             "q": query,
             "fl[]": ["identifier", "title", "downloads"],
             "sort[]": "downloads desc",
-            "rows": 8,
+            "rows": 10,
             "output": "json"
         }
     )
@@ -493,7 +497,10 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
 
     def fetch_col_page(col_page):
         col, page = col_page
-        query = f"mediatype:movies AND collection:{col} AND -collection:television AND -subject:trailer AND -subject:news"
+        if col == "popcornmaker":
+            query = 'mediatype:(movies OR web) AND (collection:popcornmaker OR subject:"Popcorn Maker") AND -subject:trailer AND -subject:news'
+        else:
+            query = f"mediatype:movies AND collection:{col} AND -collection:television AND -subject:trailer AND -subject:news"
         data = safe_get(
             "https://archive.org/advancedsearch.php",
             params={
@@ -555,7 +562,6 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
         if not title_candidates:
             return
 
-        # Pretraži TMDB po čistim varijantama naziva (prvo s godinom iz naslova/ID-a, zatim bez godine)
         results = []
         for cand_q in title_candidates[:2]:
             if parsed_y > 0:
@@ -577,7 +583,6 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             inc_stat("no_tmdb_match")
             return
 
-        # Odaberi najboljeg TMDB kandidata koji se poklapa po nazivu i godini
         cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
         cand_norms.discard("")
         chosen_hit = None
