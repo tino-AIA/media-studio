@@ -166,7 +166,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "looney tunes", "tom and jerry", "bugs bunny", "popeye", "ghibli", "chihiro",
         "koralina", "coraline", "angry birds", "mačak u čizmama", "puss in boots",
         "evangelion", "wolfwalkers", "klaus", "bojack", "phineas", "gumball", "dr.stone",
-        "batman: crtana", "animated series", "south park", "simpsons"
+        "batman: crtana", "animated series", "south park", "simpsons",
+        "baltazar", "balthazar", "šegrt hlapić", "čudesna šuma", "čarobnjakov šešir", "surogat"
     )
 
     private val animGenresSet = setOf(
@@ -175,12 +176,30 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "disney kratki crtići",
         "animirani filmovi",
         "klasični crtići",
-        "animirane serije"
+        "animirane serije",
+        "ex-yu crtići"
     )
 
     private val disneyPixarKeywords = listOf(
         "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
         "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
+    )
+
+    private val exYuGenreNames = setOf(
+        "ex-yu klasici",
+        "ex-yu crtići",
+        "ex-yu serije"
+    )
+
+    private val exYuKeywords = listOf(
+        "ex-yu", "ex yu", "zagreb film", "jadran film", "avala film", "centar film",
+        "sutjeska film", "bosna film", "vardar film", "croatia film", "domaci film",
+        "domaći film", "jugoslavija", "yugoslavia", "baltazar", "balthazar",
+        "šegrt hlapić", "čudesna šuma", "čarobnjakov šešir", "surogat",
+        "ko to tamo peva", "maratonci", "balkanski špijun", "tko pjeva zlo ne misli",
+        "vlak u snijegu", "družba pere kvržice", "bitka na neretvi", "valter brani sarajevo",
+        "gosti iz galaksije", "izbavitelj", "gruntovčani", "malo misto", "velo misto",
+        "smogovci", "otpisani", "bolji život", "vruć vetar", "kamiondžije"
     )
 
     val exactAuthorOrder = listOf(
@@ -323,6 +342,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val movieGenreDefinitions = listOf(
         GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
         GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
+        GenreOption(
+            "Ex-Yu klasici",
+            "mediatype:(movies OR web) AND (language:(Croatian OR Serbian OR \"Serbo-Croatian\" OR Bosnian OR Slovenian OR Macedonian) OR subject:(Yugoslavia OR \"Jadran Film\" OR \"Avala Film\" OR \"Zagreb Film\" OR \"domaci film\"))",
+            "downloads desc"
+        ),
         GenreOption("Filmografije i Kolekcije Autora", "", "", isAuthorCollection = true),
         GenreOption("Sci-Fi klasici", "$movieBaseQuery AND subject:(sci-fi OR \"science fiction\")"),
         GenreOption("Akcija i avantura", "$movieBaseQuery AND subject:(action OR adventure)"),
@@ -348,6 +372,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         GenreOption("Disney kratki crtići", "mediatype:movies AND title:(\"walt disney\" OR \"mickey mouse\" OR \"donald duck\" OR \"silly symphonies\" OR goofy)", "downloads desc", isAnimationCategory = true),
         GenreOption("Animirani filmovi", "mediatype:movies AND (subject:animation OR collection:animationandcartoons)", "downloads desc", isAnimationCategory = true),
         GenreOption("Klasični crtići", "mediatype:movies AND (title:(\"looney tunes\" OR \"tom and jerry\" OR popeye OR \"bugs bunny\" OR \"pink panther\"))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Ex-Yu crtići", "mediatype:(movies OR web) AND (subject:\"Zagreb Film\" OR creator:\"Zagreb Film\" OR title:(\"Profesor Baltazar\" OR \"Čudesna šuma\" OR \"Šegrt Hlapić\" OR \"Surogat\"))", "downloads desc", isAnimationCategory = true),
         GenreOption("Animirane serije", "mediatype:movies AND (subject:animation OR subject:cartoon) AND subject:\"tv series\"", "downloads desc", isAnimationCategory = true, isSeriesCategory = true)
     )
 
@@ -355,6 +380,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val seriesGenreDefinitions = listOf(
         GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
+        GenreOption("Ex-Yu serije", "mediatype:movies AND language:(Croatian OR Serbian OR \"Serbo-Croatian\" OR Bosnian)", "downloads desc", isSeriesCategory = true),
         GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND subject:(crime OR detective OR mystery OR thriller)", "downloads desc", isSeriesCategory = true),
         GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND subject:(sci-fi OR \"science fiction\" OR fantasy)", "downloads desc", isSeriesCategory = true),
         GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND subject:(comedy OR sitcom)", "downloads desc", isSeriesCategory = true),
@@ -594,6 +620,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return disneyPixarKeywords.any { blob.contains(it) }
     }
 
+    private fun isExYuItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { it.lowercase() in exYuGenreNames }) return true
+        val blob = "${item.title} ${item.archiveId}".lowercase()
+        return exYuKeywords.any { blob.contains(it) }
+    }
+
     private fun deduplicateCatalogItems(items: List<SupabaseCatalogItem>): List<SupabaseCatalogItem> {
         val seenTitleYears = HashSet<String>(items.size)
         val seenTmdbTokens = HashSet<String>(items.size / 2)
@@ -728,6 +760,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     ).take(20).map { it.toArchiveMovie() }
                     if (classics.isNotEmpty()) genre to classics else null
                 }
+                genre.title == "Ex-Yu klasici" -> {
+                    val exYuMovies = liveActionMovies.filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuMovies.isNotEmpty()) genre to exYuMovies else null
+                }
                 else -> {
                     val matching = liveActionMovies.filter { item ->
                         item.genres.any { it.equals(genre.title, ignoreCase = true) }
@@ -791,6 +831,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     ).take(20).map { it.toArchiveMovie() }
                     if (shorts.isNotEmpty()) genre to shorts else null
                 }
+                "Ex-Yu crtići" -> {
+                    val exYuAnim = (animatedMoviesAndShorts + animatedSeries).filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuAnim.isNotEmpty()) genre to exYuAnim else null
+                }
                 "Animirane serije" -> {
                     val animSer = animatedSeries.sortedWith(
                         compareByDescending<SupabaseCatalogItem> { it.rating }
@@ -803,17 +851,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val builtSeriesCategories = seriesGenreDefinitions.mapNotNull { genre ->
-            if (genre.title.startsWith("Top 10")) {
-                val top10 = liveActionSeries.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
-                if (top10.isNotEmpty()) genre to top10 else null
-            } else {
-                val matching = liveActionSeries.filter { item ->
-                    item.genres.any { it.equals(genre.title, ignoreCase = true) }
-                }.sortedWith(
-                    compareByDescending<SupabaseCatalogItem> { it.rating }
-                        .thenByDescending { it.popularityScore }
-                ).take(20).map { it.toArchiveMovie() }
-                if (matching.isNotEmpty()) genre to matching else null
+            when {
+                genre.title.startsWith("Top 10") -> {
+                    val top10 = liveActionSeries.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    if (top10.isNotEmpty()) genre to top10 else null
+                }
+                genre.title == "Ex-Yu serije" -> {
+                    val exYuSer = liveActionSeries.filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuSer.isNotEmpty()) genre to exYuSer else null
+                }
+                else -> {
+                    val matching = liveActionSeries.filter { item ->
+                        item.genres.any { it.equals(genre.title, ignoreCase = true) }
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (matching.isNotEmpty()) genre to matching else null
+                }
             }
         }
 
@@ -1184,6 +1243,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 "Klasični crtići" -> shortCartoons.sortedWith(
                     compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
                 )
+                "Ex-Yu crtići" -> (animMovies + animSeries).filter { isExYuItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
                 "Animirane serije" -> animSeries.sortedWith(
                     compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
                 )
@@ -1202,6 +1264,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return when {
             genre.title.startsWith("Top 10") -> typedItems.sortedByDescending { it.popularityScore }
             genre.title == "Klasici i Najgledanije" -> typedItems.sortedWith(
+                compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+            )
+            genre.title == "Ex-Yu klasici" || genre.title == "Ex-Yu serije" -> typedItems.filter { isExYuItem(it) }.sortedWith(
                 compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
             )
             else -> typedItems.filter { item ->
