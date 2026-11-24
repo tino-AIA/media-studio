@@ -44,18 +44,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          for attempt in 1 2 3; do
-            echo "Pokusaj builda $attempt/3..."
-            if gradle assembleDebug --no-daemon --max-workers=2; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "Maven/Gradle privremeno zauzet (429), cekam 25s prije ponovnog pokusaja..."
-              sleep 25
-            fi
-          done
-          exit 1
+        run: gradle assembleDebug --no-daemon --max-workers=2
 
       - name: Prepare APK artifact
         run: |
