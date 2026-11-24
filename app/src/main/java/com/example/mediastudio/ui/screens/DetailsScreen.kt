@@ -788,10 +788,14 @@ private fun translateGenreToCroatian(rawGenre: String): String {
     }
 }
 
-private fun formatGenresHr(genres: List<String>): String {
+private fun formatGenresHr(genres: List<String>, allowExYuTag: Boolean): String {
     val cleaned = genres
         .map { it.trim() }
-        .filter { it.isNotBlank() && !it.startsWith("18+") }
+        .filter { g ->
+            g.isNotBlank() &&
+                !g.startsWith("18+") &&
+                (allowExYuTag || !g.equals("Ex-Yu crtići", ignoreCase = true))
+        }
         .map { translateGenreToCroatian(it) }
         .distinct()
     return cleaned.joinToString(", ")
@@ -901,6 +905,19 @@ private fun extractCastFromTextHr(desc: String): String {
     return ""
 }
 
+private fun isGenuineExYuSource(title: String, identifier: String, genres: List<String>): Boolean {
+    val blob = "$title $identifier ${genres.joinToString(" ")}".lowercase()
+    val exYuTokens = listOf(
+        "zagreb film", "jadran film", "avala film", "centar film", "sutjeska film",
+        "bosna film", "vardar film", "croatia film", "yugoslavia", "jugoslavija",
+        "baltazar", "balthazar", "šegrt hlapić", "segrt hlapic", "čudesna šuma",
+        "cudesna suma", "čarobnjakov šešir", "carobnjakov sesir", "surogat",
+        "ko to tamo peva", "maratonci", "balkanski špijun", "tko pjeva zlo ne misli",
+        "vlak u snijegu", "družba pere kvržice", "bitka na neretvi", "valter brani sarajevo"
+    )
+    return exYuTokens.any { blob.contains(it) }
+}
+
 private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr: String): Pair<String, String> = withContext(Dispatchers.IO) {
     try {
         var resolvedId = tmdbId
@@ -966,7 +983,8 @@ private suspend fun buildStructuredSheet(
     rawDesc: String
 ): StructuredDetailSheet = withContext(Dispatchers.IO) {
     val genresList = sbItem?.genres.orEmpty()
-    val genreHr = formatGenresHr(genresList)
+    val allowExYuTag = isGenuineExYuSource(title, identifier, genresList)
+    val genreHr = formatGenresHr(genresList, allowExYuTag)
     val yearHr = extractYearHr(yearHint, title, identifier)
     val lowerBlob = "${title.lowercase()} ${identifier.lowercase()} ${genresList.joinToString(" ").lowercase()}"
 
