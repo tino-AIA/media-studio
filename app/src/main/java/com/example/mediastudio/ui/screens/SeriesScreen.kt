@@ -54,6 +54,7 @@ import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -124,6 +125,56 @@ private suspend fun translateSeriesDescriptionToCroatian(text: String): String =
     }
 }
 
+private fun formatSeriesGenresHr(genres: List<String>): String {
+    return genres
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("18+") }
+        .distinct()
+        .joinToString(", ")
+}
+
+private fun extractSeriesAwardsHr(text: String): String {
+    if (text.isBlank()) return ""
+    val keys = listOf(
+        "emmy", "oscar", "zlatni globus", "golden globe", "bafta",
+        "nagrada", "nagradu", "nagrađen", "nagrađena", "award"
+    )
+    return text.split(Regex("(?<=[.!?])\\s+"))
+        .filter { s -> keys.any { k -> s.lowercase().contains(k) } }
+        .map { it.trim() }
+        .distinct()
+        .take(2)
+        .joinToString(" ")
+}
+
+private fun extractSeriesCastHr(text: String): String {
+    val m = Regex("(?i)(?:glavne uloge|uloge|glume|starring|cast)\\s*[:\\-–]?\\s*([^\\n.]{4,160})").find(text)
+    return m?.groupValues?.get(1)?.trim().orEmpty()
+}
+
+private suspend fun fetchSeriesWikiHr(title: String): String = withContext(Dispatchers.IO) {
+    try {
+        val clean = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+        if (clean.isBlank()) return@withContext ""
+        val encoded = URLEncoder.encode(clean, "UTF-8")
+        val url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&explaintext=1&format=json&redirects=1")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val pages = json.getJSONObject("query").getJSONObject("pages")
+        val pageId = pages.keys().next()
+        if (pageId != "-1") {
+            val extract = pages.getJSONObject(pageId).optString("extract").trim()
+            if (extract.isNotEmpty()) return@withContext extract.take(1600)
+        }
+        ""
+    } catch (_: Exception) {
+        ""
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SeriesScreen(
@@ -136,19 +187,23 @@ fun SeriesScreen(
     var seasons by remember { mutableStateOf<List<SeriesSeason>>(emptyList()) }
     var selectedSeasonIndex by remember { mutableIntStateOf(0) }
     var seriesDescription by remember { mutableStateOf("") }
+    var seriesGenreHr by remember { mutableStateOf("") }
+    var seriesDirectorHr by remember { mutableStateOf("") }
+    var seriesCastHr by remember { mutableStateOf("") }
+    var seriesAwardsHr by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
     val firstArchiveId = series.identifier.split(",").first()
-    val initialSbPoster = remember(series.identifier) {
-        SupabaseRepository.getCatalogItem(series.identifier)?.posterUrl.orEmpty()
+    val sbItem = remember(series.identifier) {
+        SupabaseRepository.getCatalogItem(series.identifier)
     }
     var posterUrl by remember(series.identifier) {
-        mutableStateOf(initialSbPoster.ifBlank { "https://archive.org/services/img/$firstArchiveId" })
+        mutableStateOf(sbItem?.posterUrl.orEmpty().ifBlank { "https://archive.org/services/img/$firstArchiveId" })
     }
 
     val resolvedYear = remember(series.identifier, series.year, series.title) {
         series.year?.takeIf { it.isNotBlank() && it != "0" }
-            ?: SupabaseRepository.getCatalogItem(series.identifier)?.releaseYear?.takeIf { it > 0 }?.toString()
+            ?: sbItem?.releaseYear?.takeIf { it > 0 }?.toString()
             ?: Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)").find(series.title)?.groupValues?.get(1)
             ?: ""
     }
@@ -164,18 +219,27 @@ fun SeriesScreen(
 
     LaunchedEffect(series.identifier) {
         isLoading = true
-        val sbPoster = SupabaseRepository.getCatalogItem(series.identifier)?.posterUrl.orEmpty()
-        posterUrl = sbPoster.ifBlank {
+        val item = SupabaseRepository.getCatalogItem(series.identifier)
+        posterUrl = item?.posterUrl.orEmpty().ifBlank {
             PosterFetcher.fetchPoster(series.title, isSeries = true, series.identifier)
                 .ifBlank { "https://archive.org/services/img/$firstArchiveId" }
         }
+        seriesGenreHr = formatSeriesGenresHr(item?.genres.orEmpty())
         val dbDesc = SupabaseRepository.loadItemDescription(series.identifier)
         SupabaseRepository.loadSeriesEpisodes(series.identifier)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
         val rawDesc = fullInfo.description.takeIf {
             it.isNotBlank() && !it.startsWith("Opis za ovaj naslov")
         } ?: dbDesc.ifBlank { fullInfo.description }
-        seriesDescription = translateSeriesDescriptionToCroatian(rawDesc)
+        val hrDesc = translateSeriesDescriptionToCroatian(rawDesc)
+        seriesDescription = hrDesc
+
+        val wikiHr = fetchSeriesWikiHr(series.title)
+        val combinedText = "$hrDesc $wikiHr"
+        seriesDirectorHr = ""
+        seriesCastHr = extractSeriesCastHr(combinedText)
+        seriesAwardsHr = extractSeriesAwardsHr(combinedText)
+
         seasons = fullInfo.seasons
         selectedSeasonIndex = 0
         isLoading = false
@@ -187,10 +251,14 @@ fun SeriesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                modifier = Modifier.focusProperties {
-                    up = FocusRequester.Cancel
-                    left = FocusRequester.Cancel
-                },
+                modifier = Modifier
+                    .focusProperties {
+                        up = FocusRequester.Cancel
+                        left = FocusRequester.Cancel
+                    }
+                    .onPreviewKeyEvent { event ->
+                        event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
+                    },
                 title = {
                     Column {
                         Text(
@@ -277,26 +345,7 @@ fun SeriesScreen(
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-                                if (resolvedYear.isNotBlank()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Godina: $resolvedYear",
-                                        color = Color(0xFFFFC107),
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = if (visibleEpisodes.isNotEmpty())
-                                        "Odaberi sezonu i pokreni željenu epizodu."
-                                    else
-                                        "Ova kolekcija nema izravno povezanih video datoteka.",
-                                    color = Color.LightGray,
-                                    fontSize = 13.sp
-                                )
-
-                                Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
 
                                 Box(
                                     modifier = Modifier
@@ -336,14 +385,39 @@ fun SeriesScreen(
                             }
                         }
 
-                        if (seriesDescription.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = seriesDescription,
-                                color = Color(0xFFCCCCCC),
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp
-                            )
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF141414), RoundedCornerShape(12.dp))
+                                .border(1.dp, Color(0xFF2B2B2B), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            SeriesDetailLine("Žanr", seriesGenreHr)
+                            SeriesDetailLine("Godina proizvodnje", resolvedYear)
+                            SeriesDetailLine("Glavni glumci", seriesCastHr)
+                            SeriesDetailLine("Redatelj", seriesDirectorHr)
+                            SeriesDetailLine("Nagrade", seriesAwardsHr)
+
+                            if (seriesDescription.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Divider(color = Color(0xFF262626))
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Kratki sadržaj",
+                                    color = Color(0xFFFF5252),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = seriesDescription,
+                                    color = Color(0xFFCCCCCC),
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp
+                                )
+                            }
                         }
 
                         if (seasons.size > 1) {
@@ -378,6 +452,25 @@ fun SeriesScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SeriesDetailLine(label: String, value: String) {
+    if (value.isBlank()) return
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "$label: ",
+            color = Color(0xFF9E9E9E),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = value,
+            color = Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
