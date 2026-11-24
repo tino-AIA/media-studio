@@ -131,6 +131,37 @@ object ArchiveMetadataModule {
     private const val TMDB_API_KEY = "0eb677c7b027f3fc1502856e48f4da97"
     private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     private val videoExtensions = listOf(".mp4", ".mkv", ".avi", ".m4v", ".mov", ".ogv", ".webm")
+    private val junkClipRegex = Regex(
+        "(?i)(trailer|sample|teaser|preview|promo|pencil[\\s._-]*test|shot[\\s._-]*demo|transformation|test[\\s._-]*footage|commentary|subtlet|review)"
+    )
+
+    private fun computeSmoothnessScore(name: String, height: Int, sizeBytes: Long, isDeriv: Boolean): Long {
+        val sizeMb = sizeBytes / (1024L * 1024L)
+        var score = 0L
+
+        score += when {
+            height in 720..1080 -> 400L
+            height >= 480 -> 260L
+            height > 1080 -> 180L
+            else -> 120L
+        }
+
+        score += when {
+            sizeMb in 300L..1450L -> 500L
+            sizeMb in 150L..299L -> 250L
+            sizeMb in 1451L..1950L -> 150L
+            sizeMb > 1950L -> -350L
+            else -> 0L
+        }
+
+        if (isDeriv && sizeMb > 1600L) {
+            score += 200L
+        } else if (!isDeriv && sizeMb > 2200L) {
+            score -= 250L
+        }
+
+        return score
+    }
 
     suspend fun fetchMovieFullInfo(identifier: String): MovieFullInfo = withContext(Dispatchers.IO) {
         SupabaseRepository.getCatalogItem(identifier)?.let { sbItem ->
@@ -180,7 +211,7 @@ object ArchiveMetadataModule {
             }
 
             val filesArray = root.optJSONArray("files")
-            val qualities = mutableListOf<VideoQualityOption>()
+            val qualities = mutableListOf<Pair<Long, VideoQualityOption>>()
 
             if (filesArray != null) {
                 for (i in 0 until filesArray.length()) {
@@ -194,11 +225,15 @@ object ArchiveMetadataModule {
                         format.contains("Matroska", ignoreCase = true)
 
                     if (isVideoFile) {
+                        if (junkClipRegex.containsMatchIn(name)) continue
                         val height = fileObj.optString("height").toIntOrNull() ?: 0
                         val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
                         val sizeMb = sizeBytes / (1024 * 1024)
 
-                        if (sizeMb < 5 && height == 0) continue
+                        if (sizeMb < 15 && height == 0) continue
+
+                        val isDeriv = name.lowercase(Locale.ROOT).endsWith(".ia.mp4") ||
+                            fileObj.optString("source").equals("derivative", ignoreCase = true)
 
                         val resLabel = when {
                             height >= 1080 -> "1080p Full HD"
@@ -221,9 +256,10 @@ object ArchiveMetadataModule {
                             URLEncoder.encode(part, "UTF-8").replace("+", "%20")
                         }
                         val url = "https://archive.org/download/$identifier/$encodedName"
+                        val score = computeSmoothnessScore(name, height, sizeBytes, isDeriv)
 
                         qualities.add(
-                            VideoQualityOption(
+                            score to VideoQualityOption(
                                 label = fullLabel,
                                 url = url,
                                 height = height,
@@ -235,8 +271,9 @@ object ArchiveMetadataModule {
             }
 
             val sortedQualities = qualities
+                .sortedByDescending { it.first }
+                .map { it.second }
                 .distinctBy { it.label }
-                .sortedWith(compareByDescending<VideoQualityOption> { it.height }.thenByDescending { it.sizeBytes })
 
             MovieFullInfo(
                 qualities = sortedQualities,
@@ -344,7 +381,6 @@ object ArchiveMetadataModule {
             }
         }
 
-        // Rezerva: izravni dohvat s Archive.org
         try {
             val ids = identifiersStr.split(",")
             var firstDesc = ""
@@ -383,6 +419,7 @@ object ArchiveMetadataModule {
                                 format.contains("Ogg Video", ignoreCase = true)
 
                             if (!isVideo) continue
+                            if (junkClipRegex.containsMatchIn(name)) continue
                             if (source.equals("derivative", ignoreCase = true) && name.contains("_512kb", ignoreCase = true)) continue
 
                             val sizeBytes = fileObj.optString("size").toLongOrNull() ?: 0L
