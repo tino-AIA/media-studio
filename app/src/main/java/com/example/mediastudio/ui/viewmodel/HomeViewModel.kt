@@ -153,6 +153,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val seriesIndicatorRegex = Regex("(?i)\\b(s\\d{1,2}e\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|\\d+x\\d+|tv\\s*series)\\b")
     private val numericCleanRegex = Regex("[^0-9.]")
 
+    private val hdWidescreenQualityRegex = Regex(
+        "(?i)\\b(1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip|widescreen|16x9|16_9|16-9|remastered|restored)\\b"
+    )
+    private val lowVhsQualityRegex = Regex(
+        "(?i)\\b(vhs|vhdrip|laserdisc|ldrip|fullscreen|full[\\s._-]*screen|4x3|4_3|4-3|480p|360p|240p|camrip|telesync|telecine|dvdscr)\\b"
+    )
+
     private val blockedSearchNoiseKeywords = listOf(
         "all 6", "movies 1 -", "movies 1-", "n64", "ps1", "ps2", "snes", "nes",
         "gameplay", "longplay", "walkthrough", "speedrun", "soundtrack", "audiobook",
@@ -629,12 +636,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return exYuKeywords.any { blob.contains(it) }
     }
 
+    private fun computeQualityTier(item: SupabaseCatalogItem): Int {
+        val blob = "${item.archiveId} ${item.streamUrl} ${item.title}".lowercase()
+        return when {
+            hdWidescreenQualityRegex.containsMatchIn(blob) -> 2
+            lowVhsQualityRegex.containsMatchIn(blob) -> 0
+            else -> 1
+        }
+    }
+
     private fun deduplicateCatalogItems(items: List<SupabaseCatalogItem>): List<SupabaseCatalogItem> {
         val seenTitleYears = HashSet<String>(items.size)
         val seenTmdbTokens = HashSet<String>(items.size / 2)
         return items
             .sortedWith(
-                compareBy<SupabaseCatalogItem> { it.archiveId.contains(",tmdb-") }
+                compareByDescending<SupabaseCatalogItem> { computeQualityTier(it) }
+                    .thenBy { it.archiveId.contains(",tmdb-") }
                     .thenByDescending { it.popularityScore }
             )
             .filter { item ->
@@ -1019,13 +1036,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                                 (words.size > 1 && words.all { w -> tLower.contains(w) })
                         }
                         .map { item ->
+                            val qualityBonus = when (computeQualityTier(item)) {
+                                2 -> 800.0
+                                0 -> -800.0
+                                else -> 0.0
+                            }
                             val rel = computeSearchRelevance(
                                 title = item.title,
                                 identifier = item.archiveId,
                                 description = "",
                                 rawQuery = trimmed,
                                 isFromSupabase = true,
-                                baseQualityScore = item.popularityScore.coerceAtMost(3000.0)
+                                baseQualityScore = item.popularityScore.coerceAtMost(3000.0) + qualityBonus
                             )
                             RatedMovie(
                                 movie = item.toArchiveMovie(),
@@ -1056,9 +1078,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 _globalSearchResults.value = (sbMatches + archiveMatches)
+                    .sortedByDescending { it.relevanceScore }
                     .distinctBy { it.movie.identifier }
                     .distinctBy { yearParenRegex.replace(it.movie.title.lowercase(), "").trim() }
-                    .sortedByDescending { it.relevanceScore }
                     .take(40)
             } catch (e: Exception) {
                 e.printStackTrace()
