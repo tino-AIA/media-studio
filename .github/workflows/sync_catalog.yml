@@ -17,6 +17,9 @@ on:
           - series_cartoons
           - concerts
 
+permissions:
+  contents: write
+
 jobs:
   sync-authors:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'all' || github.event.inputs.target == 'authors'
@@ -97,3 +100,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/sync_concerts.py
+
+  keep-repo-alive:
+    if: always()
+    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Update sync timestamp
+        run: |
+          mkdir -p .github
+          date -u +"%Y-%m-%d %H:%M:%S UTC" > .github/last_sync.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last_sync.txt
+          git diff --staged --quiet || git commit -m "chore: keep repository and sync schedule active"
+          git push
