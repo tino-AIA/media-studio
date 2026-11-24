@@ -3,11 +3,14 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sync_common import (
+    DUNE_1984_MARKER_RE,
+    EXTENDED_CUT_TAG_RE,
     TMDB_API_KEY,
     TMDB_BASE,
     TMDB_IMG_BACKDROP,
     TMDB_IMG_POSTER,
     clean_filename_to_title,
+    compute_aspect_tier,
     contains_blocked_regional_or_arabic,
     contains_hentai_or_adult,
     determine_primary_genres,
@@ -29,6 +32,8 @@ from sync_common import (
 )
 
 author_enrich_cache = {}
+
+MAX_VERSIONS_PER_MOVIE = 2
 
 AUTHORS = [
     ("Alfred Hitchcock", "filmography-alfred-hitchcock"),
@@ -110,13 +115,99 @@ CURATED_AUTHOR_EXTRAS = {
     ]
 }
 
+CURATED_ARCHIVE_IDS = {
+    "dune-david-lynch-1984",
+    "DuneTheCompleteSagaVimeo",
+}
+
+
+def estimate_source_quality_tier(ident, stream_url="", title=""):
+    return compute_aspect_tier(f"{ident} {stream_url} {title}")
+
+
+def is_special_edition(ident, stream_url="", title=""):
+    return bool(EXTENDED_CUT_TAG_RE.search(f"{ident} {stream_url} {title}"))
+
+
+def is_mismatched_modern_dune(tmdb_id, *texts):
+    if int(tmdb_id or 0) not in (438631, 693134):
+        return False
+    blob = " ".join(str(t) for t in texts if t)
+    return bool(DUNE_1984_MARKER_RE.search(blob))
+
+
+def build_movie_version_maps(all_rows):
+    version_counts = {}
+    best_tiers = {}
+    for row in all_rows:
+        if not row.get("is_valid", True):
+            continue
+        mid = int(row.get("tmdb_id") or 0)
+        if mid <= 0:
+            continue
+        version_counts[mid] = version_counts.get(mid, 0) + 1
+        tier = estimate_source_quality_tier(
+            row.get("archive_id") or "",
+            row.get("stream_url") or "",
+            row.get("title") or ""
+        )
+        if tier > best_tiers.get(mid, -1):
+            best_tiers[mid] = tier
+    return version_counts, best_tiers
+
+
+def can_promote_movie_version(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag=False):
+    if mid <= 0:
+        return False
+    count = tmdb_version_counts.get(mid, 0)
+    if count == 0:
+        return True
+    current_best = tmdb_best_tier.get(mid, 1)
+    if current_best == 0:
+        return cand_tier > 0 or special_flag
+    if count >= MAX_VERSIONS_PER_MOVIE:
+        return False
+    return (cand_tier > current_best) or special_flag
+
+
+def retire_vhs_rows_for_tmdb(mid, new_arch_id, rel_year, all_rows, tmdb_version_counts):
+    if mid <= 0 or (rel_year > 0 and rel_year < 1955):
+        return 0
+    rows_to_retire = []
+    with state_lock:
+        for row in all_rows:
+            if not row.get("is_valid", True):
+                continue
+            if int(row.get("tmdb_id") or 0) != mid:
+                continue
+            r_ident = row.get("archive_id") or ""
+            if not r_ident or r_ident == new_arch_id:
+                continue
+            base_ident = r_ident.split(",tmdb-")[0].strip()
+            if base_ident in CURATED_ARCHIVE_IDS:
+                continue
+            r_tier = estimate_source_quality_tier(r_ident, row.get("stream_url") or "", row.get("title") or "")
+            if r_tier == 0:
+                row["is_valid"] = False
+                if tmdb_version_counts.get(mid, 0) > 0:
+                    tmdb_version_counts[mid] -= 1
+                rows_to_retire.append((row["id"], row.get("title") or "", r_ident))
+
+    for row_id, r_title, r_ident in rows_to_retire:
+        supabase_patch_row("catalog_items", row_id, {"is_valid": False})
+        print(f"    🗑 Uklonjen stari VHS/4:3 rip nakon pronalaska bolje verzije autora: {r_title} ({r_ident})", flush=True)
+
+    return len(rows_to_retire)
+
 
 def extract_variant_label(filename):
     base = filename.rsplit("/", 1)[-1]
     name = re.sub(r"\.(mp4|mkv|avi|ogv|mov)$", "", base, flags=re.IGNORECASE)
     m = re.search(
         r"(?i)\b("
-        r"the\s+complete\s+novel|complete\s+novel|director'?s?\s*cut|theatrical\s*cut|"
+        r"the\s+complete\s+novel|complete\s+novel|the\s+complete\s+saga|complete\s+saga|"
+        r"alternative\s+edition(?:\s+redux)?|redux|fanedit|fan\s*edit|special\s+edition|"
+        r"director'?s?\s*cut|theatrical\s*cut|"
         r"extended\s*cut|extended|final\s*cut|workprint|unrated|uncut|tv\s*cut|"
         r"us\s*cut|eu\s*cut|uk\s*cut|restored|remastered|colorized|"
         r"part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+|1080p|720p"
@@ -196,12 +287,15 @@ def tmdb_enrich_author_movie(title, year=0, author_name="", filmography_credits=
     best_details = None
 
     for candidate in (results or [])[:4]:
+        cand_id = int(candidate.get("id") or 0)
+        if is_mismatched_modern_dune(cand_id, cleaned_input, author_name):
+            continue
         rel_date = candidate.get("release_date") or ""
         cand_year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
         if year > 0 and cand_year > 0 and abs(cand_year - year) > 2:
             continue
 
-        details = get_tmdb_movie_details(candidate["id"])
+        details = get_tmdb_movie_details(cand_id)
         if not details:
             continue
 
@@ -439,6 +533,7 @@ def search_archive_for_author_movie(author_name, tmdb_det, year, main_archive_id
 def run_authors_sync():
     print(f"=== [AUTORI] Rangiranje i duboka sinkronizacija {len(AUTHORS)} kolekcija autora ===", flush=True)
     existing_archive_ids, seen_tmdb_movies, _, all_rows = fetch_existing_catalog_state("movie")
+    tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_rows)
     author_promoted_rows = [r for r in all_rows if r.get("is_valid", True) and ",tmdb-" in (r.get("archive_id") or "")]
     catalog_by_tmdb = {
         int(r["tmdb_id"]): r
@@ -455,16 +550,26 @@ def run_authors_sync():
     for rank_idx, prof in enumerate(profiles, start=1):
         print(f"    {rank_idx:2d}. {prof['name']} (indeks: {prof['fame_score']:.0f})", flush=True)
 
-    def promote_movie_to_catalog(catalog_arch_id, mid, tmdb_det, final_year, stream_url, file_rt):
-        should_insert = False
-        with state_lock:
-            if mid not in seen_tmdb_movies:
-                seen_tmdb_movies.add(mid)
-                existing_archive_ids.add(catalog_arch_id)
-                should_insert = True
-
-        if not should_insert:
+    def promote_movie_to_catalog(catalog_arch_id, mid, tmdb_det, final_year, stream_url, file_rt, filename=""):
+        mid = int(mid)
+        if is_mismatched_modern_dune(mid, catalog_arch_id, stream_url, filename):
             return False
+
+        cand_tier = estimate_source_quality_tier(catalog_arch_id, stream_url, f"{tmdb_det['hr_title']} {filename}")
+        special_flag = is_special_edition(catalog_arch_id, stream_url, filename)
+
+        with state_lock:
+            if catalog_arch_id in existing_archive_ids:
+                return False
+            if not can_promote_movie_version(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
+                return False
+
+            had_only_vhs = (tmdb_best_tier.get(mid, -1) == 0 and cand_tier > 0)
+            seen_tmdb_movies.add(mid)
+            existing_archive_ids.add(catalog_arch_id)
+            tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
+            if cand_tier > tmdb_best_tier.get(mid, -1):
+                tmdb_best_tier[mid] = cand_tier
 
         genres = determine_primary_genres(
             tmdb_det["genre_ids"],
@@ -473,6 +578,7 @@ def run_authors_sync():
             tmdb_det["hr_title"],
             tmdb_det["overview_hr"]
         )
+        adjusted_pop = tmdb_det["popularity"] * 100.0 + (final_year * 2) + (400.0 if cand_tier == 2 else 0.0)
         cat_row = {
             "archive_id": catalog_arch_id,
             "tmdb_id": mid,
@@ -481,7 +587,7 @@ def run_authors_sync():
             "genres": genres,
             "release_year": final_year,
             "rating": round(tmdb_det["vote_average"], 1),
-            "popularity_score": tmdb_det["popularity"] * 100.0 + (final_year * 2),
+            "popularity_score": adjusted_pop,
             "description_hr": tmdb_det["overview_hr"],
             "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}",
             "backdrop_url": f"{TMDB_IMG_BACKDROP}{tmdb_det['backdrop_path']}" if tmdb_det["backdrop_path"] else "",
@@ -492,6 +598,10 @@ def run_authors_sync():
             "archive_runtime": file_rt
         }
         supabase_upsert("catalog_items", [cat_row], "archive_id")
+
+        if had_only_vhs:
+            retire_vhs_rows_for_tmdb(mid, catalog_arch_id, final_year, all_rows, tmdb_version_counts)
+
         with state_lock:
             promoted_counter[0] += 1
         return True
@@ -606,7 +716,9 @@ def run_authors_sync():
                     and verify_stream_url_playable(item["stream_url"])
                 ):
                     valid_catalog_arch_ids.add(catalog_arch_id)
-                    if promote_movie_to_catalog(catalog_arch_id, mid, tmdb_det, final_year, item["stream_url"], file_rt):
+                    if promote_movie_to_catalog(
+                        catalog_arch_id, mid, tmdb_det, final_year, item["stream_url"], file_rt, item["filename"]
+                    ):
                         promoted_for_author += 1
 
         # Korak B1: Ručno odobrena specijalna izdanja za autora (npr. sve 3 verzije Dine za Davida Lyncha)
@@ -717,7 +829,9 @@ def run_authors_sync():
                     "description_hr": tmdb_det["overview_hr"]
                 }
                 extra_found_count += 1
-                if promote_movie_to_catalog(ext_ident, mid, tmdb_det, final_year, ext_file["stream_url"], ext_file["duration_mins"]):
+                if promote_movie_to_catalog(
+                    ext_ident, mid, tmdb_det, final_year, ext_file["stream_url"], ext_file["duration_mins"], ext_file["filename"]
+                ):
                     promoted_for_author += 1
 
         for old_row in author_promoted_rows:
