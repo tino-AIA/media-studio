@@ -84,8 +84,15 @@ SPAM_OR_FAKE_KEYWORDS = [
     "promo", "commercial", "bloopers", "deleted scenes", "starting soon", "twitch",
     "live stream", "livestream", "stage play", "theater production", "homelessness",
     "documentary about", "making of", "totally rad show", "half in the bag",
-    "redlettermedia", "nostalgia critic", "cinemasins", "honest trailers", "watchmojo"
+    "redlettermedia", "nostalgia critic", "cinemasins", "honest trailers", "watchmojo",
+    "holiday special", "tv special", "featurette", "rifftrax", "mockbuster"
 ] + HENTAI_AND_ADULT_KEYWORDS + BLOCKED_REGIONAL_AND_ARABIC_KEYWORDS
+
+NON_MOVIE_SUBTITLE_SUFFIX_RE = re.compile(
+    r"(?i)\b(?:holiday\s+special|tv\s+special|special|making\s+of|behind\s+the\s+scenes|"
+    r"documentary|featurette|parody|rifftrax|mockbuster|review|interview|trailer|"
+    r"teaser|deleted\s+scenes|bloopers|fan\s*film|fan\s*edit|recap)\b"
+)
 
 EXPLICIT_DUB_KEYWORDS = [
     "dublado", "dublagem", "doblado", "doblaje", "ozvuchka", "дубляж", "озвучка",
@@ -542,13 +549,20 @@ def normalize_for_exact_title_compare(raw_title):
 
 
 def titles_match_flexibly(arch_norm, norm_candidates):
-    """Dopušta točno poklapanje ili poklapanje kad Archive naslov sadrži podnaslov / ime redatelja."""
+    """Dopušta točno poklapanje ili poklapanje kad Archive naslov sadrži podnaslov / ime redatelja,
+    ali blokira TV/Holiday specijale, dokumentarce o snimanju i parodije kad ih TMDB naslov nema."""
     if not arch_norm or not norm_candidates:
         return False
     if arch_norm in norm_candidates:
         return True
     for cand in norm_candidates:
         if len(cand) >= 4 and (arch_norm.startswith(cand + " ") or arch_norm.endswith(" " + cand)):
+            if arch_norm.startswith(cand + " "):
+                extra_suffix = arch_norm[len(cand):].strip()
+            else:
+                extra_suffix = arch_norm[:-len(cand)].strip()
+            if NON_MOVIE_SUBTITLE_SUFFIX_RE.search(extra_suffix) and not NON_MOVIE_SUBTITLE_SUFFIX_RE.search(cand):
+                continue
             return True
     return False
 
@@ -744,15 +758,17 @@ def get_tmdb_movie_details(tmdb_id):
     en_data = None
     orig_title = str(data.get("original_title") or data.get("title") or "").strip()
     hr_title = str(data.get("title") or orig_title).strip()
+    en_title = orig_title
 
     if NON_LATIN_TITLE_RE.search(hr_title):
         en_data = safe_get(f"{TMDB_BASE}/movie/{tmdb_id}", {"api_key": TMDB_API_KEY, "language": "en-US"})
-        en_title = str((en_data or {}).get("title") or "").strip()
-        if en_title and not NON_LATIN_TITLE_RE.search(en_title):
-            translated_title = translate_to_croatian(en_title)
-            hr_title = translated_title if (translated_title and not NON_LATIN_TITLE_RE.search(translated_title)) else en_title
+        fetched_en_title = str((en_data or {}).get("title") or "").strip()
+        if fetched_en_title and not NON_LATIN_TITLE_RE.search(fetched_en_title):
+            en_title = fetched_en_title
+            translated_title = translate_to_croatian(fetched_en_title)
+            hr_title = translated_title if (translated_title and not NON_LATIN_TITLE_RE.search(translated_title)) else fetched_en_title
             if NON_LATIN_TITLE_RE.search(orig_title):
-                orig_title = en_title
+                orig_title = fetched_en_title
         else:
             translated_orig = translate_to_croatian(hr_title)
             if translated_orig and not NON_LATIN_TITLE_RE.search(translated_orig):
@@ -783,6 +799,7 @@ def get_tmdb_movie_details(tmdb_id):
         "release_date": str(data.get("release_date") or ""),
         "orig_title": orig_title,
         "hr_title": hr_title,
+        "en_title": en_title,
         "original_language": str(data.get("original_language") or ""),
         "overview_hr": overview,
         "poster_path": data.get("poster_path") or "",
@@ -888,8 +905,9 @@ def validate_movie_match(
     if is_foreign_dub_without_english(archive_md, identifier, chosen_filename, orig_lang):
         return False, "foreign_dub_without_english"
 
-    title_and_id_meta = f"{ident_lower} {raw_arch_title.lower()}"
-    if any(kw in title_and_id_meta for kw in SPAM_OR_FAKE_KEYWORDS):
+    is_doc = 99 in (tmdb_details.get("genre_ids") or []) if tmdb_details else False
+    title_and_id_meta = f"{ident_lower} {raw_arch_title.lower()} {chosen_filename.lower()}"
+    if not is_doc and any(kw in title_and_id_meta for kw in SPAM_OR_FAKE_KEYWORDS):
         return False, "spam_or_non_movie_keyword"
 
     tmdb_runtime = tmdb_details["runtime"] if tmdb_details else 0
