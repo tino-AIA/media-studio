@@ -149,7 +149,8 @@ fun PlayerScreen(
     var activeStreamUrl by remember { mutableStateOf("") }
     var streamAttemptToken by remember { mutableIntStateOf(0) }
     var triedAlternativeUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var triedMp4Fallback by remember { mutableStateOf(false) }
+    var fallbackAttemptsUsed by remember { mutableIntStateOf(0) }
+    var exhaustedAllFallbacks by remember { mutableStateOf(false) }
     var midStreamRetryCount by remember { mutableIntStateOf(0) }
     var playbackErrorMessage by remember { mutableStateOf("") }
 
@@ -235,13 +236,13 @@ fun PlayerScreen(
     }
 
     fun switchToFallbackStream(reasonLabel: String) {
-        if (triedMp4Fallback) {
+        if (exhaustedAllFallbacks || fallbackAttemptsUsed >= 4) {
             isBuffering = false
             playbackErrorMessage = "Video zapis nije javno dostupan na Archive.org-u ili format nije podržan."
             return
         }
         val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
-        triedMp4Fallback = true
+        fallbackAttemptsUsed++
         isBuffering = true
         playbackErrorMessage = ""
         coroutineScope.launch {
@@ -267,9 +268,9 @@ fun PlayerScreen(
 
             val candidate = pool.firstOrNull { opt ->
                 !urlsMatchArchiveFile(opt.url, activeStreamUrl) && opt.url !in triedAlternativeUrls
-            }?.url ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
+            }?.url ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle, triedAlternativeUrls + activeStreamUrl)
 
-            if (!candidate.isNullOrBlank() && !urlsMatchArchiveFile(candidate, activeStreamUrl)) {
+            if (!candidate.isNullOrBlank() && !urlsMatchArchiveFile(candidate, activeStreamUrl) && candidate !in triedAlternativeUrls) {
                 val chosenOpt = pool.find { urlsMatchArchiveFile(it.url, candidate) }
                 triedAlternativeUrls = triedAlternativeUrls + activeStreamUrl + candidate
                 activeStreamUrl = candidate
@@ -286,6 +287,7 @@ fun PlayerScreen(
                 quickHudMessage = "⚡ $reasonLabel — prebačeno na alternativni izvor"
                 quickHudTick++
             } else {
+                exhaustedAllFallbacks = true
                 isBuffering = false
                 playbackErrorMessage = "Video zapis nije javno dostupan na Archive.org-u ili format nije podržan."
             }
@@ -295,7 +297,7 @@ fun PlayerScreen(
     LaunchedEffect(activeStreamUrl, streamAttemptToken) {
         if (activeStreamUrl.isBlank()) return@LaunchedEffect
         delay(8_000L)
-        if (duration <= 0L && exoPlayer.playWhenReady && !triedMp4Fallback) {
+        if (duration <= 0L && exoPlayer.playWhenReady && !exhaustedAllFallbacks) {
             switchToFallbackStream("Spor učitavanje")
         }
     }
@@ -357,7 +359,8 @@ fun PlayerScreen(
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedAlternativeUrls = emptySet()
-        triedMp4Fallback = false
+        fallbackAttemptsUsed = 0
+        exhaustedAllFallbacks = false
         midStreamRetryCount = 0
         playbackErrorMessage = ""
         isBuffering = true
@@ -1296,6 +1299,8 @@ fun PlayerScreen(
                                     detectedWidth = version.width
                                     detectedVideoFps = 0f
                                     midStreamRetryCount = 0
+                                    exhaustedAllFallbacks = false
+                                    fallbackAttemptsUsed = 0
                                     streamAttemptToken++
                                     exoPlayer.setMediaItem(MediaItem.fromUri(version.url), savedPos)
                                     exoPlayer.prepare()
@@ -2342,7 +2347,11 @@ private fun requestGoogleTranslateBatch(text: String): String {
     }
 }
 
-private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: String): String? = withContext(Dispatchers.IO) {
+private suspend fun findCompatibleMp4Fallback(
+    failedUrl: String,
+    titleHint: String,
+    excludedUrls: Set<String> = emptySet()
+): String? = withContext(Dispatchers.IO) {
     try {
         val afterDownload = failedUrl.substringAfter("archive.org/download/", "")
         val itemId = afterDownload.substringBefore("/")
@@ -2376,12 +2385,15 @@ private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: Stri
             if (failedStem.isNotBlank() && lower.contains(failedStem.take(18))) score += 200L
             if (cleanHint.length >= 4 && lower.contains(cleanHint)) score += 100L
 
+            val encoded = name.split("/").joinToString("/") { part ->
+                URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+            }
+            val candidateUrl = "https://archive.org/download/$itemId/$encoded"
+            if (excludedUrls.any { urlsMatchArchiveFile(it, candidateUrl) }) continue
+
             if (score > bestScore) {
                 bestScore = score
-                val encoded = name.split("/").joinToString("/") { part ->
-                    URLEncoder.encode(part, "UTF-8").replace("+", "%20")
-                }
-                bestMp4Url = "https://archive.org/download/$itemId/$encoded"
+                bestMp4Url = candidateUrl
             }
         }
         bestMp4Url
