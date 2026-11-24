@@ -3,6 +3,9 @@ name: Build Android APK
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - '.github/last_sync.txt'
+      - 'scripts/**'
   workflow_dispatch:
 
 jobs:
