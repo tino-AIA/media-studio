@@ -79,7 +79,8 @@ fun HomeScreen(
     onMovieClick: (ArchiveMovie) -> Unit,
     onSeriesClick: (ArchiveMovie) -> Unit,
     onGenreSelect: (GenreOption) -> Unit,
-    onOpenSearch: () -> Unit
+    onOpenSearch: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val selectedTab by viewModel.selectedTab.collectAsState()
@@ -245,18 +246,35 @@ fun HomeScreen(
                             modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
                         )
 
-                        activeDrawerList.forEach { genre ->
-                            DrawerFocusableItem(
-                                title = genre.title,
-                                isAdult = genre.title.startsWith("18+"),
-                                onClick = {
-                                    scope.launch {
-                                        drawerState.close()
-                                        onGenreSelect(genre)
+                        activeDrawerList
+                            .filterNot { it.title.startsWith("18+") }
+                            .forEach { genre ->
+                                DrawerFocusableItem(
+                                    title = genre.title,
+                                    isAdult = false,
+                                    onClick = {
+                                        scope.launch {
+                                            drawerState.close()
+                                            onGenreSelect(genre)
+                                        }
                                     }
+                                )
+                            }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider(color = Color.DarkGray)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        DrawerFocusableItem(
+                            title = "⚙ Postavke",
+                            isAdult = false,
+                            onClick = {
+                                scope.launch {
+                                    drawerState.close()
+                                    onOpenSettings()
                                 }
-                            )
-                        }
+                            }
+                        )
                         Spacer(modifier = Modifier.height(32.dp))
                     }
                 }
