@@ -111,6 +111,7 @@ fun HomeScreen(
     val concertsTabFR = remember { FocusRequester() }
     val favoritesTabFR = remember { FocusRequester() }
     val heroPlayFocusRequester = remember { FocusRequester() }
+    val firstRowFocusRequester = remember { FocusRequester() }
 
     val activeTabFR = when (selectedTab) {
         ContentTab.MOVIES -> moviesTabFR
@@ -178,6 +179,13 @@ fun HomeScreen(
         ContentTab.SERIES -> viewModel.seriesGenreDefinitions
         ContentTab.CONCERTS -> viewModel.concertGenreDefinitions
         else -> emptyList()
+    }
+
+    val tabDownTargetFR = when {
+        selectedTab == ContentTab.FAVORITES -> FocusRequester.Default
+        heroMovies.isNotEmpty() -> heroPlayFocusRequester
+        activeCategories.isNotEmpty() -> firstRowFocusRequester
+        else -> FocusRequester.Default
     }
 
     ModalNavigationDrawer(
@@ -398,6 +406,7 @@ fun HomeScreen(
                                         left = FocusRequester.Cancel
                                         right = animTabFR
                                         up = menuFocusRequester
+                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -411,6 +420,7 @@ fun HomeScreen(
                                         left = moviesTabFR
                                         right = seriesTabFR
                                         up = menuFocusRequester
+                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -424,6 +434,7 @@ fun HomeScreen(
                                         left = animTabFR
                                         right = concertsTabFR
                                         up = searchFocusRequester
+                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -437,6 +448,7 @@ fun HomeScreen(
                                         left = seriesTabFR
                                         right = favoritesTabFR
                                         up = searchFocusRequester
+                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -450,6 +462,7 @@ fun HomeScreen(
                                         left = concertsTabFR
                                         right = FocusRequester.Cancel
                                         up = searchFocusRequester
+                                        down = tabDownTargetFR
                                     }
                             )
                         }
@@ -568,21 +581,21 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(350.dp)
-                                    .padding(start = 24.dp, bottom = 20.dp, end = 24.dp)
+                                    .height(295.dp)
+                                    .padding(start = 24.dp, bottom = 14.dp, end = 24.dp)
                             ) {
                                 currentHeroMovie?.let { (movie, isSeries) ->
                                     Column(
                                         modifier = Modifier.align(Alignment.BottomStart),
-                                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 36.sp,
+                                            fontSize = 34.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             maxLines = 2,
-                                            lineHeight = 40.sp,
+                                            lineHeight = 38.sp,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.width(650.dp)
                                         )
@@ -613,7 +626,13 @@ fun HomeScreen(
                                                 isPrimary = true,
                                                 modifier = Modifier
                                                     .focusRequester(heroPlayFocusRequester)
-                                                    .focusProperties { left = FocusRequester.Cancel }
+                                                    .focusProperties {
+                                                        left = FocusRequester.Cancel
+                                                        up = activeTabFR
+                                                        if (activeCategories.isNotEmpty()) {
+                                                            down = firstRowFocusRequester
+                                                        }
+                                                    }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
                                                             (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
@@ -630,13 +649,20 @@ fun HomeScreen(
                                                 text = "Detalji",
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
-                                                modifier = Modifier.onFocusChanged { state ->
-                                                    if (state.isFocused &&
-                                                        (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
-                                                    ) {
-                                                        scope.launch { homeListState.scrollToItem(0) }
+                                                modifier = Modifier
+                                                    .focusProperties {
+                                                        up = activeTabFR
+                                                        if (activeCategories.isNotEmpty()) {
+                                                            down = firstRowFocusRequester
+                                                        }
                                                     }
-                                                },
+                                                    .onFocusChanged { state ->
+                                                        if (state.isFocused &&
+                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                        ) {
+                                                            scope.launch { homeListState.scrollToItem(0) }
+                                                        }
+                                                    },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
@@ -648,7 +674,7 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
-                                            .offset(y = 14.dp),
+                                            .offset(y = 10.dp),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         heroMovies.forEachIndexed { index, _ ->
@@ -705,6 +731,7 @@ fun HomeScreen(
                                 viewModel = viewModel,
                                 authorImages = authorImages,
                                 modifier = firstRowUpModifier,
+                                firstItemFocusRequester = if (index == 0) firstRowFocusRequester else null,
                                 lastFocusedMovieId = lastFocusedMovieId,
                                 lastFocusedRowTitle = lastFocusedRowTitle,
                                 onMovieClick = { item ->
@@ -987,6 +1014,7 @@ fun MovieCategoryRow(
     viewModel: HomeViewModel,
     authorImages: Map<String, String>,
     modifier: Modifier = Modifier,
+    firstItemFocusRequester: FocusRequester? = null,
     lastFocusedMovieId: String? = null,
     lastFocusedRowTitle: String? = null,
     onMovieClick: (ArchiveMovie) -> Unit,
@@ -1065,7 +1093,12 @@ fun MovieCategoryRow(
             ) { index, movie ->
                 val shouldRestore = isTargetRow && movie.identifier == lastFocusedMovieId
                 val edgeModifier = if (index == 0) {
-                    Modifier.focusProperties { left = FocusRequester.Cancel }
+                    val base = Modifier.focusProperties { left = FocusRequester.Cancel }
+                    if (firstItemFocusRequester != null) {
+                        base.focusRequester(firstItemFocusRequester)
+                    } else {
+                        base
+                    }
                 } else {
                     Modifier
                 }
