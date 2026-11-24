@@ -2,7 +2,6 @@ package com.example.mediastudio.ui.screens
 
 import android.app.Activity
 import android.graphics.Bitmap
-import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -35,7 +34,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
@@ -73,25 +71,6 @@ import com.example.mediastudio.ui.viewmodel.GenreOption
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private fun Modifier.throttleVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
-    var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
-    this.onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown &&
-            (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
-        ) {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastVerticalStepTime < minIntervalMs) {
-                true
-            } else {
-                lastVerticalStepTime = now
-                false
-            }
-        } else {
-            false
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -214,22 +193,16 @@ fun HomeScreen(
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 8.dp)
                             .onPreviewKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown) {
-                                    when (event.key) {
-                                        Key.DirectionRight -> {
-                                            scope.launch {
-                                                drawerState.close()
-                                                delay(50L)
-                                                try {
-                                                    menuFocusRequester.requestFocus()
-                                                } catch (_: Exception) {
-                                                }
-                                            }
-                                            true
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
+                                    scope.launch {
+                                        drawerState.close()
+                                        delay(50L)
+                                        try {
+                                            menuFocusRequester.requestFocus()
+                                        } catch (_: Exception) {
                                         }
-                                        Key.DirectionLeft -> true
-                                        else -> false
                                     }
+                                    true
                                 } else {
                                     false
                                 }
@@ -249,11 +222,7 @@ fun HomeScreen(
                         DrawerFocusableItem(
                             title = "⭐ Moji Favoriti",
                             isAdult = false,
-                            modifier = Modifier
-                                .focusRequester(drawerFirstItemFocusRequester)
-                                .onPreviewKeyEvent { event ->
-                                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
-                                },
+                            modifier = Modifier.focusRequester(drawerFirstItemFocusRequester),
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
@@ -515,7 +484,6 @@ fun HomeScreen(
                                 .fillMaxSize()
                                 .padding(paddingValues)
                                 .clipToBounds()
-                                .throttleVerticalDpad()
                         ) {
                             items(
                                 items = favoriteMovies,
@@ -577,7 +545,6 @@ fun HomeScreen(
                             .fillMaxSize()
                             .padding(paddingValues)
                             .clipToBounds()
-                            .throttleVerticalDpad()
                     ) {
                         item(key = "hero_banner") {
                             Box(
@@ -628,10 +595,7 @@ fun HomeScreen(
                                                 isPrimary = true,
                                                 modifier = Modifier
                                                     .focusRequester(heroPlayFocusRequester)
-                                                    .focusProperties {
-                                                        left = FocusRequester.Cancel
-                                                        up = activeTabFR
-                                                    }
+                                                    .focusProperties { left = FocusRequester.Cancel }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
                                                             (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
@@ -648,15 +612,13 @@ fun HomeScreen(
                                                 text = "Detalji",
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
-                                                modifier = Modifier
-                                                    .focusProperties { up = activeTabFR }
-                                                    .onFocusChanged { state ->
-                                                        if (state.isFocused &&
-                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
-                                                        ) {
-                                                            scope.launch { homeListState.scrollToItem(0) }
-                                                        }
-                                                    },
+                                                modifier = Modifier.onFocusChanged { state ->
+                                                    if (state.isFocused &&
+                                                        (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                    ) {
+                                                        scope.launch { homeListState.scrollToItem(0) }
+                                                    }
+                                                },
                                                 onClick = {
                                                     viewModel.clearLastFocusedMovie()
                                                     if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
