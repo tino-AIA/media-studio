@@ -61,6 +61,8 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 
+private const val DETAILS_TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8"
+
 private enum class DetailKind {
     MOVIE_OR_FEATURE_ANIM,
     SHORT_CARTOON,
@@ -137,7 +139,7 @@ fun DetailsScreen(
                 isSupabaseAuthorList = true
                 imageUrl = sbAuthor.photoUrl.ifBlank { viewModel.staticAuthorImages[authorName] ?: "" }
                 val rawBio = sbAuthor.bioHr.ifBlank { fetchWikiTextHr(authorName) }
-                val hrBio = ensureHrText(rawBio)
+                val hrBio = cleanWikiMarkupHr(ensureHrText(rawBio))
                 val options = sbMovies.map { m ->
                     val label = if (m.releaseYear > 0) "${m.title} (${m.releaseYear})" else m.title
                     VideoQualityOption(
@@ -161,7 +163,7 @@ fun DetailsScreen(
             } else {
                 val archiveId = viewModel.getAuthorArchiveId(authorName)
                 imageUrl = viewModel.staticAuthorImages[authorName] ?: ""
-                val hrBio = ensureHrText(fetchWikiTextHr(authorName))
+                val hrBio = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(authorName)))
                 val info = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
                 movieInfo = info
                 detailSheet = StructuredDetailSheet(
@@ -174,6 +176,9 @@ fun DetailsScreen(
             resolvedStreamUrl = movie.identifier
             val sbMatch = SupabaseRepository.findByStreamUrl(movie.identifier)
             val sbCatalogMatch = SupabaseRepository.getCatalogItems().find { it.streamUrl == movie.identifier }
+            val displayTitle = sbCatalogMatch?.title?.ifBlank { movie.title } ?: movie.title
+            val yearHint = sbCatalogMatch?.releaseYear?.takeIf { it > 0 }?.toString() ?: (movie.year ?: "")
+
             if (sbMatch != null) {
                 imageUrl = sbMatch.first
                 val dbDesc = sbMatch.second.ifBlank {
@@ -181,12 +186,14 @@ fun DetailsScreen(
                         it.descriptionHr.ifBlank { SupabaseRepository.loadItemDescription(it.archiveId) }
                     }.orEmpty()
                 }
-                val hrDesc = ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(movie.title, sbCatalogMatch?.releaseYear ?: 0) })
+                val hrDesc = cleanWikiMarkupHr(
+                    ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(displayTitle, yearHint.toIntOrNull() ?: 0) })
+                )
                 detailSheet = buildStructuredSheet(
-                    title = movie.title,
+                    title = displayTitle,
                     identifier = sbCatalogMatch?.archiveId ?: movie.identifier,
                     sbItem = sbCatalogMatch,
-                    yearHint = sbCatalogMatch?.releaseYear?.takeIf { it > 0 }?.toString() ?: "",
+                    yearHint = yearHint,
                     directorHint = "",
                     rawDesc = hrDesc
                 )
@@ -195,23 +202,27 @@ fun DetailsScreen(
                 val dbDesc = sbCatalogMatch.descriptionHr.ifBlank {
                     SupabaseRepository.loadItemDescription(sbCatalogMatch.archiveId)
                 }
-                val hrDesc = ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(sbCatalogMatch.title, sbCatalogMatch.releaseYear) })
+                val hrDesc = cleanWikiMarkupHr(
+                    ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(displayTitle, sbCatalogMatch.releaseYear) })
+                )
                 detailSheet = buildStructuredSheet(
-                    title = sbCatalogMatch.title,
+                    title = displayTitle,
                     identifier = sbCatalogMatch.archiveId,
                     sbItem = sbCatalogMatch,
-                    yearHint = sbCatalogMatch.releaseYear.takeIf { it > 0 }?.toString() ?: "",
+                    yearHint = yearHint,
                     directorHint = "",
                     rawDesc = hrDesc
                 )
             } else {
-                imageUrl = PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
-                val hrDesc = ensureHrText(fetchMoviePlotHr(movie.title, 0))
+                imageUrl = PosterFetcher.fetchPoster(displayTitle, isSeries = false, movie.identifier)
+                val hrDesc = cleanWikiMarkupHr(
+                    ensureHrText(fetchMoviePlotHr(displayTitle, yearHint.toIntOrNull() ?: 0))
+                )
                 detailSheet = buildStructuredSheet(
-                    title = movie.title,
+                    title = displayTitle,
                     identifier = movie.identifier,
                     sbItem = null,
-                    yearHint = "",
+                    yearHint = yearHint,
                     directorHint = "",
                     rawDesc = hrDesc
                 )
@@ -233,7 +244,9 @@ fun DetailsScreen(
                     val authorSlug = movie.identifier.substringBefore(",tmdb-")
                     val matchedAuthor = SupabaseRepository.getAuthors()
                         .find { it.archiveId.equals(authorSlug, ignoreCase = true) }?.name ?: ""
-                    val hrDesc = ensureHrText(dbDescription.ifBlank { fetchMoviePlotHr(sbItem.title, sbItem.releaseYear) })
+                    val hrDesc = cleanWikiMarkupHr(
+                        ensureHrText(dbDescription.ifBlank { fetchMoviePlotHr(sbItem.title, sbItem.releaseYear) })
+                    )
                     movieInfo = MovieFullInfo(
                         qualities = emptyList(),
                         description = hrDesc,
@@ -254,10 +267,12 @@ fun DetailsScreen(
                     val mergedDirector = info.director
                     movieInfo = info.copy(year = mergedYear)
                     val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else info.description
-                    val hrDesc = ensureHrText(
-                        dbDescription
-                            .ifBlank { cleanArchiveDesc }
-                            .ifBlank { fetchMoviePlotHr(sbItem.title.ifBlank { movie.title }, sbItem.releaseYear) }
+                    val hrDesc = cleanWikiMarkupHr(
+                        ensureHrText(
+                            dbDescription
+                                .ifBlank { cleanArchiveDesc }
+                                .ifBlank { fetchMoviePlotHr(sbItem.title.ifBlank { movie.title }, sbItem.releaseYear) }
+                        )
                     )
                     detailSheet = buildStructuredSheet(
                         title = sbItem.title.ifBlank { movie.title },
@@ -273,8 +288,10 @@ fun DetailsScreen(
                 val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
                 movieInfo = info
                 val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else info.description
-                val hrDesc = ensureHrText(
-                    cleanArchiveDesc.ifBlank { fetchMoviePlotHr(movie.title, info.year.toIntOrNull() ?: 0) }
+                val hrDesc = cleanWikiMarkupHr(
+                    ensureHrText(
+                        cleanArchiveDesc.ifBlank { fetchMoviePlotHr(movie.title, info.year.toIntOrNull() ?: 0) }
+                    )
                 )
                 detailSheet = buildStructuredSheet(
                     title = movie.title,
@@ -788,19 +805,36 @@ private fun extractYearHr(yearHint: String, title: String, identifier: String): 
     return Regex("\\b(19\\d{2}|20\\d{2})\\b").find(identifier)?.groupValues?.get(1).orEmpty()
 }
 
+private fun cleanWikiMarkupHr(text: String): String {
+    if (text.isBlank()) return ""
+    return text
+        .replace(Regex("={2,}\\s*[^=]+\\s*={2,}"), " ")
+        .replace(Regex("https?://\\S+"), "")
+        .replace(Regex("(?i)\\b(?:follow|twitter\\.com|facebook\\.com|instagram\\.com|vimeo\\.com|uploader|upload date)\\b[^\\n]*"), " ")
+        .replace(Regex("\\s{2,}"), " ")
+        .trim()
+}
+
 private fun extractAwardsFromTextHr(text: String): String {
     if (text.isBlank()) return ""
+    val cleaned = cleanWikiMarkupHr(text)
     val awardKeywords = listOf(
         "oscar", "academy award", "zlatna palma", "palme d'or", "zlatni lav", "golden lion",
         "zlatni medvjed", "golden bear", "zlatna arena", "vladimir nazor", "emmy",
-        "bafta", "zlatni globus", "golden globe", "nagrada", "nagradu", "nagrađen", "nagrađena", "award"
+        "bafta", "zlatni globus", "golden globe", "saturn", "nagrada", "nagradu",
+        "nagrađen", "nagrađena", "nominiran", "nominirana", "award"
     )
-    val sentences = text.split(Regex("(?<=[.!?])\\s+"))
-    val hits = sentences.filter { s ->
-        val sl = s.lowercase()
-        awardKeywords.any { kw -> sl.contains(kw) }
-    }.map { it.trim() }.distinct()
-    if (hits.isEmpty()) return ""
+    val roleLikeWords = listOf(" kao ", " glas ", " uloga ", " uloge ", " sinkroniz")
+
+    val hits = cleaned.split(Regex("(?<=[.!?])\\s+"))
+        .map { it.trim() }
+        .filter { s ->
+            val sl = s.lowercase()
+            awardKeywords.any { kw -> sl.contains(kw) } &&
+                !roleLikeWords.any { rw -> sl.contains(rw) }
+        }
+        .distinct()
+
     return hits.take(2).joinToString(" ")
 }
 
@@ -824,7 +858,7 @@ private fun extractStudioFromTextHr(title: String, identifier: String, desc: Str
 
 private fun extractTourFromTextHr(title: String, desc: String): String {
     val patterns = listOf(
-        Regex("(?i)(?:naziv\\s+turneje|turneja|tour)\\s*[:\\-–]?\\s*([A-ZČĆŽŠĐ0-9][^\\n.;]{2,60})")
+        Regex("(?i)(?:naziv\\s+turneje|turneja|svjetska\\s+turneja|tour)\\s*[:\\-–]?\\s*([A-ZČĆŽŠĐ0-9][^\\n.;]{2,60})")
     )
     for (p in patterns) {
         val m = p.find("$title\n$desc")
@@ -839,7 +873,7 @@ private fun extractTourFromTextHr(title: String, desc: String): String {
 }
 
 private fun extractBandActiveFromTextHr(desc: String): String {
-    val m = Regex("(?i)(?:djelovanje|aktivan|aktivni|djeluje|osnovan(?:i|a)?\\s+\\d{4})[^\\n.]{0,45}").find(desc)
+    val m = Regex("(?i)(?:djelovanje|aktivan|aktivni|djeluje|djelovali|osnovan(?:i|a)?\\s+\\d{4})[^\\n.]{0,45}").find(desc)
     return m?.value?.trim().orEmpty()
 }
 
@@ -849,8 +883,78 @@ private fun extractBandMembersFromTextHr(desc: String): String {
 }
 
 private fun extractCastFromTextHr(desc: String): String {
-    val m = Regex("(?i)(?:glavne uloge|uloge|glume|starring|cast)\\s*[:\\-–]?\\s*([^\\n.]{4,160})").find(desc)
-    return m?.groupValues?.get(1)?.trim().orEmpty()
+    val cleaned = cleanWikiMarkupHr(desc)
+    val explicitMatch = Regex("(?i)(?:glavne uloge|glavni glumci|uloge|glume|starring|cast)\\s*[:\\-–]?\\s*([^\\n.]{4,180})").find(cleaned)
+    if (explicitMatch != null) {
+        return explicitMatch.groupValues[1].trim()
+    }
+    val voiceLines = cleaned.split(Regex("[\\n]+"))
+        .map { it.trim() }
+        .filter { line ->
+            val ll = line.lowercase()
+            ll.contains(" kao ") && ll.length in 6..90 && !ll.contains("nagrada") && !ll.contains("oscar")
+        }
+        .take(5)
+    if (voiceLines.isNotEmpty()) {
+        return voiceLines.joinToString(", ")
+    }
+    return ""
+}
+
+private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr: String): Pair<String, String> = withContext(Dispatchers.IO) {
+    try {
+        var resolvedId = tmdbId
+        if (resolvedId <= 0) {
+            val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+            if (cleanTitle.length >= 2) {
+                val encodedQ = URLEncoder.encode(cleanTitle, "UTF-8")
+                val yearParam = yearStr.toIntOrNull()?.takeIf { it > 1880 }?.let { "&year=$it" } ?: ""
+                val searchUrl = "https://api.themoviedb.org/3/search/movie?api_key=$DETAILS_TMDB_API_KEY&query=$encodedQ$yearParam&language=hr-HR"
+                val conn = URL(searchUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val first = obj.optJSONArray("results")?.optJSONObject(0)
+                resolvedId = first?.optInt("id", 0) ?: 0
+            }
+        }
+        if (resolvedId <= 0) return@withContext "" to ""
+
+        val url = "https://api.themoviedb.org/3/movie/$resolvedId/credits?api_key=$DETAILS_TMDB_API_KEY&language=hr-HR"
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+
+        val castArr = obj.optJSONArray("cast")
+        val castNames = mutableListOf<String>()
+        if (castArr != null) {
+            for (i in 0 until minOf(castArr.length(), 6)) {
+                val name = castArr.optJSONObject(i)?.optString("name", "")?.trim().orEmpty()
+                if (name.isNotBlank() && name !in castNames) {
+                    castNames.add(name)
+                }
+            }
+        }
+
+        val crewArr = obj.optJSONArray("crew")
+        val directorNames = mutableListOf<String>()
+        if (crewArr != null) {
+            for (i in 0 until crewArr.length()) {
+                val crewObj = crewArr.optJSONObject(i) ?: continue
+                if (crewObj.optString("job", "") == "Director") {
+                    val dName = crewObj.optString("name", "").trim()
+                    if (dName.isNotBlank() && dName !in directorNames) {
+                        directorNames.add(dName)
+                    }
+                }
+            }
+        }
+
+        castNames.joinToString(", ") to directorNames.joinToString(", ")
+    } catch (_: Exception) {
+        "" to ""
+    }
 }
 
 private suspend fun buildStructuredSheet(
@@ -867,7 +971,8 @@ private suspend fun buildStructuredSheet(
     val lowerBlob = "${title.lowercase()} ${identifier.lowercase()} ${genresList.joinToString(" ").lowercase()}"
 
     val isConcert = sbItem?.mediaType == "concert" ||
-        lowerBlob.contains("concert") || lowerBlob.contains("koncert") || lowerBlob.contains("vhsconcerts")
+        lowerBlob.contains("concert") || lowerBlob.contains("koncert") ||
+        lowerBlob.contains("live aid") || lowerBlob.contains("vhsconcerts")
 
     val isShortCartoon = !isConcert && (
         genresList.any { g ->
@@ -894,10 +999,17 @@ private suspend fun buildStructuredSheet(
     var tourHr = extractTourFromTextHr(title, rawDesc)
     var activeHr = extractBandActiveFromTextHr(rawDesc)
     var membersHr = extractBandMembersFromTextHr(rawDesc)
+    var synopsisHr = rawDesc
+
+    if (kind == DetailKind.MOVIE_OR_FEATURE_ANIM) {
+        val (tmdbCast, tmdbDirector) = fetchTmdbMovieCreditsHr(sbItem?.tmdbId ?: 0, title, yearHr)
+        if (castHr.isBlank() && tmdbCast.isNotBlank()) castHr = tmdbCast
+        if (directorHr.isBlank() && tmdbDirector.isNotBlank()) directorHr = tmdbDirector
+    }
 
     val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
     if (cleanTitle.isNotBlank()) {
-        val wikiText = ensureHrText(fetchWikiTextHr(cleanTitle))
+        val wikiText = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(cleanTitle)))
         if (castHr.isBlank()) castHr = extractCastFromTextHr(wikiText)
         if (awardsHr.isBlank()) awardsHr = extractAwardsFromTextHr(wikiText)
         if (studioHr.isBlank()) studioHr = extractStudioFromTextHr(title, identifier, wikiText, genresList)
@@ -907,6 +1019,17 @@ private suspend fun buildStructuredSheet(
         if (directorHr.isBlank() && kind == DetailKind.MOVIE_OR_FEATURE_ANIM) {
             val dirMatch = Regex("(?i)(?:redatelj|režirao|režirala|director)\\s*[:\\-–]?\\s*([A-ZČĆŽŠĐ][a-zčćžšđ]+(?:\\s+[A-ZČĆŽŠĐ][a-zčćžšđ]+){1,2})").find(wikiText)
             directorHr = dirMatch?.groupValues?.get(1)?.trim().orEmpty()
+        }
+        if (kind == DetailKind.CONCERT) {
+            val artistPart = cleanTitle.substringBefore(" - ").trim()
+            if (artistPart.isNotBlank() && !artistPart.equals(cleanTitle, ignoreCase = true)) {
+                val artistWiki = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(artistPart)))
+                if (activeHr.isBlank()) activeHr = extractBandActiveFromTextHr(artistWiki)
+                if (membersHr.isBlank()) membersHr = extractBandMembersFromTextHr(artistWiki)
+            }
+            if (synopsisHr.isBlank() && wikiText.isNotBlank()) {
+                synopsisHr = wikiText.take(650)
+            }
         }
     }
 
@@ -921,7 +1044,7 @@ private suspend fun buildStructuredSheet(
         tourName = tourHr,
         bandActiveYears = activeHr,
         bandMembers = membersHr,
-        synopsis = rawDesc
+        synopsis = synopsisHr
     )
 }
 
