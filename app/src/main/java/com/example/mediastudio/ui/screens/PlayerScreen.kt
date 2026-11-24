@@ -81,6 +81,10 @@ private const val SUBTITLES_SUPABASE_KEY = "sb_publishable_d8MgyOYxbVSNcU6niaAGA
 private const val STREAM_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+private val UNWANTED_CLIP_REGEX = Regex(
+    "(?i)(trailer|sample|teaser|preview|promo|pencil[\\s._-]*test|shot[\\s._-]*demo|transformation|test[\\s._-]*footage|commentary|subtlet|review)"
+)
+
 data class SrtCue(
     val startMs: Long,
     val endMs: Long,
@@ -101,7 +105,8 @@ data class PlayerVersionOption(
     val url: String,
     val languageRank: Int = 1,
     val sizeBytes: Long = 0L,
-    val height: Int = 0
+    val height: Int = 0,
+    val smoothnessScore: Long = 0L
 )
 
 private data class ParsedEpisodeContext(
@@ -174,22 +179,22 @@ fun PlayerScreen(
 
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
-            .setAllocator(DefaultAllocator(true, 32 * 1024))
+            .setAllocator(DefaultAllocator(true, 16 * 1024))
             .setBufferDurationsMs(
-                15_000,
-                45_000,
-                2_000,
-                4_000
+                10_000,
+                25_000,
+                1_500,
+                3_000
             )
-            .setBackBuffer(8_000, true)
+            .setBackBuffer(6_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(STREAM_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(30_000)
+            .setConnectTimeoutMs(12_000)
+            .setReadTimeoutMs(25_000)
             .setDefaultRequestProperties(
                 mapOf(
                     "Accept-Encoding" to "identity",
@@ -209,7 +214,7 @@ fun PlayerScreen(
             .setLoadControl(loadControl)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(httpDataSourceFactory)
-                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(6))
+                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(4))
             )
             .build()
 
@@ -311,7 +316,6 @@ fun PlayerScreen(
         }
         resolvedMovieYear = effectiveYear
 
-        // 1. Pokreni video stream odmah (100% mrežnog kapaciteta za početni buffer u RAM-u)
         val initialUrl = if (directVideoUrl.isNotEmpty()) {
             directVideoUrl
         } else {
@@ -320,33 +324,27 @@ fun PlayerScreen(
                 PlayerVersionOption(
                     label = it.label,
                     url = it.url,
-                    languageRank = classifyVersionLanguageRank("${it.label} ${it.url}")
+                    languageRank = classifyVersionLanguageRank("${it.label} ${it.url}"),
+                    sizeBytes = it.sizeBytes,
+                    height = it.height,
+                    smoothnessScore = scoreVersionSmoothness(it.label, it.height, it.sizeBytes, it.url.contains(".ia.mp4", true))
                 )
-            }.sortedBy { it.languageRank }
+            }.sortedWith(
+                compareBy<PlayerVersionOption> { it.languageRank }
+                    .thenByDescending { it.smoothnessScore }
+            )
             availableVersions = mapped
             val bestQuality = mapped.firstOrNull()
             selectedVersion = bestQuality
             bestQuality?.url ?: fallbackVideoUrl
         }
 
-        val upgradedOriginalUrl = if (initialUrl.lowercase().contains(".ia.mp4")) {
-            findOriginalMultiAudioUrl(initialUrl)
-        } else {
-            null
-        }
-
-        val streamToStart = if (upgradedOriginalUrl != null && upgradedOriginalUrl != initialUrl) {
-            mp4FallbackUrlOverride = initialUrl
-            upgradedOriginalUrl
-        } else {
-            initialUrl
-        }
+        val streamToStart = initialUrl
         activeStreamUrl = streamToStart
         exoPlayer.setMediaItem(MediaItem.fromUri(streamToStart), 0L)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
-        // 2. Daj videu 2.5s prednosti da napuni početni buffer prije ostalih mrežnih upita
         launch {
             delay(2500L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
@@ -388,7 +386,6 @@ fun PlayerScreen(
             }
         }
 
-        // 3. Pretraga i automatski prijevod titlova (nakon 2.5s kako ne bi gušilo početno učitavanje videa)
         launch {
             delay(2500L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
@@ -642,12 +639,12 @@ fun PlayerScreen(
 
             override fun onPlayerError(error: PlaybackException) {
                 val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
-                if (resumePos > 3_000L && midStreamRetryCount < 3 && activeStreamUrl.isNotBlank()) {
+                if (resumePos > 3_000L && midStreamRetryCount < 2 && activeStreamUrl.isNotBlank()) {
                     midStreamRetryCount++
                     isBuffering = true
                     playbackErrorMessage = ""
                     coroutineScope.launch {
-                        delay(1000L * midStreamRetryCount)
+                        delay(800L * midStreamRetryCount)
                         exoPlayer.setMediaItem(MediaItem.fromUri(activeStreamUrl), resumePos)
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = true
@@ -659,11 +656,13 @@ fun PlayerScreen(
                     triedMp4Fallback = true
                     isBuffering = true
                     coroutineScope.launch {
-                        val mp4Alternative = mp4FallbackUrlOverride ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
-                        if (mp4Alternative != null && mp4Alternative != activeStreamUrl) {
-                            activeStreamUrl = mp4Alternative
+                        val nextAlt = availableVersions.firstOrNull { !urlsMatchArchiveFile(it.url, activeStreamUrl) }?.url
+                            ?: mp4FallbackUrlOverride
+                            ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
+                        if (nextAlt != null && nextAlt != activeStreamUrl) {
+                            activeStreamUrl = nextAlt
                             midStreamRetryCount = 0
-                            exoPlayer.setMediaItem(MediaItem.fromUri(mp4Alternative), resumePos)
+                            exoPlayer.setMediaItem(MediaItem.fromUri(nextAlt), resumePos)
                             exoPlayer.prepare()
                             exoPlayer.playWhenReady = true
                         } else {
@@ -1342,6 +1341,40 @@ fun PlayerScreen(
     }
 }
 
+private fun scoreVersionSmoothness(labelOrName: String, height: Int, sizeBytes: Long, isDeriv: Boolean): Long {
+    val sizeMb = sizeBytes / (1024L * 1024L)
+    var score = 0L
+
+    score += when {
+        height in 720..1080 -> 400L
+        height >= 480 -> 260L
+        height > 1080 -> 180L
+        else -> 120L
+    }
+
+    if (sizeMb > 0L) {
+        score += when {
+            sizeMb in 300L..1450L -> 500L
+            sizeMb in 150L..299L -> 250L
+            sizeMb in 1451L..1950L -> 150L
+            sizeMb > 1950L -> -350L
+            else -> 0L
+        }
+    }
+
+    if (isDeriv && sizeMb > 1600L) {
+        score += 200L
+    } else if (!isDeriv && sizeMb > 2200L) {
+        score -= 250L
+    }
+
+    if (Regex("(?i)\\b(vhs|cam|ts|telesync|scr|screener)\\b").containsMatchIn(labelOrName)) {
+        score -= 300L
+    }
+
+    return score
+}
+
 private fun extractArchiveItemId(identifier: String, directVideoUrl: String): String {
     if (identifier.startsWith("http")) {
         return identifier.substringAfter("archive.org/download/", "").substringBefore("/").ifBlank { identifier }
@@ -1623,7 +1656,7 @@ private suspend fun loadAllMovieVersions(
                     val name = f.optString("name")
                     val lower = name.lowercase(Locale.ROOT)
                     if (!lower.endsWith(".mp4") && !lower.endsWith(".mkv") && !lower.endsWith(".avi")) continue
-                    if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(lower)) continue
+                    if (UNWANTED_CLIP_REGEX.containsMatchIn(lower)) continue
 
                     val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
                     if (sizeBytes < 25_000_000L) continue
@@ -1668,7 +1701,8 @@ private suspend fun loadAllMovieVersions(
                             url = streamUrl,
                             languageRank = langRank,
                             sizeBytes = sizeBytes,
-                            height = height
+                            height = height,
+                            smoothnessScore = scoreVersionSmoothness(name, height, sizeBytes, isDeriv)
                         )
                     )
                 }
@@ -1684,7 +1718,10 @@ private suspend fun loadAllMovieVersions(
                     PlayerVersionOption(
                         label = q.label,
                         url = q.url,
-                        languageRank = classifyVersionLanguageRank("${q.label} ${q.url}")
+                        languageRank = classifyVersionLanguageRank("${q.label} ${q.url}"),
+                        sizeBytes = q.sizeBytes,
+                        height = q.height,
+                        smoothnessScore = scoreVersionSmoothness("${q.label} ${q.url}", q.height, q.sizeBytes, q.url.contains(".ia.mp4", true))
                     )
                 )
             }
@@ -1750,9 +1787,9 @@ private suspend fun loadAllMovieVersions(
                                 val rawName = af.optString("name")
                                 val afName = rawName.lowercase(Locale.ROOT)
                                 if (!afName.endsWith(".mp4") && !afName.endsWith(".mkv")) continue
-                                if (Regex("(?i)(trailer|sample|teaser|preview|promo)").containsMatchIn(afName)) continue
+                                if (UNWANTED_CLIP_REGEX.containsMatchIn(afName)) continue
                                 val afSize = af.optString("size").toLongOrNull() ?: 0L
-                                if (afSize < (if (episodeCtx.isSeries) 80_000_000L else 250_000_000L)) continue
+                                if (afSize < (if (episodeCtx.isSeries) 80_000_000L else 200_000_000L)) continue
 
                                 val fileYear = Regex("(19\\d{2}|20\\d{2})").find(rawName)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                                 if (targetYear > 0 && fileYear > 0 && abs(fileYear - targetYear) > 5) {
@@ -1794,7 +1831,8 @@ private suspend fun loadAllMovieVersions(
                                         url = altStreamUrl,
                                         languageRank = langRank,
                                         sizeBytes = afSize,
-                                        height = height
+                                        height = height,
+                                        smoothnessScore = scoreVersionSmoothness(rawName, height, afSize, isDeriv)
                                     )
                                 )
                             }
@@ -1812,15 +1850,15 @@ private suspend fun loadAllMovieVersions(
             PlayerVersionOption(
                 label = buildVersionDisplayLabel(currentUrl, 0, 0, 0L, rank, "Trenutna"),
                 url = currentUrl,
-                languageRank = rank
+                languageRank = rank,
+                smoothnessScore = 100L
             )
         )
     }
 
     collected.sortedWith(
         compareBy<PlayerVersionOption> { it.languageRank }
-            .thenByDescending { it.height }
-            .thenByDescending { it.sizeBytes }
+            .thenByDescending { it.smoothnessScore }
     )
 }
 
@@ -2203,53 +2241,6 @@ private fun requestGoogleTranslateBatch(text: String): String {
     }
 }
 
-private suspend fun findOriginalMultiAudioUrl(iaMp4Url: String): String? = withContext(Dispatchers.IO) {
-    try {
-        val afterDownload = iaMp4Url.substringAfter("archive.org/download/", "")
-        val itemId = afterDownload.substringBefore("/")
-        val encodedFile = afterDownload.substringAfter("/", "")
-        if (itemId.isBlank() || encodedFile.isBlank()) return@withContext null
-
-        val decodedFile = URLDecoder.decode(encodedFile, "UTF-8")
-        val stem = decodedFile.replace(Regex("(?i)\\.ia\\.mp4$"), "")
-        if (stem.isBlank() || stem == decodedFile) return@withContext null
-
-        val metaJson = JSONObject(URL("https://archive.org/metadata/$itemId").readText())
-        if (metaJson.optBoolean("is_dark", false) || metaJson.optBoolean("is_restricted", false)) {
-            return@withContext null
-        }
-        val files = metaJson.optJSONArray("files") ?: return@withContext null
-
-        var bestOriginalUrl: String? = null
-        var bestPriority = Int.MAX_VALUE
-
-        for (i in 0 until files.length()) {
-            val f = files.optJSONObject(i) ?: continue
-            val name = f.optString("name")
-            val lower = name.lowercase()
-            if (lower.endsWith(".ia.mp4") || f.optString("source") == "derivative") continue
-            if (!lower.endsWith(".mkv") && !lower.endsWith(".mp4")) continue
-
-            val nameWithoutExt = name.substringBeforeLast(".")
-            if (nameWithoutExt.equals(stem, ignoreCase = true) ||
-                nameWithoutExt.substringAfterLast("/").equals(stem.substringAfterLast("/"), ignoreCase = true)
-            ) {
-                val priority = if (lower.endsWith(".mp4")) 0 else 1
-                if (priority < bestPriority) {
-                    bestPriority = priority
-                    val encoded = name.split("/").joinToString("/") { part ->
-                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
-                    }
-                    bestOriginalUrl = "https://archive.org/download/$itemId/$encoded"
-                }
-            }
-        }
-        bestOriginalUrl
-    } catch (_: Exception) {
-        null
-    }
-}
-
 private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: String): String? = withContext(Dispatchers.IO) {
     try {
         val afterDownload = failedUrl.substringAfter("archive.org/download/", "")
@@ -2273,6 +2264,7 @@ private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: Stri
             val f = files.optJSONObject(i) ?: continue
             val name = f.optString("name")
             if (!name.endsWith(".mp4", ignoreCase = true)) continue
+            if (UNWANTED_CLIP_REGEX.containsMatchIn(name)) continue
             val size = f.optString("size").toLongOrNull() ?: 0L
             if (size < 20_000_000L) continue
 
@@ -2653,7 +2645,6 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 1. Provjeri lokalne .srt i .vtt titlove na Archive.org i dohvati izvorni engleski naziv zapisa
     if (archiveItemId.isNotBlank() && !archiveItemId.startsWith("http")) {
         try {
             val metaJson = JSONObject(URL("https://archive.org/metadata/$archiveItemId").readText())
@@ -2726,7 +2717,6 @@ private suspend fun searchAllSubtitles(
         return@withContext results.distinctBy { it.downloadUrl }
     }
 
-    // 2. Dohvati izvorni engleski naziv i IMDb ID preko TMDB ID-a (rješava prevedene naslove poput "Združena braća" -> "Band of Brothers")
     val (tmdbNumericId, isSeriesForTmdb) = extractTmdbNumericId(rawIdentifier, episodeCtx.isSeries, tmdbIdHint)
     val (wikidataImdbId, wikidataEnTitle) = resolveImdbAndTitleFromWikidata(tmdbNumericId, isSeriesForTmdb)
 
@@ -2760,7 +2750,6 @@ private suspend fun searchAllSubtitles(
 
     val allowedLangs = setOf("hrv", "srp", "bos", "eng", "hr", "sr", "bs", "en")
 
-    // 3. Stremio OpenSubtitles v3 po IMDb ID-u
     if (imdbId.startsWith("tt")) {
         try {
             val stremEndpoint = if (episodeCtx.isSeries && episodeCtx.season > 0 && episodeCtx.episode > 0) {
@@ -2821,7 +2810,6 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 4. OpenSubtitles REST API po IMDb ID-u
     val numericImdb = imdbId.removePrefix("tt").trimStart('0')
     val langs = listOf("hrv", "srp", "bos", "eng")
     if (numericImdb.isNotBlank() && numericImdb.all { it.isDigit() }) {
@@ -2865,7 +2853,6 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    // 5. Rezervna pretraga po tekstu (s ispravnim %20 kodiranjem razmaka i čišćenjem znakova poput "!")
     if (results.none { it.language in setOf("HRV", "SRP", "BOS", "ENG") } && englishTitleForTextSearch.length >= 2) {
         val strictWords = normalizeTitleWordsForMatch(englishTitleForTextSearch)
         val cleanBaseTitle = englishTitleForTextSearch
