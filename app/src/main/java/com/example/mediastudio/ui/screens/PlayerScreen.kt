@@ -106,6 +106,7 @@ data class PlayerVersionOption(
     val languageRank: Int = 1,
     val sizeBytes: Long = 0L,
     val height: Int = 0,
+    val width: Int = 0,
     val smoothnessScore: Long = 0L
 )
 
@@ -139,6 +140,9 @@ fun PlayerScreen(
 
     var videoResizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var detectedVideoFps by remember { mutableFloatStateOf(0f) }
+    var detectedWidth by remember { mutableIntStateOf(0) }
+    var detectedHeight by remember { mutableIntStateOf(0) }
+    var detectedSizeBytes by remember { mutableLongStateOf(0L) }
     var resolvedMovieYear by remember { mutableStateOf(movieYear) }
     var resolvedMediaType by remember { mutableStateOf<String?>(null) }
 
@@ -241,14 +245,38 @@ fun PlayerScreen(
         isBuffering = true
         playbackErrorMessage = ""
         coroutineScope.launch {
-            val candidate = availableVersions.firstOrNull { opt ->
+            var pool = availableVersions
+            if (pool.size <= 1) {
+                val cleanId = extractArchiveItemId(identifier, activeStreamUrl.ifBlank { directVideoUrl })
+                val sbItem = SupabaseRepository.getCatalogItem(identifier)
+                val epCtx = parseEpisodeContext(identifier, movieTitle, activeStreamUrl.ifBlank { directVideoUrl }, sbItem?.mediaType)
+                val discovered = loadAllMovieVersions(
+                    cleanArchiveId = cleanId,
+                    currentUrl = activeStreamUrl,
+                    movieTitle = movieTitle,
+                    movieYear = resolvedMovieYear,
+                    expectedRuntimeMins = sbItem?.tmdbRuntime ?: 0,
+                    episodeCtx = epCtx,
+                    searchAlternativeItems = !isConcertTitleOrId(identifier, movieTitle)
+                )
+                if (discovered.isNotEmpty()) {
+                    pool = discovered
+                    availableVersions = discovered
+                }
+            }
+
+            val candidate = pool.firstOrNull { opt ->
                 !urlsMatchArchiveFile(opt.url, activeStreamUrl) && opt.url !in triedAlternativeUrls
             }?.url ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
 
             if (!candidate.isNullOrBlank() && !urlsMatchArchiveFile(candidate, activeStreamUrl)) {
+                val chosenOpt = pool.find { urlsMatchArchiveFile(it.url, candidate) }
                 triedAlternativeUrls = triedAlternativeUrls + activeStreamUrl + candidate
                 activeStreamUrl = candidate
-                selectedVersion = availableVersions.find { urlsMatchArchiveFile(it.url, candidate) }
+                selectedVersion = chosenOpt
+                detectedSizeBytes = chosenOpt?.sizeBytes ?: 0L
+                detectedHeight = chosenOpt?.height ?: 0
+                detectedWidth = chosenOpt?.width ?: 0
                 detectedVideoFps = 0f
                 midStreamRetryCount = 0
                 streamAttemptToken++
@@ -266,8 +294,8 @@ fun PlayerScreen(
 
     LaunchedEffect(activeStreamUrl, streamAttemptToken) {
         if (activeStreamUrl.isBlank()) return@LaunchedEffect
-        delay(9_000L)
-        if (duration <= 0L && isBuffering && exoPlayer.playWhenReady && !triedMp4Fallback) {
+        delay(8_000L)
+        if (duration <= 0L && exoPlayer.playWhenReady && !triedMp4Fallback) {
             switchToFallbackStream("Spor učitavanje")
         }
     }
@@ -323,6 +351,9 @@ fun PlayerScreen(
     LaunchedEffect(identifier, directVideoUrl) {
         videoResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         detectedVideoFps = 0f
+        detectedWidth = 0
+        detectedHeight = 0
+        detectedSizeBytes = 0L
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
         triedAlternativeUrls = emptySet()
@@ -379,6 +410,8 @@ fun PlayerScreen(
             availableVersions = mapped
             val bestQuality = mapped.firstOrNull()
             selectedVersion = bestQuality
+            detectedSizeBytes = bestQuality?.sizeBytes ?: 0L
+            detectedHeight = bestQuality?.height ?: 0
             bestQuality?.url ?: fallbackVideoUrl
         }
 
@@ -409,6 +442,11 @@ fun PlayerScreen(
                 val currentMatched = discoveredVersions.find {
                     urlsMatchArchiveFile(it.url, activeStreamUrl)
                 }
+                if (currentMatched != null) {
+                    if (detectedSizeBytes <= 0L && currentMatched.sizeBytes > 0L) detectedSizeBytes = currentMatched.sizeBytes
+                    if (detectedHeight <= 0 && currentMatched.height > 0) detectedHeight = currentMatched.height
+                    if (detectedWidth <= 0 && currentMatched.width > 0) detectedWidth = currentMatched.width
+                }
                 val bestOption = discoveredVersions.first()
                 val currentRank = currentMatched?.languageRank ?: classifyVersionLanguageRank("$cleanArchiveId $activeStreamUrl")
 
@@ -416,6 +454,9 @@ fun PlayerScreen(
                     val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
                     selectedVersion = bestOption
                     activeStreamUrl = bestOption.url
+                    detectedSizeBytes = bestOption.sizeBytes
+                    detectedHeight = bestOption.height
+                    detectedWidth = bestOption.width
                     detectedVideoFps = 0f
                     midStreamRetryCount = 0
                     streamAttemptToken++
@@ -674,9 +715,11 @@ fun PlayerScreen(
                 if (playbackState == Player.STATE_READY) {
                     playbackErrorMessage = ""
                     duration = exoPlayer.duration.coerceAtLeast(0L)
-                    val formatFps = exoPlayer.videoFormat?.frameRate ?: 0f
-                    if (formatFps in 15f..120f) {
-                        detectedVideoFps = formatFps
+                    val vFmt = exoPlayer.videoFormat
+                    if (vFmt != null) {
+                        if (vFmt.frameRate in 15f..120f) detectedVideoFps = vFmt.frameRate
+                        if (vFmt.width > 0) detectedWidth = vFmt.width
+                        if (vFmt.height > 0) detectedHeight = vFmt.height
                     }
                 }
             }
@@ -710,10 +753,10 @@ fun PlayerScreen(
                 for (vg in videoGroups) {
                     for (i in 0 until vg.length) {
                         if (vg.isTrackSelected(i)) {
-                            val fps = vg.getTrackFormat(i).frameRate
-                            if (fps in 15f..120f) {
-                                detectedVideoFps = fps
-                            }
+                            val fmt = vg.getTrackFormat(i)
+                            if (fmt.frameRate in 15f..120f) detectedVideoFps = fmt.frameRate
+                            if (fmt.width > 0) detectedWidth = fmt.width
+                            if (fmt.height > 0) detectedHeight = fmt.height
                         }
                     }
                 }
@@ -1147,14 +1190,37 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val syncText = if (subtitleOffsetMs != 0L) "  |  Titl pomak: ${subtitleOffsetMs / 1000.0}s" else ""
-                        val fpsText = when {
-                            appliedFpsConversionLabel.isNotEmpty() -> "  |  Titl FPS: $appliedFpsConversionLabel"
-                            detectedVideoFps > 0f -> "  |  Video: ${formatFpsShort(detectedVideoFps)} fps"
+                        val activeVer = selectedVersion ?: availableVersions.firstOrNull {
+                            urlsMatchArchiveFile(it.url, activeStreamUrl)
+                        }
+                        val effectiveHeight = detectedHeight.takeIf { it > 0 } ?: (activeVer?.height ?: 0)
+                        val effectiveWidth = detectedWidth.takeIf { it > 0 } ?: (activeVer?.width ?: 0)
+                        val effectiveSize = detectedSizeBytes.takeIf { it > 0L } ?: (activeVer?.sizeBytes ?: 0L)
+
+                        val resLabel = when {
+                            effectiveHeight >= 2000 || effectiveWidth >= 3800 -> "4K"
+                            effectiveHeight >= 1000 || effectiveWidth >= 1900 -> "1080p"
+                            effectiveHeight >= 700 || effectiveWidth >= 1260 -> "720p"
+                            effectiveHeight >= 460 -> "480p"
+                            effectiveHeight > 0 -> "${effectiveHeight}p"
                             else -> ""
                         }
+                        val fpsPart = if (detectedVideoFps > 0f) "${formatFpsShort(detectedVideoFps)} fps" else ""
+                        val sizePart = formatFileSizeHuman(effectiveSize)
+                        val streamMeta = listOf(resLabel, fpsPart, sizePart)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" • ")
+
+                        val syncText = if (subtitleOffsetMs != 0L) "  |  Titl pomak: ${subtitleOffsetMs / 1000.0}s" else ""
+                        val subFpsText = when {
+                            appliedFpsConversionLabel.isNotEmpty() -> "  |  Titl FPS: $appliedFpsConversionLabel"
+                            activeSubtitleFps > 0f -> "  |  Titl FPS: ${formatFpsShort(activeSubtitleFps)}"
+                            else -> ""
+                        }
+                        val mediaInfoText = if (streamMeta.isNotEmpty()) "  |  $streamMeta" else ""
+
                         Text(
-                            text = "${formatTime(currentPosition)} / ${formatTime(duration)}$syncText$fpsText",
+                            text = "${formatTime(currentPosition)} / ${formatTime(duration)}$mediaInfoText$subFpsText$syncText",
                             color = Color.White,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
@@ -1225,6 +1291,9 @@ fun PlayerScreen(
                                     val savedPos = exoPlayer.currentPosition
                                     selectedVersion = version
                                     activeStreamUrl = version.url
+                                    detectedSizeBytes = version.sizeBytes
+                                    detectedHeight = version.height
+                                    detectedWidth = version.width
                                     detectedVideoFps = 0f
                                     midStreamRetryCount = 0
                                     streamAttemptToken++
@@ -1732,6 +1801,7 @@ private suspend fun loadAllMovieVersions(
                             languageRank = langRank,
                             sizeBytes = sizeBytes,
                             height = height,
+                            width = width,
                             smoothnessScore = scoreVersionSmoothness(name, height, sizeBytes, isDeriv)
                         )
                     )
@@ -1862,6 +1932,7 @@ private suspend fun loadAllMovieVersions(
                                         languageRank = langRank,
                                         sizeBytes = afSize,
                                         height = height,
+                                        width = width,
                                         smoothnessScore = scoreVersionSmoothness(rawName, height, afSize, isDeriv)
                                     )
                                 )
