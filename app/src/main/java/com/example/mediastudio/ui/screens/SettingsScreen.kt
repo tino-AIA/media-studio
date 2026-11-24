@@ -14,10 +14,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -29,26 +29,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mediastudio.data.update.AppReleaseInfo
 import com.example.mediastudio.data.update.AppUpdateManager
-import com.example.mediastudio.data.update.UpdateCheckResult
-import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsScreen(
     onBackClick: () -> Unit,
     onUpdateFound: (AppReleaseInfo) -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    val currentVersionName = remember { AppUpdateManager.getCurrentVersionName() }
-    val currentVersionCode = remember { AppUpdateManager.getCurrentVersionCode() }
 
     var show18Plus by remember { mutableStateOf(AppUpdateManager.is18PlusEnabled(context)) }
-    var isCheckingUpdate by remember { mutableStateOf(false) }
-    var statusMessage by remember { mutableStateOf("") }
-
-    val checkButtonFocusRequester = remember { FocusRequester() }
+    val adultFocusRequester = remember { FocusRequester() }
 
     BackHandler {
         onBackClick()
@@ -56,7 +47,7 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         try {
-            checkButtonFocusRequester.requestFocus()
+            adultFocusRequester.requestFocus()
         } catch (_: Exception) {
         }
     }
@@ -113,6 +104,7 @@ fun SettingsScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .focusRequester(adultFocusRequester)
                     .background(
                         color = if (isAdultFocused) Color(0xFF262626) else Color(0xFF161616),
                         shape = RoundedCornerShape(12.dp)
@@ -156,110 +148,6 @@ fun SettingsScreen(
                     tint = if (show18Plus) Color(0xFFFF5252) else Color.LightGray,
                     modifier = Modifier.size(30.dp)
                 )
-            }
-
-            // Verzija i provjera ažuriranja
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF161616), RoundedCornerShape(12.dp))
-                    .border(1.dp, Color(0xFF2D2D2D), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Ažuriranje aplikacije",
-                    color = Color.White,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "Trenutna verzija aplikacije: $currentVersionName (kod $currentVersionCode)",
-                    color = Color.LightGray,
-                    fontSize = 15.sp
-                )
-
-                val checkInteraction = remember { MutableInteractionSource() }
-                val isCheckFocused by checkInteraction.collectIsFocusedAsState()
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .focusRequester(checkButtonFocusRequester)
-                        .background(
-                            color = when {
-                                isCheckFocused -> Color.Red
-                                else -> Color(0xFF990000)
-                            },
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        .border(
-                            width = if (isCheckFocused) 3.dp else 1.dp,
-                            color = if (isCheckFocused) Color.White else Color.Transparent,
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        .clickable(
-                            enabled = !isCheckingUpdate,
-                            interactionSource = checkInteraction,
-                            indication = null
-                        ) {
-                            isCheckingUpdate = true
-                            statusMessage = "Provjeravam dostupnost nove verzije..."
-                            scope.launch {
-                                val res = AppUpdateManager.checkForUpdate()
-                                isCheckingUpdate = false
-                                when (res) {
-                                    is UpdateCheckResult.UpdateAvailable -> {
-                                        statusMessage = "Dostupna je verzija ${res.release.versionName}."
-                                        onUpdateFound(res.release)
-                                    }
-                                    is UpdateCheckResult.UpToDate -> {
-                                        statusMessage = "Imate najnoviju verziju aplikacije ($currentVersionName)."
-                                    }
-                                    is UpdateCheckResult.Error -> {
-                                        statusMessage = res.message
-                                    }
-                                }
-                            }
-                        }
-                        .padding(horizontal = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isCheckingUpdate) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.SystemUpdate,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = if (isCheckingUpdate) "Provjera u tijeku..." else "Provjeri dostupnost ažuriranja",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                    }
-                }
-
-                if (statusMessage.isNotBlank()) {
-                    Text(
-                        text = statusMessage,
-                        color = Color(0xFFDDDDDD),
-                        fontSize = 14.sp
-                    )
-                }
             }
         }
     }
