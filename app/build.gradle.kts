@@ -7,14 +7,15 @@ android {
     namespace = "com.example.mediastudio"
     compileSdk = 34
 
-    val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 2
+    val runNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 260
+    val appVersionCode = (runNumber - 259).coerceAtLeast(1)
 
     defaultConfig {
         applicationId = "com.example.mediastudio"
         minSdk = 24
         targetSdk = 34
-        versionCode = runNumber
-        versionName = "1.$runNumber"
+        versionCode = appVersionCode
+        versionName = "1.$appVersionCode"
 
         vectorDrawables {
             useSupportLibrary = true
