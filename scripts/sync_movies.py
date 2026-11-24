@@ -35,8 +35,8 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Sigurnosni limit od 185 min (3h 05m) kako bi skripta uvijek uredno završila prije GitHub limita
-MAX_MOVIES_SYNC_SECONDS = 185 * 60
+# Sigurnosni limit od 165 min (2h 45m) kako bi skripta uvijek uredno završila prije GitHub limita
+MAX_MOVIES_SYNC_SECONDS = 165 * 60
 
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
 _GENRES_ACCEPTS_ORIG_LANG = "orig_lang" in inspect.signature(determine_primary_genres).parameters
@@ -94,23 +94,23 @@ def resolve_movie_genres(details, final_title, hint_genre=None):
 
 
 ARCHIVE_FEATURE_COLLECTIONS = [
-    ("feature_films", 6),
-    ("opensource_movies", 5),
-    ("SciFi_Films", 5),
-    ("film_noir", 4),
-    ("comedy_films", 4),
-    ("vhsvault", 3),
-    ("laserdiscarchive", 3),
-    ("colorized-and-upscaled-movies", 4),
-    ("popcornmaker", 8),
-    ("westerns", 4),
-    ("war_films", 4),
-    ("horror_films", 4),
-    ("romance_films", 4),
-    ("thriller_films", 4),
-    ("action_adventure_films", 4),
-    ("drama_films", 4),
-    ("mystery_films", 4),
+    ("feature_films", 5),
+    ("opensource_movies", 4),
+    ("SciFi_Films", 4),
+    ("film_noir", 3),
+    ("comedy_films", 3),
+    ("vhsvault", 2),
+    ("laserdiscarchive", 2),
+    ("colorized-and-upscaled-movies", 3),
+    ("popcornmaker", 5),
+    ("westerns", 3),
+    ("war_films", 3),
+    ("horror_films", 3),
+    ("romance_films", 3),
+    ("thriller_films", 3),
+    ("action_adventure_films", 3),
+    ("drama_films", 3),
+    ("mystery_films", 3),
 ]
 
 EX_YU_ARCHIVE_QUERIES = [
@@ -142,18 +142,18 @@ EX_YU_MOVIE_SEEDS = [
 ]
 
 TMDB_DISCOVER_GENRE_SEEDS = [
-    ("37", "Vestern", 20),
-    ("27", "Horor", 30),
-    ("10752", "Ratni", 20),
-    ("878", "Sci-Fi klasici", 30),
-    ("80", "Krimi", 35),
-    ("53", "Triler i misterija", 35),
-    ("9648", "Triler i misterija", 30),
-    ("35", "Komedija", 40),
-    ("10749", "Romantični", 25),
-    ("28", "Akcija i avantura", 35),
-    ("12", "Akcija i avantura", 35),
-    ("18", "Drama", 45),
+    ("37", "Vestern", 25),
+    ("27", "Horor", 35),
+    ("10752", "Ratni", 25),
+    ("878", "Sci-Fi klasici", 35),
+    ("80", "Krimi", 40),
+    ("53", "Triler i misterija", 40),
+    ("9648", "Triler i misterija", 35),
+    ("35", "Komedija", 45),
+    ("10749", "Romantični", 30),
+    ("28", "Akcija i avantura", 40),
+    ("12", "Akcija i avantura", 40),
+    ("18", "Drama", 50),
 ]
 
 CULT_AND_ANIMATION_SEEDS = [
@@ -229,7 +229,6 @@ CURATED_MOVIE_EXCEPTIONS = [
 
 
 def extract_archive_title_candidates(raw_title, ident):
-    """Izvlači čiste varijante naziva filma i stvarnu godinu iz naslova/ID-a s Archive.org-a."""
     raw_str = str(raw_title or "").strip()
     year_in_title = extract_year_from_text(raw_str) or extract_year_from_text(ident)
 
@@ -331,8 +330,11 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
     seen_tmdb_ids.update(curated_tmdb_to_mark)
 
 
-def find_best_archive_movie_match(details, year, exclude_ids):
+def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
     """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u."""
+    if deadline_ts is not None and time.monotonic() > deadline_ts:
+        return None
+
     orig_title = details["orig_title"]
     hr_title = details["hr_title"]
     en_title = details.get("en_title") or orig_title
@@ -354,6 +356,8 @@ def find_best_archive_movie_match(details, year, exclude_ids):
 
     docs_by_id = {}
     for term in search_terms[:2]:
+        if deadline_ts is not None and time.monotonic() > deadline_ts:
+            return None
         query = f'title:"{term}"{year_clause} AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news AND -subject:review'
         data = safe_get(
             "https://archive.org/advancedsearch.php",
@@ -361,7 +365,7 @@ def find_best_archive_movie_match(details, year, exclude_ids):
                 "q": query,
                 "fl[]": ["identifier", "title", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 8,
+                "rows": 6,
                 "output": "json"
             }
         )
@@ -373,6 +377,8 @@ def find_best_archive_movie_match(details, year, exclude_ids):
     valid_candidates = []
     expected_title_list = list({orig_title, hr_title, en_title})
     for ident, doc in docs_by_id.items():
+        if deadline_ts is not None and time.monotonic() > deadline_ts:
+            break
         if not ident or ident in exclude_ids or ident.lower().startswith(("youtube-", "yt-")):
             continue
         videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
@@ -491,7 +497,7 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             final_year = rel_year or extract_year_from_text(details["release_date"])
             with state_lock:
                 exclude_snapshot = set(existing_archive_ids)
-            replacement = find_best_archive_movie_match(details, final_year, exclude_snapshot)
+            replacement = find_best_archive_movie_match(details, final_year, exclude_snapshot, deadline_ts)
             if replacement:
                 new_ident, new_file, new_mins = replacement
                 can_use_new_id = False
@@ -802,7 +808,7 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts)
         if match:
             best_ident, best_file, best_mins = match
             is_anim = 16 in (details.get("genre_ids") or [])
@@ -823,9 +829,15 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
 
 def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
     print("3/4 Ciljana pretraga kultnih klasika, animiranih filmova i TMDB žanrova...", flush=True)
+    if time.monotonic() > deadline_ts:
+        print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
+        return
+
     candidates = {}
 
     def fetch_seed(seed_title):
+        if time.monotonic() > deadline_ts:
+            return []
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
 
@@ -837,7 +849,9 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                     candidates[mid] = (m, None)
 
     for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
-        for page in range(1, 5):
+        if time.monotonic() > deadline_ts:
+            break
+        for page in range(1, 4):
             data = safe_get(
                 f"{TMDB_BASE}/discover/movie",
                 {
@@ -861,9 +875,14 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
     print(f"  Provjera {total_cands} TMDB kandidata na Archive.org...", flush=True)
     added = [0]
     checked = [0]
+    time_limit_hit = [False]
 
     def process_candidate(item):
         if time.monotonic() > deadline_ts:
+            with state_lock:
+                if not time_limit_hit[0]:
+                    time_limit_hit[0] = True
+                    print("  ⏱ Dostignut sigurnosni vremenski limit u koraku 3/4 — uredan završetak...", flush=True)
             return
         m, hint_genre = item
         mid = m["id"]
@@ -884,7 +903,7 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts)
         if match:
             best_ident, best_file, best_mins = match
             pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
@@ -896,16 +915,24 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                     added[0] += 1
 
     with ThreadPoolExecutor(max_workers=10) as pool:
-        list(pool.map(process_candidate, candidates.values()))
+        futures = [pool.submit(process_candidate, item) for item in candidates.values()]
+        for fut in as_completed(futures):
+            fut.result()
 
     print(f"  Dodano {added[0]} kultnih i žanrovskih filmova.", flush=True)
 
 
 def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
     print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
+    if time.monotonic() > deadline_ts:
+        print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
+        return
+
     archive_docs = {}
 
     def fetch_col_page(col_page):
+        if time.monotonic() > deadline_ts:
+            return []
         col, page = col_page
         if col == "popcornmaker":
             query = 'mediatype:(movies OR web) AND collection:popcornmaker AND title:(19* OR 20*) AND -subject:trailer AND -subject:news'
@@ -1003,6 +1030,8 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
 
         results = []
         for cand_q in title_candidates[:2]:
+            if time.monotonic() > deadline_ts:
+                return
             if parsed_y > 0:
                 res_y = safe_get(
                     f"{TMDB_BASE}/search/movie",
