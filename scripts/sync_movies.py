@@ -37,6 +37,14 @@ from sync_common import (
 
 # Sigurnosni limit od 165 min (2h 45m) kako bi skripta uvijek uredno završila prije GitHub limita
 MAX_MOVIES_SYNC_SECONDS = 165 * 60
+BATCH_SIZE_CANDIDATES = 350
+MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
+
+REJECTED_JUNK_RE = re.compile(
+    r"(?i)\b(?:trailer|sample|teaser|preview|promo|commercial|ad\b|ads\b|"
+    r"camrip|cam\b|ts\b|telesync|telecine|screener|scr\b|dvdscr|workprint|"
+    r"pencil[._ -]*test|shot[._ -]*demo|test[._ -]*footage|commentary|behind[._ -]*the[._ -]*scenes)\b"
+)
 
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
 _GENRES_ACCEPTS_ORIG_LANG = "orig_lang" in inspect.signature(determine_primary_genres).parameters
@@ -51,6 +59,41 @@ EX_YU_DETECTION_KEYWORDS = (
     "šegrt hlapić", "segrt hlapic", "čudesna šuma", "cudesna suma",
     "čarobnjakov šešir", "carobnjakov sesir", "surogat"
 )
+
+
+def is_rejected_junk_candidate(ident, raw_title):
+    blob = f"{ident} {raw_title}"
+    return bool(REJECTED_JUNK_RE.search(blob))
+
+
+def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
+    if not ident or ident.startswith("http"):
+        return
+    should_write = False
+    with state_lock:
+        if ident not in existing_archive_ids:
+            existing_archive_ids.add(ident)
+            should_write = True
+    if should_write:
+        row = {
+            "archive_id": ident,
+            "tmdb_id": 0,
+            "title": str(title or ident)[:180],
+            "media_type": "movie",
+            "genres": [],
+            "release_year": int(rel_year or 0),
+            "rating": 0.0,
+            "popularity_score": -1000.0,
+            "description_hr": "",
+            "poster_url": "",
+            "backdrop_url": "",
+            "stream_url": "",
+            "is_featured": False,
+            "is_valid": False,
+            "tmdb_runtime": 0,
+            "archive_runtime": 0,
+        }
+        supabase_upsert("catalog_items", [row], "archive_id")
 
 
 def check_ex_yu(*texts, orig_lang=""):
@@ -331,7 +374,6 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
 
 
 def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
-    """Traži najkvalitetniju izvornu/englesku verziju filma na Archive.org-u."""
     if deadline_ts is not None and time.monotonic() > deadline_ts:
         return None
 
@@ -641,6 +683,9 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
         raw_title = doc.get("title") or ident
         if isinstance(raw_title, list):
             raw_title = raw_title[0]
+        if is_rejected_junk_candidate(ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
+            return
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
             return
 
@@ -959,16 +1004,20 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 if ident and ident not in existing_archive_ids and ident not in archive_docs:
                     archive_docs[ident] = doc
 
-    filtered_docs = []
+    remaining_pool = []
     skipped_pre = 0
     for doc in archive_docs.values():
         ident = doc.get("identifier") or ""
-        if not ident or ident.lower().startswith(("youtube-", "yt-")):
+        if not ident or ident in existing_archive_ids or ident.lower().startswith(("youtube-", "yt-")):
             skipped_pre += 1
             continue
         raw_title = doc.get("title") or ident
         if isinstance(raw_title, list):
             raw_title = raw_title[0]
+        if is_rejected_junk_candidate(ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
+            skipped_pre += 1
+            continue
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
             skipped_pre += 1
             continue
@@ -980,158 +1029,201 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
         if primary_norm and parsed_y > 0 and (primary_norm, parsed_y) in seen_title_years:
             skipped_pre += 1
             continue
-        filtered_docs.append((doc, title_candidates, parsed_y))
+        remaining_pool.append((doc, title_candidates, parsed_y))
 
-    total_docs = len(filtered_docs)
     print(
-        f"  Pronađeno {total_docs} novih kandidata za obradu (preskočeno {skipped_pre} postojećih/nevažećih)...",
+        f"  Ukupno {len(remaining_pool)} novih kandidata u redu (preskočeno {skipped_pre} postojećih/odbačenih/nevažećih)...",
         flush=True
     )
 
-    added = [0]
-    processed = [0]
-    time_limit_hit = [False]
+    total_added = [0]
+    batch_num = 0
+    cursor = 0
     stats = {
         "no_tmdb_match": 0,
         "already_in_db": 0,
         "no_video_file": 0,
         "validation_rejected": 0,
+        "junk_recorded": 0,
     }
 
     def inc_stat(key):
         with state_lock:
             stats[key] += 1
 
-    def process_archive_doc(entry):
-        if time.monotonic() > deadline_ts:
-            with state_lock:
-                if not time_limit_hit[0]:
-                    time_limit_hit[0] = True
-                    print("  ⏱ Dostignut sigurnosni vremenski limit — uredno spremanje i završetak...", flush=True)
-            return
+    while cursor < len(remaining_pool) and time.monotonic() < deadline_ts:
+        batch_num += 1
+        batch_slice = remaining_pool[cursor:cursor + BATCH_SIZE_CANDIDATES]
+        cursor += len(batch_slice)
+        print(
+            f"  ▶ Paket #{batch_num}: obrada {len(batch_slice)} kandidata (preostalo u redu: {len(remaining_pool) - cursor})...",
+            flush=True
+        )
 
-        doc, title_candidates, parsed_y = entry
-        ident = doc.get("identifier") or ""
-        with state_lock:
-            processed[0] += 1
-            p_now = processed[0]
-            if p_now % 100 == 0:
-                print(
-                    f"  ... Obrađeno {p_now}/{total_docs} stavki (dodano {added[0]} filmova)...",
-                    flush=True
-                )
+        batch_added = [0]
+        processed_in_batch = [0]
 
-        primary_norm = normalize_for_exact_title_compare(title_candidates[0])
-        if primary_norm and parsed_y > 0:
+        def process_archive_doc(entry):
+            if time.monotonic() > deadline_ts:
+                return
+            doc, title_candidates, parsed_y = entry
+            ident = doc.get("identifier") or ""
+            raw_title = doc.get("title") or ident
+            if isinstance(raw_title, list):
+                raw_title = raw_title[0]
+
             with state_lock:
-                if (primary_norm, parsed_y) in seen_title_years:
+                processed_in_batch[0] += 1
+                p_now = processed_in_batch[0]
+                if p_now % 100 == 0:
+                    print(
+                        f"  ... [Paket #{batch_num}] Obrađeno {p_now}/{len(batch_slice)} (dodano u paketu: {batch_added[0]})...",
+                        flush=True
+                    )
+
+            if is_rejected_junk_candidate(ident, raw_title):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+                inc_stat("junk_recorded")
+                return
+
+            primary_norm = normalize_for_exact_title_compare(title_candidates[0])
+            if primary_norm and parsed_y > 0:
+                with state_lock:
+                    if (primary_norm, parsed_y) in seen_title_years:
+                        inc_stat("already_in_db")
+                        return
+
+            results = []
+            for cand_q in title_candidates[:2]:
+                if time.monotonic() > deadline_ts:
+                    return
+                if parsed_y > 0:
+                    res_y = safe_get(
+                        f"{TMDB_BASE}/search/movie",
+                        params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "false"}
+                    )
+                    results = (res_y or {}).get("results", [])
+                if not results:
+                    res_any = safe_get(
+                        f"{TMDB_BASE}/search/movie",
+                        params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "false"}
+                    )
+                    results = (res_any or {}).get("results", [])
+                if results:
+                    break
+
+            if not results:
+                inc_stat("no_tmdb_match")
+                return
+
+            cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
+            cand_norms.discard("")
+            chosen_hit = None
+            for hit in results[:5]:
+                if is_future_release(hit.get("release_date") or ""):
+                    continue
+                hit_orig_norm = normalize_for_exact_title_compare(hit.get("original_title") or "")
+                hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
+                hit_year = extract_year_from_text(hit.get("release_date") or "")
+                if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
+                    continue
+                if cand_norms and (hit_orig_norm in cand_norms or hit_hr_norm in cand_norms):
+                    chosen_hit = hit
+                    break
+
+            if chosen_hit is None:
+                first_hit = results[0]
+                first_year = extract_year_from_text(first_hit.get("release_date") or "")
+                if not is_future_release(first_hit.get("release_date") or "") and (
+                    parsed_y == 0 or first_year == 0 or abs(first_year - parsed_y) <= 1
+                ):
+                    chosen_hit = first_hit
+
+            if chosen_hit is None:
+                inc_stat("no_tmdb_match")
+                return
+
+            mid = chosen_hit["id"]
+            with state_lock:
+                if mid in seen_tmdb_ids:
                     inc_stat("already_in_db")
                     return
 
-        results = []
-        for cand_q in title_candidates[:2]:
-            if time.monotonic() > deadline_ts:
+            details = get_tmdb_movie_details(mid)
+            if not details or not details["poster_path"]:
+                inc_stat("no_tmdb_match")
                 return
-            if parsed_y > 0:
-                res_y = safe_get(
-                    f"{TMDB_BASE}/search/movie",
-                    params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "false"}
-                )
-                results = (res_y or {}).get("results", [])
-            if not results:
-                res_any = safe_get(
-                    f"{TMDB_BASE}/search/movie",
-                    params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "false"}
-                )
-                results = (res_any or {}).get("results", [])
-            if results:
-                break
 
-        if not results:
-            inc_stat("no_tmdb_match")
-            return
+            if is_rejected_junk_candidate(ident, f"{raw_title} {details.get('orig_title', '')} {details.get('hr_title', '')}"):
+                record_rejected_archive_id(ident, details.get("hr_title") or raw_title, parsed_y, existing_archive_ids)
+                inc_stat("junk_recorded")
+                return
 
-        cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
-        cand_norms.discard("")
-        chosen_hit = None
-        for hit in results[:5]:
-            if is_future_release(hit.get("release_date") or ""):
-                continue
-            hit_orig_norm = normalize_for_exact_title_compare(hit.get("original_title") or "")
-            hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
-            hit_year = extract_year_from_text(hit.get("release_date") or "")
-            if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
-                continue
-            if cand_norms and (hit_orig_norm in cand_norms or hit_hr_norm in cand_norms):
-                chosen_hit = hit
-                break
+            is_anim = 16 in (details.get("genre_ids") or [])
+            videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
+            if not videos:
+                inc_stat("no_video_file")
+                return
+            best = pick_best_video_file(videos)
+            if is_rejected_junk_candidate(ident, best.get("filename", "")):
+                record_rejected_archive_id(ident, details.get("hr_title") or raw_title, parsed_y, existing_archive_ids)
+                inc_stat("junk_recorded")
+                return
 
-        if chosen_hit is None:
-            first_hit = results[0]
-            first_year = extract_year_from_text(first_hit.get("release_date") or "")
-            if not is_future_release(first_hit.get("release_date") or "") and (
-                parsed_y == 0 or first_year == 0 or abs(first_year - parsed_y) <= 1
+            arch_mins = best["duration_mins"]
+            rel_year = extract_year_from_text(details["release_date"]) or parsed_y
+            require_credits = has_multiple_tmdb_versions(details["orig_title"])
+            ok, _ = validate_movie_match(
+                ident,
+                arch_md,
+                arch_mins,
+                details,
+                [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates,
+                rel_year,
+                require_credits=require_credits,
+                chosen_filename=best["filename"],
+                chosen_size_mb=best["size_mb"]
+            )
+            if not ok or not verify_stream_url_playable(best["stream_url"]):
+                inc_stat("validation_rejected")
+                return
+
+            downloads = float(doc.get("downloads") or 0)
+            pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
+            if save_verified_movie_row(
+                ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
+                seen_tmdb_ids, seen_title_years, existing_archive_ids
             ):
-                chosen_hit = first_hit
+                with state_lock:
+                    batch_added[0] += 1
+                    total_added[0] += 1
 
-        if chosen_hit is None:
-            inc_stat("no_tmdb_match")
-            return
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
+            for fut in as_completed(futures):
+                fut.result()
 
-        mid = chosen_hit["id"]
-        with state_lock:
-            if mid in seen_tmdb_ids:
-                inc_stat("already_in_db")
-                return
-
-        details = get_tmdb_movie_details(mid)
-        if not details or not details["poster_path"]:
-            inc_stat("no_tmdb_match")
-            return
-
-        is_anim = 16 in (details.get("genre_ids") or [])
-        videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
-        if not videos:
-            inc_stat("no_video_file")
-            return
-        best = pick_best_video_file(videos)
-        arch_mins = best["duration_mins"]
-
-        rel_year = extract_year_from_text(details["release_date"]) or parsed_y
-        require_credits = has_multiple_tmdb_versions(details["orig_title"])
-        ok, _ = validate_movie_match(
-            ident,
-            arch_md,
-            arch_mins,
-            details,
-            [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates,
-            rel_year,
-            require_credits=require_credits,
-            chosen_filename=best["filename"],
-            chosen_size_mb=best["size_mb"]
+        print(
+            f"  ✓ Paket #{batch_num} završen: dodano {batch_added[0]} filmova.",
+            flush=True
         )
-        if not ok or not verify_stream_url_playable(best["stream_url"]):
-            inc_stat("validation_rejected")
-            return
 
-        downloads = float(doc.get("downloads") or 0)
-        pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
-        if save_verified_movie_row(
-            ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
-            seen_tmdb_ids, seen_title_years, existing_archive_ids
-        ):
-            with state_lock:
-                added[0] += 1
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(process_archive_doc, entry) for entry in filtered_docs]
-        for fut in as_completed(futures):
-            fut.result()
+        remaining_secs = deadline_ts - time.monotonic()
+        if cursor >= len(remaining_pool):
+            break
+        if remaining_secs < MIN_REMAINING_SECONDS_FOR_NEXT_BATCH:
+            print(
+                f"  ⏱ Preostalo {remaining_secs / 60.0:.1f} min (< {MIN_REMAINING_SECONDS_FOR_NEXT_BATCH / 60.0:.0f} min) — "
+                f"završavam nakon {batch_num} paketa ({len(remaining_pool) - cursor} kandidata ostaje za sljedeće pokretanje).",
+                flush=True
+            )
+            break
 
     print(
-        f"  Dodano {added[0]} filmova iz Archive.org kolekcija "
-        f"(već u bazi: {stats['already_in_db']}, bez TMDB podudaranja: {stats['no_tmdb_match']}, "
-        f"bez video datoteke: {stats['no_video_file']}, odbačeno provjerom: {stats['validation_rejected']}).",
+        f"  Dodano ukupno {total_added[0]} filmova u {batch_num} paketu/paketa "
+        f"(zabilježeno odbačenih: {stats['junk_recorded']}, već u bazi: {stats['already_in_db']}, "
+        f"bez TMDB podudaranja: {stats['no_tmdb_match']}, bez video datoteke: {stats['no_video_file']}, "
+        f"odbačeno provjerom: {stats['validation_rejected']}).",
         flush=True
     )
 
