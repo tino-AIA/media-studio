@@ -60,6 +60,10 @@ SPECIAL_EDITION_RE = re.compile(
     r"director'?s?\s*cut|special\s*edition|alternative\s*edition|criterion)\b"
 )
 
+DUNE_1984_MARKER_RE = re.compile(
+    r"(?i)\b(?:1984|lynch|redux|fanedit|complete[\s._-]*saga|alternative[\s._-]*edition)\b"
+)
+
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
 _GENRES_ACCEPTS_ORIG_LANG = "orig_lang" in inspect.signature(determine_primary_genres).parameters
 
@@ -80,6 +84,13 @@ def is_explicit_junk_item(ident, raw_title):
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
     return bool(EXPLICIT_JUNK_RE.search(blob))
+
+
+def is_mismatched_modern_dune(tmdb_id, *texts):
+    if int(tmdb_id or 0) not in (438631, 693134):
+        return False
+    blob = " ".join(str(t) for t in texts if t)
+    return bool(DUNE_1984_MARKER_RE.search(blob))
 
 
 def estimate_source_quality_tier(ident, stream_url="", title=""):
@@ -299,7 +310,8 @@ TMDB_DISCOVER_GENRE_SEEDS = [
 ]
 
 CULT_AND_ANIMATION_SEEDS = [
-    "Dune", "Star Wars: Episode IV - A New Hope", "The Empire Strikes Back", "Return of the Jedi",
+    "Dune: Part One", "Dune: Part Two", "Star Wars: Episode IV - A New Hope",
+    "The Empire Strikes Back", "Return of the Jedi",
     "2001: A Space Odyssey", "2010: The Year We Make Contact", "Hair", "Footloose",
     "Dirty Dancing", "Grease", "Saturday Night Fever", "Flashdance", "Fame",
     "The Blues Brothers", "The Rocky Horror Picture Show", "West Side Story",
@@ -499,6 +511,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
     orig_lang = details.get("original_language", "")
     is_ex_yu = orig_lang in EX_YU_LANGS
     is_doc = 99 in (details.get("genre_ids") or [])
+    mid = int(details.get("tmdb_id") or 0)
 
     search_terms = []
     for t in (orig_title, hr_title, en_title):
@@ -547,6 +560,8 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         raw_doc_title = doc.get("title") or ident
         if isinstance(raw_doc_title, list):
             raw_doc_title = raw_doc_title[0]
+        if is_mismatched_modern_dune(mid, ident, raw_doc_title):
+            continue
         if not is_doc and is_explicit_junk_item(ident, raw_doc_title):
             continue
 
@@ -555,6 +570,8 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
             continue
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
+        if is_mismatched_modern_dune(mid, ident, raw_doc_title, best["filename"], arch_md.get("title")):
+            continue
         aspect_tier = max(
             best.get("aspect_tier", 1),
             estimate_source_quality_tier(ident, best["stream_url"], str(raw_doc_title))
@@ -603,27 +620,6 @@ def audit_and_repair_existing_movies(
     tmdb_best_tier,
     deadline_ts
 ):
-    # Vrati zapise koji su pogrešno deaktivirani zbog subject tagova (npr. american-pie-2-unrated)
-    for row in all_movie_rows:
-        if not row.get("is_valid", True) and int(row.get("tmdb_id") or 0) > 0:
-            r_ident = (row.get("archive_id") or "").split(",tmdb-")[0].strip()
-            r_title = row.get("title") or ""
-            if r_ident and not is_explicit_junk_item(r_ident, r_title) and \
-               not contains_hentai_or_adult(r_title, row.get("description_hr"), r_ident) and \
-               not contains_blocked_regional_or_arabic(r_title, row.get("description_hr"), r_ident):
-                supabase_patch_row("catalog_items", row["id"], {"is_valid": True})
-                row["is_valid"] = True
-                mid_restored = int(row["tmdb_id"])
-                seen_tmdb_ids.add(mid_restored)
-                tmdb_version_counts[mid_restored] = tmdb_version_counts.get(mid_restored, 0) + 1
-                tier_restored = estimate_source_quality_tier(r_ident, row.get("stream_url") or "", r_title)
-                if tier_restored > tmdb_best_tier.get(mid_restored, -1):
-                    tmdb_best_tier[mid_restored] = tier_restored
-                norm_t = normalize_for_exact_title_compare(r_title)
-                if norm_t:
-                    seen_title_years.add((norm_t, int(row.get("release_year") or 0)))
-                print(f"  ↺ Vraćen legitimni zapis u bazu: {r_title} ({r_ident})", flush=True)
-
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
     print(f"1/4 Provjera jezika, naslova, kvalitete i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
@@ -661,6 +657,18 @@ def audit_and_repair_existing_movies(
 
         is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
+
+        if is_mismatched_modern_dune(tmdb_id, base_ident, stream_url, arch_md.get("title")):
+            supabase_patch_row("catalog_items", row_id, {"is_valid": False})
+            row["is_valid"] = False
+            with state_lock:
+                seen_tmdb_ids.discard(tmdb_id)
+                if tmdb_version_counts.get(tmdb_id, 0) > 0:
+                    tmdb_version_counts[tmdb_id] -= 1
+                removed_count[0] += 1
+            print(f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})", flush=True)
+            return
+
         if not is_curated and not is_doc_row and is_explicit_junk_item(
             base_ident,
             arch_md.get("title") or ""
@@ -875,6 +883,9 @@ def save_verified_movie_row(
     all_movie_rows=None
 ):
     mid = int(details["tmdb_id"])
+    if is_mismatched_modern_dune(mid, arch_id, stream_url, details["hr_title"]):
+        return False
+
     norm_t = normalize_for_exact_title_compare(details["hr_title"])
     ty_key = (norm_t, rel_year)
     cand_tier = estimate_source_quality_tier(arch_id, stream_url, details["hr_title"])
@@ -1035,6 +1046,8 @@ def sync_ex_yu_movies(
             return
 
         mid = int(chosen_hit["id"])
+        if is_mismatched_modern_dune(mid, ident, raw_title):
+            return
         cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
         special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
         with state_lock:
@@ -1456,6 +1469,9 @@ def mine_archive_collections(
                 return
 
             mid = int(chosen_hit["id"])
+            if is_mismatched_modern_dune(mid, ident, raw_title):
+                inc_stat("validation_rejected")
+                return
             with state_lock:
                 if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
                     inc_stat("already_in_db")
@@ -1474,6 +1490,10 @@ def mine_archive_collections(
                 return
             best = pick_best_video_file(videos)
             arch_mins = best["duration_mins"]
+
+            if is_mismatched_modern_dune(mid, ident, raw_title, best["filename"], arch_md.get("title")):
+                inc_stat("validation_rejected")
+                return
 
             if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
