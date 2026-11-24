@@ -59,6 +59,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
+private const val SERIES_TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8"
+
 private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
     var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
     this.onPreviewKeyEvent { event ->
@@ -148,8 +150,43 @@ private fun extractSeriesAwardsHr(text: String): String {
 }
 
 private fun extractSeriesCastHr(text: String): String {
-    val m = Regex("(?i)(?:glavne uloge|uloge|glume|starring|cast)\\s*[:\\-–]?\\s*([^\\n.]{4,160})").find(text)
+    val m = Regex("(?i)(?:glavne uloge|glavni glumci|uloge|glume|starring|cast)\\s*[:\\-–]?\\s*([^\\n.]{4,160})").find(text)
     return m?.groupValues?.get(1)?.trim().orEmpty()
+}
+
+private suspend fun fetchTmdbSeriesCastHr(tmdbId: Int, title: String): String = withContext(Dispatchers.IO) {
+    try {
+        var resolvedId = tmdbId
+        if (resolvedId <= 0) {
+            val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+            if (cleanTitle.length >= 2) {
+                val encodedQ = URLEncoder.encode(cleanTitle, "UTF-8")
+                val searchUrl = "https://api.themoviedb.org/3/search/tv?api_key=$SERIES_TMDB_API_KEY&query=$encodedQ&language=hr-HR"
+                val conn = URL(searchUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                resolvedId = obj.optJSONArray("results")?.optJSONObject(0)?.optInt("id", 0) ?: 0
+            }
+        }
+        if (resolvedId <= 0) return@withContext ""
+
+        val url = "https://api.themoviedb.org/3/tv/$resolvedId/credits?api_key=$SERIES_TMDB_API_KEY&language=hr-HR"
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val castArr = obj.optJSONArray("cast") ?: return@withContext ""
+
+        val names = mutableListOf<String>()
+        for (i in 0 until minOf(castArr.length(), 6)) {
+            val n = castArr.optJSONObject(i)?.optString("name", "")?.trim().orEmpty()
+            if (n.isNotBlank() && n !in names) names.add(n)
+        }
+        names.joinToString(", ")
+    } catch (_: Exception) {
+        ""
+    }
 }
 
 private suspend fun fetchSeriesWikiHr(title: String): String = withContext(Dispatchers.IO) {
@@ -237,7 +274,8 @@ fun SeriesScreen(
         val wikiHr = fetchSeriesWikiHr(series.title)
         val combinedText = "$hrDesc $wikiHr"
         seriesDirectorHr = ""
-        seriesCastHr = extractSeriesCastHr(combinedText)
+        val tmdbCast = fetchTmdbSeriesCastHr(item?.tmdbId ?: 0, series.title)
+        seriesCastHr = tmdbCast.ifBlank { extractSeriesCastHr(combinedText) }
         seriesAwardsHr = extractSeriesAwardsHr(combinedText)
 
         seasons = fullInfo.seasons
