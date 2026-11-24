@@ -40,10 +40,11 @@ MAX_MOVIES_SYNC_SECONDS = 165 * 60
 BATCH_SIZE_CANDIDATES = 350
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
 
-REJECTED_JUNK_RE = re.compile(
-    r"(?i)\b(?:trailer|sample|teaser|preview|promo|commercial|ad\b|ads\b|"
-    r"camrip|cam\b|ts\b|telesync|telecine|screener|scr\b|dvdscr|workprint|"
-    r"pencil[._ -]*test|shot[._ -]*demo|test[._ -]*footage|commentary|behind[._ -]*the[._ -]*scenes)\b"
+# Samo eksplicitni pokazatelji najava, testova, komentara i loših kopija (bez rizičnih kratkih kratica)
+EXPLICIT_JUNK_RE = re.compile(
+    r"(?i)(?:\b(?:trailer|sample|teaser|preview|promo|commercial|camrip|telesync|telecine|"
+    r"screener|dvdscr|workprint|commentary|behind[\s._-]+the[\s._-]+scenes)\b|"
+    r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage)"
 )
 
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
@@ -61,9 +62,11 @@ EX_YU_DETECTION_KEYWORDS = (
 )
 
 
-def is_rejected_junk_candidate(ident, raw_title):
+def is_explicit_junk_item(ident, raw_title):
     blob = f"{ident} {raw_title}"
-    return bool(REJECTED_JUNK_RE.search(blob))
+    if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
+        return False
+    return bool(EXPLICIT_JUNK_RE.search(blob))
 
 
 def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
@@ -683,7 +686,7 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
         raw_title = doc.get("title") or ident
         if isinstance(raw_title, list):
             raw_title = raw_title[0]
-        if is_rejected_junk_candidate(ident, raw_title):
+        if is_explicit_junk_item(ident, raw_title):
             record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             return
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
@@ -1014,7 +1017,7 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
         raw_title = doc.get("title") or ident
         if isinstance(raw_title, list):
             raw_title = raw_title[0]
-        if is_rejected_junk_candidate(ident, raw_title):
+        if is_explicit_junk_item(ident, raw_title):
             record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             skipped_pre += 1
             continue
@@ -1081,7 +1084,7 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                         flush=True
                     )
 
-            if is_rejected_junk_candidate(ident, raw_title):
+            if is_explicit_junk_item(ident, raw_title):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("junk_recorded")
                 return
@@ -1154,22 +1157,12 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 inc_stat("no_tmdb_match")
                 return
 
-            if is_rejected_junk_candidate(ident, f"{raw_title} {details.get('orig_title', '')} {details.get('hr_title', '')}"):
-                record_rejected_archive_id(ident, details.get("hr_title") or raw_title, parsed_y, existing_archive_ids)
-                inc_stat("junk_recorded")
-                return
-
             is_anim = 16 in (details.get("genre_ids") or [])
             videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
             if not videos:
                 inc_stat("no_video_file")
                 return
             best = pick_best_video_file(videos)
-            if is_rejected_junk_candidate(ident, best.get("filename", "")):
-                record_rejected_archive_id(ident, details.get("hr_title") or raw_title, parsed_y, existing_archive_ids)
-                inc_stat("junk_recorded")
-                return
-
             arch_mins = best["duration_mins"]
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             require_credits = has_multiple_tmdb_versions(details["orig_title"])
