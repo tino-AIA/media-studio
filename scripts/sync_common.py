@@ -154,6 +154,10 @@ FULLSCREEN_4_3_TAG_RE = re.compile(
     r"(?i)\b(fullscreen|full[\s._-]*screen|4x3|4_3|4-3|pan[\s._-]*(?:and|&)[\s._-]*scan|vhs|vhdrip|laserdisc|ldrip)\b"
 )
 
+DUNE_1984_MARKER_RE = re.compile(
+    r"(?i)\b(?:1984|lynch|redux|fanedit|complete[\s._-]*saga|alternative[\s._-]*edition)\b"
+)
+
 TMDB_MOVIE_GENRE_MAP = {
     37: "Vestern",
     27: "Horor",
@@ -919,6 +923,12 @@ def validate_movie_match(
 
     if is_future_release(tmdb_rel):
         return False, f"future_release ({tmdb_rel})"
+
+    tmdb_id_val = int(tmdb_details.get("tmdb_id") or 0) if tmdb_details else 0
+    if tmdb_id_val in (438631, 693134) and DUNE_1984_MARKER_RE.search(
+        f"{ident_lower} {raw_arch_title.lower()} {chosen_filename.lower()}"
+    ):
+        return False, "mismatched_modern_dune_1984_source"
 
     norm_candidates = {normalize_for_exact_title_compare(t) for t in expected_titles if t}
     norm_candidates.discard("")
