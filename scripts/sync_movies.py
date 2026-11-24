@@ -9,12 +9,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sync_common as sc
 from sync_common import (
+    EXTENDED_CUT_TAG_RE,
     NON_LATIN_TITLE_RE,
     TMDB_API_KEY,
     TMDB_BASE,
     TMDB_IMG_BACKDROP,
     TMDB_IMG_POSTER,
     clean_filename_to_title,
+    compute_aspect_tier,
     contains_blocked_regional_or_arabic,
     contains_hentai_or_adult,
     determine_primary_genres,
@@ -40,6 +42,10 @@ MAX_MOVIES_SYNC_SECONDS = 165 * 60
 BATCH_SIZE_CANDIDATES = 350
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
 
+# Dopušta do 2 verzije po filmu kada druga verzija donosi višu kvalitetu ili posebno izdanje
+MAX_VERSIONS_PER_MOVIE = 2
+MAX_VHS_UPGRADE_CHECKS_PER_RUN = 40
+
 # Eksplicitni pokazatelji najava, holiday specijala, making-of dokumentaraca, fan-filmova i loših kopija
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
@@ -47,6 +53,11 @@ EXPLICIT_JUNK_RE = re.compile(
     r"holiday[\s._-]+special|making[\s._-]+of|"
     r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
     r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage)"
+)
+
+SPECIAL_EDITION_RE = re.compile(
+    r"(?i)\b(?:remastered|restored|colorized|extended|unrated|uncut|redux|"
+    r"director'?s?\s*cut|special\s*edition|alternative\s*edition|criterion)\b"
 )
 
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
@@ -69,6 +80,53 @@ def is_explicit_junk_item(ident, raw_title):
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
     return bool(EXPLICIT_JUNK_RE.search(blob))
+
+
+def estimate_source_quality_tier(ident, stream_url="", title=""):
+    blob = f"{ident} {stream_url} {title}"
+    return compute_aspect_tier(blob)
+
+
+def is_special_or_remastered_edition(ident, stream_url="", title=""):
+    blob = f"{ident} {stream_url} {title}"
+    return bool(EXTENDED_CUT_TAG_RE.search(blob) or SPECIAL_EDITION_RE.search(blob))
+
+
+def build_movie_version_maps(all_movie_rows):
+    """Vraća broj postojećih verzija po tmdb_id i najbolji dosegnuti tier kvalitete (0, 1 ili 2)."""
+    version_counts = {}
+    best_tiers = {}
+    for row in all_movie_rows:
+        if not row.get("is_valid", True):
+            continue
+        mid = int(row.get("tmdb_id") or 0)
+        if mid <= 0:
+            continue
+        version_counts[mid] = version_counts.get(mid, 0) + 1
+        tier = estimate_source_quality_tier(
+            row.get("archive_id") or "",
+            row.get("stream_url") or "",
+            row.get("title") or ""
+        )
+        if tier > best_tiers.get(mid, -1):
+            best_tiers[mid] = tier
+    return version_counts, best_tiers
+
+
+def can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, candidate_tier=None, is_special=False):
+    """Provjerava smije li se dodati nova ili dodatna verzija za ovaj tmdb_id."""
+    if mid <= 0:
+        return True
+    count = tmdb_version_counts.get(mid, 0)
+    if count == 0:
+        return True
+    if count >= MAX_VERSIONS_PER_MOVIE:
+        return False
+    if candidate_tier is None:
+        # Prije dohvata detalja dopuštamo provjeru samo ako je trenutna verzija VHS/4:3 (tier 0)
+        return tmdb_best_tier.get(mid, 1) == 0
+    current_best = tmdb_best_tier.get(mid, 1)
+    return (candidate_tier > current_best) or is_special
 
 
 def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
@@ -306,7 +364,14 @@ def extract_archive_title_candidates(raw_title, ident):
     return candidates, year_in_title
 
 
-def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years):
+def sync_curated_movie_exceptions(
+    all_movie_rows,
+    existing_archive_ids,
+    seen_tmdb_ids,
+    seen_title_years,
+    tmdb_version_counts,
+    tmdb_best_tier
+):
     print("0/4 Provjera ručno odobrenih izdanja filmova...", flush=True)
     valid_archive_ids = {
         r.get("archive_id") for r in all_movie_rows
@@ -353,9 +418,10 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
         final_title = item["custom_title"].strip() or details["hr_title"]
         rel_year = extract_year_from_text(details["release_date"]) or 1984
         genres = resolve_movie_genres(details, final_title, "Sci-Fi klasici")
+        mid = item["tmdb_id"]
         row = {
             "archive_id": ident,
-            "tmdb_id": item["tmdb_id"],
+            "tmdb_id": mid,
             "title": final_title,
             "media_type": "movie",
             "genres": genres,
@@ -374,7 +440,11 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
         supabase_upsert("catalog_items", [row], "archive_id")
         existing_archive_ids.add(ident)
         valid_archive_ids.add(ident)
-        curated_tmdb_to_mark.add(item["tmdb_id"])
+        curated_tmdb_to_mark.add(mid)
+        tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
+        tier = estimate_source_quality_tier(ident, best["stream_url"], final_title)
+        if tier > tmdb_best_tier.get(mid, -1):
+            tmdb_best_tier[mid] = tier
         norm_t = normalize_for_exact_title_compare(final_title)
         if norm_t:
             seen_title_years.add((norm_t, rel_year))
@@ -383,7 +453,7 @@ def sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmd
     seen_tmdb_ids.update(curated_tmdb_to_mark)
 
 
-def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
+def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, min_aspect_tier=0):
     if deadline_ts is not None and time.monotonic() > deadline_ts:
         return None
 
@@ -422,7 +492,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
                 "q": query,
                 "fl[]": ["identifier", "title", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 6,
+                "rows": 8,
                 "output": "json"
             }
         )
@@ -449,6 +519,12 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
             continue
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
+        aspect_tier = max(
+            best.get("aspect_tier", 1),
+            estimate_source_quality_tier(ident, best["stream_url"], str(raw_doc_title))
+        )
+        if aspect_tier < min_aspect_tier:
+            continue
 
         if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_doc_title):
             continue
@@ -465,7 +541,6 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
             chosen_size_mb=best["size_mb"]
         )
         if ok and verify_stream_url_playable(best["stream_url"]):
-            aspect_tier = best.get("aspect_tier", 1)
             downloads = float(doc.get("downloads") or 0)
             valid_candidates.append((aspect_tier, best["size_mb"], downloads, ident, best, arch_mins))
             if year < 1955 or aspect_tier == 2:
@@ -483,7 +558,15 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
     return best_ident, best_file, best_mins
 
 
-def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
+def audit_and_repair_existing_movies(
+    all_movie_rows,
+    existing_archive_ids,
+    seen_tmdb_ids,
+    seen_title_years,
+    tmdb_version_counts,
+    tmdb_best_tier,
+    deadline_ts
+):
     # Vrati zapise koji su pogrešno deaktivirani zbog subject tagova (npr. american-pie-2-unrated)
     for row in all_movie_rows:
         if not row.get("is_valid", True) and int(row.get("tmdb_id") or 0) > 0:
@@ -494,18 +577,24 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
                not contains_blocked_regional_or_arabic(r_title, row.get("description_hr"), r_ident):
                 supabase_patch_row("catalog_items", row["id"], {"is_valid": True})
                 row["is_valid"] = True
-                seen_tmdb_ids.add(int(row["tmdb_id"]))
+                mid_restored = int(row["tmdb_id"])
+                seen_tmdb_ids.add(mid_restored)
+                tmdb_version_counts[mid_restored] = tmdb_version_counts.get(mid_restored, 0) + 1
+                tier_restored = estimate_source_quality_tier(r_ident, row.get("stream_url") or "", r_title)
+                if tier_restored > tmdb_best_tier.get(mid_restored, -1):
+                    tmdb_best_tier[mid_restored] = tier_restored
                 norm_t = normalize_for_exact_title_compare(r_title)
                 if norm_t:
                     seen_title_years.add((norm_t, int(row.get("release_year") or 0)))
                 print(f"  ↺ Vraćen legitimni zapis u bazu: {r_title} ({r_ident})", flush=True)
 
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/4 Provjera jezika, naslova, specijala i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
+    print(f"1/4 Provjera jezika, naslova, kvalitete i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
     ex_yu_tagged_count = [0]
+    hd_upgraded_count = [0]
 
     def inspect_movie_row(row):
         if time.monotonic() > deadline_ts:
@@ -534,7 +623,6 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=8)
             arch_md = (md_res or {}).get("result") or {}
 
-        # Provjera je li postojeći zapis u bazi zapravo Holiday special ili making-of (samo po identu i naslovu, bez subject tagova)
         is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
         if not is_curated and not is_doc_row and is_explicit_junk_item(
@@ -545,6 +633,8 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             with state_lock:
                 if tmdb_id > 0:
                     seen_tmdb_ids.discard(tmdb_id)
+                    if tmdb_version_counts.get(tmdb_id, 0) > 0:
+                        tmdb_version_counts[tmdb_id] -= 1
                 removed_count[0] += 1
             print(f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})", flush=True)
             return
@@ -585,6 +675,8 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             supabase_patch_row("catalog_items", row_id, {"is_valid": False})
             with state_lock:
                 seen_tmdb_ids.discard(tmdb_id)
+                if tmdb_version_counts.get(tmdb_id, 0) > 0:
+                    tmdb_version_counts[tmdb_id] -= 1
                 removed_count[0] += 1
             print(f"  ✕ Uklonjen blokirani jezik ({orig_lang}): {title}", flush=True)
             return
@@ -613,7 +705,10 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
                             "archive_runtime": new_mins
                         }
                     )
+                    new_tier = estimate_source_quality_tier(new_ident, new_file["stream_url"], details["hr_title"])
                     with state_lock:
+                        if new_tier > tmdb_best_tier.get(tmdb_id, -1):
+                            tmdb_best_tier[tmdb_id] = new_tier
                         replaced_count[0] += 1
                     print(f"  🔊 Zamijenjen strani audio originalnim: {details['hr_title']} ({final_year}) -> {new_ident}", flush=True)
                     return
@@ -621,6 +716,8 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             supabase_patch_row("catalog_items", row_id, {"is_valid": False})
             with state_lock:
                 seen_tmdb_ids.discard(tmdb_id)
+                if tmdb_version_counts.get(tmdb_id, 0) > 0:
+                    tmdb_version_counts[tmdb_id] -= 1
                 removed_count[0] += 1
             print(f"  ✕ Uklonjena strana sinkronizacija bez originala: {details['hr_title']} ({final_year})", flush=True)
             return
@@ -644,8 +741,66 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
     with ThreadPoolExecutor(max_workers=12) as pool:
         list(pool.map(inspect_movie_row, valid_rows))
 
+    # Ciljana potraga 16:9 / HD druge verzije za filmove iz 1955.+ koji trenutno imaju samo VHS / 4:3 rip
+    vhs_candidates = [
+        r for r in valid_rows
+        if int(r.get("tmdb_id") or 0) > 0
+        and int(r.get("release_year") or 0) >= 1955
+        and tmdb_version_counts.get(int(r["tmdb_id"]), 0) == 1
+        and tmdb_best_tier.get(int(r["tmdb_id"]), 1) == 0
+    ][:MAX_VHS_UPGRADE_CHECKS_PER_RUN]
+
+    if vhs_candidates and time.monotonic() < deadline_ts:
+        print(f"  Traženje HD/16:9 dodatne verzije za {len(vhs_candidates)} filmova s VHS/4:3 ripom...", flush=True)
+
+        def try_upgrade_vhs_row(row):
+            if time.monotonic() > deadline_ts:
+                return
+            mid = int(row.get("tmdb_id") or 0)
+            rel_year = int(row.get("release_year") or 0)
+            with state_lock:
+                if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, candidate_tier=2):
+                    return
+                exclude_snapshot = set(existing_archive_ids)
+
+            details = get_tmdb_movie_details(mid)
+            if not details or not details["poster_path"]:
+                return
+
+            match = find_best_archive_movie_match(
+                details,
+                rel_year or extract_year_from_text(details["release_date"]),
+                exclude_snapshot,
+                deadline_ts,
+                min_aspect_tier=2
+            )
+            if not match:
+                return
+
+            new_ident, new_file, new_mins = match
+            pop_score = float(details["popularity"]) * 100.0 + (rel_year * 2) + 500.0
+            if save_verified_movie_row(
+                new_ident,
+                details,
+                rel_year,
+                new_file["stream_url"],
+                new_mins,
+                pop_score,
+                seen_tmdb_ids,
+                seen_title_years,
+                existing_archive_ids,
+                tmdb_version_counts,
+                tmdb_best_tier
+            ):
+                with state_lock:
+                    hd_upgraded_count[0] += 1
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(try_upgrade_vhs_row, vhs_candidates))
+
     print(
         f"  Provjera završena: {replaced_count[0]} zamijenjeno originalom, "
+        f"{hd_upgraded_count[0]} nadograđeno na HD/16:9, "
         f"{removed_count[0]} uklonjeno, {translated_count[0]} prevedeno, "
         f"{ex_yu_tagged_count[0]} označeno kao Ex-Yu.",
         flush=True
@@ -662,23 +817,35 @@ def save_verified_movie_row(
     seen_tmdb_ids,
     seen_title_years,
     existing_archive_ids,
+    tmdb_version_counts,
+    tmdb_best_tier,
     hint_genre=None
 ):
-    mid = details["tmdb_id"]
+    mid = int(details["tmdb_id"])
     norm_t = normalize_for_exact_title_compare(details["hr_title"])
     ty_key = (norm_t, rel_year)
+    cand_tier = estimate_source_quality_tier(arch_id, stream_url, details["hr_title"])
+    special_flag = is_special_or_remastered_edition(arch_id, stream_url, details["hr_title"])
 
     with state_lock:
-        if mid in seen_tmdb_ids or arch_id in existing_archive_ids:
+        if arch_id in existing_archive_ids:
             return False
-        if norm_t and ty_key in seen_title_years:
+        if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
             return False
+        current_count = tmdb_version_counts.get(mid, 0)
+        if current_count == 0 and norm_t and ty_key in seen_title_years:
+            return False
+
         seen_tmdb_ids.add(mid)
         existing_archive_ids.add(arch_id)
+        tmdb_version_counts[mid] = current_count + 1
+        if cand_tier > tmdb_best_tier.get(mid, -1):
+            tmdb_best_tier[mid] = cand_tier
         if norm_t:
             seen_title_years.add(ty_key)
 
     genres = resolve_movie_genres(details, details["hr_title"], hint_genre)
+    adjusted_pop = pop_score + (400.0 if cand_tier == 2 else (-300.0 if cand_tier == 0 else 0.0))
     row = {
         "archive_id": arch_id,
         "tmdb_id": mid,
@@ -687,7 +854,7 @@ def save_verified_movie_row(
         "genres": genres,
         "release_year": rel_year,
         "rating": round(details["vote_average"], 1),
-        "popularity_score": pop_score,
+        "popularity_score": adjusted_pop,
         "description_hr": details["overview_hr"],
         "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}",
         "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
@@ -698,11 +865,19 @@ def save_verified_movie_row(
         "archive_runtime": arch_mins
     }
     supabase_upsert("catalog_items", [row], "archive_id")
-    print(f"  + Film: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
+    ver_tag = " [2. verzija]" if current_count >= 1 else ""
+    print(f"  + Film{ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
     return True
 
 
-def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
+def sync_ex_yu_movies(
+    existing_archive_ids,
+    seen_tmdb_ids,
+    seen_title_years,
+    tmdb_version_counts,
+    tmdb_best_tier,
+    deadline_ts
+):
     print("2/4 Sinkronizacija Ex-Yu filmova i crtića...", flush=True)
     ex_yu_docs = {}
 
@@ -799,9 +974,11 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
         if chosen_hit is None:
             return
 
-        mid = chosen_hit["id"]
+        mid = int(chosen_hit["id"])
+        cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
+        special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
         with state_lock:
-            if mid in seen_tmdb_ids:
+            if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
                 return
 
         details = get_tmdb_movie_details(mid)
@@ -844,7 +1021,8 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
         hint = "Ex-Yu crtići" if is_anim else "Ex-Yu filmovi"
         if save_verified_movie_row(
             ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
-            seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre=hint
+            seen_tmdb_ids, seen_title_years, existing_archive_ids,
+            tmdb_version_counts, tmdb_best_tier, hint_genre=hint
         ):
             with state_lock:
                 added_ex_yu[0] += 1
@@ -868,8 +1046,8 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
     with ThreadPoolExecutor(max_workers=10) as pool:
         for res_list in pool.map(fetch_ex_yu_seed, EX_YU_MOVIE_SEEDS):
             for m in res_list:
-                mid = m["id"]
-                if mid not in seen_tmdb_ids and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
+                mid = int(m["id"])
+                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
                     ex_yu_tmdb_candidates[mid] = m
 
     for lang_code in ("hr", "sr", "sh", "bs", "sl", "mk"):
@@ -887,17 +1065,18 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
                 }
             )
             for m in (data or {}).get("results", []):
-                mid = m["id"]
-                if mid not in seen_tmdb_ids and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
+                mid = int(m["id"])
+                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
                     ex_yu_tmdb_candidates[mid] = m
 
     def process_ex_yu_tmdb(m):
         if time.monotonic() > deadline_ts:
             return
-        mid = m["id"]
+        mid = int(m["id"])
         with state_lock:
-            if mid in seen_tmdb_ids:
+            if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier):
                 return
+            min_req_tier = 2 if tmdb_version_counts.get(mid, 0) > 0 else 0
         rel_date = m.get("release_date") or ""
         year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
         details = get_tmdb_movie_details(mid)
@@ -908,7 +1087,7 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts, min_aspect_tier=min_req_tier)
         if match:
             best_ident, best_file, best_mins = match
             is_anim = 16 in (details.get("genre_ids") or [])
@@ -916,7 +1095,8 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
             pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2) + 1500.0
             if save_verified_movie_row(
                 best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
-                seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre=hint
+                seen_tmdb_ids, seen_title_years, existing_archive_ids,
+                tmdb_version_counts, tmdb_best_tier, hint_genre=hint
             ):
                 with state_lock:
                     added_ex_yu[0] += 1
@@ -927,7 +1107,14 @@ def sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, dea
     print(f"  Dodano {added_ex_yu[0]} novih Ex-Yu filmova i crtića.", flush=True)
 
 
-def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
+def search_tmdb_cult_and_genres(
+    existing_archive_ids,
+    seen_tmdb_ids,
+    seen_title_years,
+    tmdb_version_counts,
+    tmdb_best_tier,
+    deadline_ts
+):
     print("3/4 Ciljana pretraga kultnih klasika, animiranih filmova i TMDB žanrova...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
@@ -944,8 +1131,8 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
     with ThreadPoolExecutor(max_workers=12) as pool:
         for res_list in pool.map(fetch_seed, CULT_AND_ANIMATION_SEEDS):
             for m in res_list:
-                mid = m["id"]
-                if mid not in seen_tmdb_ids and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                mid = int(m["id"])
+                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     candidates[mid] = (m, None)
 
     for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
@@ -966,8 +1153,8 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                 }
             )
             for m in (data or {}).get("results", []):
-                mid = m["id"]
-                if mid not in seen_tmdb_ids and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                mid = int(m["id"])
+                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
                         candidates[mid] = (m, hr_genre_label)
 
@@ -985,13 +1172,14 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
                     print("  ⏱ Dostignut sigurnosni vremenski limit u koraku 3/4 — uredan završetak...", flush=True)
             return
         m, hint_genre = item
-        mid = m["id"]
+        mid = int(m["id"])
         with state_lock:
             checked[0] += 1
             if checked[0] % 150 == 0:
                 print(f"  ... Provjereno {checked[0]}/{total_cands} TMDB kandidata (dodano {added[0]})...", flush=True)
-            if mid in seen_tmdb_ids:
+            if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier):
                 return
+            min_req_tier = 2 if tmdb_version_counts.get(mid, 0) > 0 else 0
 
         rel_date = m.get("release_date") or ""
         year = int(rel_date[:4]) if len(rel_date) >= 4 and rel_date[:4].isdigit() else 0
@@ -1003,13 +1191,14 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts, min_aspect_tier=min_req_tier)
         if match:
             best_ident, best_file, best_mins = match
             pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
             if save_verified_movie_row(
                 best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
-                seen_tmdb_ids, seen_title_years, existing_archive_ids, hint_genre
+                seen_tmdb_ids, seen_title_years, existing_archive_ids,
+                tmdb_version_counts, tmdb_best_tier, hint_genre
             ):
                 with state_lock:
                     added[0] += 1
@@ -1022,7 +1211,14 @@ def search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_
     print(f"  Dodano {added[0]} kultnih i žanrovskih filmova.", flush=True)
 
 
-def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
+def mine_archive_collections(
+    existing_archive_ids,
+    seen_tmdb_ids,
+    seen_title_years,
+    tmdb_version_counts,
+    tmdb_best_tier,
+    deadline_ts
+):
     print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
@@ -1081,9 +1277,13 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             skipped_pre += 1
             continue
         primary_norm = normalize_for_exact_title_compare(title_candidates[0])
+        cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
+        special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
+        # Ako naslov+godina već postoje u bazi, propusti samo ako je ovaj kandidat HD/16:9 ili posebno izdanje
         if primary_norm and parsed_y > 0 and (primary_norm, parsed_y) in seen_title_years:
-            skipped_pre += 1
-            continue
+            if cand_tier < 2 and not special_flag:
+                skipped_pre += 1
+                continue
         remaining_pool.append((doc, title_candidates, parsed_y))
 
     print(
@@ -1141,12 +1341,8 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 inc_stat("junk_recorded")
                 return
 
-            primary_norm = normalize_for_exact_title_compare(title_candidates[0])
-            if primary_norm and parsed_y > 0:
-                with state_lock:
-                    if (primary_norm, parsed_y) in seen_title_years:
-                        inc_stat("already_in_db")
-                        return
+            cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
+            special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
 
             results = []
             for cand_q in title_candidates[:2]:
@@ -1198,9 +1394,9 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 inc_stat("no_tmdb_match")
                 return
 
-            mid = chosen_hit["id"]
+            mid = int(chosen_hit["id"])
             with state_lock:
-                if mid in seen_tmdb_ids:
+                if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
                     inc_stat("already_in_db")
                     return
 
@@ -1223,6 +1419,13 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 inc_stat("junk_recorded")
                 return
 
+            final_tier = max(cand_tier, best.get("aspect_tier", 1), estimate_source_quality_tier(ident, best["stream_url"], str(raw_title)))
+            final_special = special_flag or is_special_or_remastered_edition(ident, best["stream_url"], str(raw_title))
+            with state_lock:
+                if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, final_tier, final_special):
+                    inc_stat("already_in_db")
+                    return
+
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             require_credits = has_multiple_tmdb_versions(details["orig_title"])
             ok, _ = validate_movie_match(
@@ -1244,7 +1447,8 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
             if save_verified_movie_row(
                 ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
-                seen_tmdb_ids, seen_title_years, existing_archive_ids
+                seen_tmdb_ids, seen_title_years, existing_archive_ids,
+                tmdb_version_counts, tmdb_best_tier
             ):
                 with state_lock:
                     batch_added[0] += 1
@@ -1283,16 +1487,32 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
 def run_movies_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_MOVIES_SYNC_SECONDS
-    print("=== [FILMOVI] Pokretanje brze sinkronizacije igranih, animiranih i Ex-Yu filmova ===", flush=True)
+    print("=== [FILMOVI] Pokretanje sinkronizacije igranih, animiranih i Ex-Yu filmova (s podrškom za više verzija) ===", flush=True)
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
-    print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova.", flush=True)
-    audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts)
-    sync_curated_movie_exceptions(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years)
-    sync_ex_yu_movies(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts)
-    search_tmdb_cult_and_genres(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts)
-    mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts)
+    tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
+    print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
+    audit_and_repair_existing_movies(
+        all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
+        tmdb_version_counts, tmdb_best_tier, deadline_ts
+    )
+    sync_curated_movie_exceptions(
+        all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
+        tmdb_version_counts, tmdb_best_tier
+    )
+    sync_ex_yu_movies(
+        existing_archive_ids, seen_tmdb_ids, seen_title_years,
+        tmdb_version_counts, tmdb_best_tier, deadline_ts
+    )
+    search_tmdb_cult_and_genres(
+        existing_archive_ids, seen_tmdb_ids, seen_title_years,
+        tmdb_version_counts, tmdb_best_tier, deadline_ts
+    )
+    mine_archive_collections(
+        existing_archive_ids, seen_tmdb_ids, seen_title_years,
+        tmdb_version_counts, tmdb_best_tier, deadline_ts
+    )
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
-    print(f"=== [FILMOVI] Završeno za {elapsed_mins:.1f} min! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ===", flush=True)
+    print(f"=== [FILMOVI] Završeno za {elapsed_mins:.1f} min! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ({sum(tmdb_version_counts.values())} verzija) ===", flush=True)
 
 
 if __name__ == "__main__":
