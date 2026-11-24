@@ -143,7 +143,8 @@ fun PlayerScreen(
     var resolvedMediaType by remember { mutableStateOf<String?>(null) }
 
     var activeStreamUrl by remember { mutableStateOf("") }
-    var mp4FallbackUrlOverride by remember { mutableStateOf<String?>(null) }
+    var streamAttemptToken by remember { mutableIntStateOf(0) }
+    var triedAlternativeUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
     var triedMp4Fallback by remember { mutableStateOf(false) }
     var midStreamRetryCount by remember { mutableIntStateOf(0) }
     var playbackErrorMessage by remember { mutableStateOf("") }
@@ -182,9 +183,9 @@ fun PlayerScreen(
             .setAllocator(DefaultAllocator(true, 16 * 1024))
             .setBufferDurationsMs(
                 10_000,
-                25_000,
-                1_500,
-                3_000
+                22_000,
+                1_200,
+                2_500
             )
             .setBackBuffer(6_000, true)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -193,8 +194,8 @@ fun PlayerScreen(
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(STREAM_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(12_000)
-            .setReadTimeoutMs(25_000)
+            .setConnectTimeoutMs(8_000)
+            .setReadTimeoutMs(18_000)
             .setDefaultRequestProperties(
                 mapOf(
                     "Accept-Encoding" to "identity",
@@ -203,6 +204,7 @@ fun PlayerScreen(
             )
 
         val renderersFactory = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             .setEnableDecoderFallback(true)
 
         val audioAttributes = AudioAttributes.Builder()
@@ -214,7 +216,7 @@ fun PlayerScreen(
             .setLoadControl(loadControl)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(httpDataSourceFactory)
-                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(4))
+                    .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(3))
             )
             .build()
 
@@ -223,10 +225,51 @@ fun PlayerScreen(
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setPreferredAudioLanguages("hr", "hrv", "en", "eng")
-            .setMaxAudioChannelCount(2)
             .build()
 
         player
+    }
+
+    fun switchToFallbackStream(reasonLabel: String) {
+        if (triedMp4Fallback) {
+            isBuffering = false
+            playbackErrorMessage = "Video zapis nije javno dostupan na Archive.org-u ili format nije podržan."
+            return
+        }
+        val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        triedMp4Fallback = true
+        isBuffering = true
+        playbackErrorMessage = ""
+        coroutineScope.launch {
+            val candidate = availableVersions.firstOrNull { opt ->
+                !urlsMatchArchiveFile(opt.url, activeStreamUrl) && opt.url !in triedAlternativeUrls
+            }?.url ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
+
+            if (!candidate.isNullOrBlank() && !urlsMatchArchiveFile(candidate, activeStreamUrl)) {
+                triedAlternativeUrls = triedAlternativeUrls + activeStreamUrl + candidate
+                activeStreamUrl = candidate
+                selectedVersion = availableVersions.find { urlsMatchArchiveFile(it.url, candidate) }
+                detectedVideoFps = 0f
+                midStreamRetryCount = 0
+                streamAttemptToken++
+                exoPlayer.setMediaItem(MediaItem.fromUri(candidate), resumePos)
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = true
+                quickHudMessage = "⚡ $reasonLabel — prebačeno na alternativni izvor"
+                quickHudTick++
+            } else {
+                isBuffering = false
+                playbackErrorMessage = "Video zapis nije javno dostupan na Archive.org-u ili format nije podržan."
+            }
+        }
+    }
+
+    LaunchedEffect(activeStreamUrl, streamAttemptToken) {
+        if (activeStreamUrl.isBlank()) return@LaunchedEffect
+        delay(9_000L)
+        if (duration <= 0L && isBuffering && exoPlayer.playWhenReady && !triedMp4Fallback) {
+            switchToFallbackStream("Spor učitavanje")
+        }
     }
 
     LaunchedEffect(rawActiveCues, activeSubtitleFps, detectedVideoFps, duration, activeSubtitleName) {
@@ -282,9 +325,9 @@ fun PlayerScreen(
         detectedVideoFps = 0f
         hasMultipleAudioTracks = false
         hasNotifiedMultiAudio = false
+        triedAlternativeUrls = emptySet()
         triedMp4Fallback = false
         midStreamRetryCount = 0
-        mp4FallbackUrlOverride = null
         playbackErrorMessage = ""
         isBuffering = true
 
@@ -339,9 +382,9 @@ fun PlayerScreen(
             bestQuality?.url ?: fallbackVideoUrl
         }
 
-        val streamToStart = initialUrl
-        activeStreamUrl = streamToStart
-        exoPlayer.setMediaItem(MediaItem.fromUri(streamToStart), 0L)
+        activeStreamUrl = initialUrl
+        streamAttemptToken++
+        exoPlayer.setMediaItem(MediaItem.fromUri(initialUrl), 0L)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
@@ -375,6 +418,7 @@ fun PlayerScreen(
                     activeStreamUrl = bestOption.url
                     detectedVideoFps = 0f
                     midStreamRetryCount = 0
+                    streamAttemptToken++
                     exoPlayer.setMediaItem(MediaItem.fromUri(bestOption.url), resumePos)
                     exoPlayer.prepare()
                     exoPlayer.playWhenReady = true
@@ -587,7 +631,7 @@ fun PlayerScreen(
     LaunchedEffect(quickHudTick) {
         if (quickHudMessage.isNotEmpty()) {
             val durationMs = when {
-                quickHudMessage.startsWith("🔊") -> 4500L
+                quickHudMessage.startsWith("🔊") || quickHudMessage.startsWith("⚡") -> 4500L
                 quickHudMessage.startsWith("💬") || quickHudMessage.startsWith("🌐") ||
                     quickHudMessage.startsWith("✅") || quickHudMessage.startsWith("🎞️") -> 3500L
                 else -> 2000L
@@ -644,7 +688,8 @@ fun PlayerScreen(
                     isBuffering = true
                     playbackErrorMessage = ""
                     coroutineScope.launch {
-                        delay(800L * midStreamRetryCount)
+                        delay(700L * midStreamRetryCount)
+                        streamAttemptToken++
                         exoPlayer.setMediaItem(MediaItem.fromUri(activeStreamUrl), resumePos)
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = true
@@ -652,24 +697,8 @@ fun PlayerScreen(
                     return
                 }
 
-                if (!triedMp4Fallback && (mp4FallbackUrlOverride != null || activeStreamUrl.contains("archive.org/download/"))) {
-                    triedMp4Fallback = true
-                    isBuffering = true
-                    coroutineScope.launch {
-                        val nextAlt = availableVersions.firstOrNull { !urlsMatchArchiveFile(it.url, activeStreamUrl) }?.url
-                            ?: mp4FallbackUrlOverride
-                            ?: findCompatibleMp4Fallback(activeStreamUrl, movieTitle)
-                        if (nextAlt != null && nextAlt != activeStreamUrl) {
-                            activeStreamUrl = nextAlt
-                            midStreamRetryCount = 0
-                            exoPlayer.setMediaItem(MediaItem.fromUri(nextAlt), resumePos)
-                            exoPlayer.prepare()
-                            exoPlayer.playWhenReady = true
-                        } else {
-                            isBuffering = false
-                            playbackErrorMessage = "Video zapis nije javno dostupan na Archive.org-u ili format nije podržan."
-                        }
-                    }
+                if (activeStreamUrl.contains("archive.org/download/") || availableVersions.size > 1) {
+                    switchToFallbackStream("Greška izvora")
                 } else {
                     isBuffering = false
                     playbackErrorMessage = "Greška pri učitavanju videa (${error.errorCodeName})."
@@ -1198,6 +1227,7 @@ fun PlayerScreen(
                                     activeStreamUrl = version.url
                                     detectedVideoFps = 0f
                                     midStreamRetryCount = 0
+                                    streamAttemptToken++
                                     exoPlayer.setMediaItem(MediaItem.fromUri(version.url), savedPos)
                                     exoPlayer.prepare()
                                     exoPlayer.playWhenReady = true
@@ -2258,7 +2288,7 @@ private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: Stri
         val cleanHint = titleHint.replace(Regex("\\(\\d{4}\\)"), "").trim().lowercase()
 
         var bestMp4Url: String? = null
-        var bestScore = -1L
+        var bestScore = Long.MIN_VALUE
 
         for (i in 0 until files.length()) {
             val f = files.optJSONObject(i) ?: continue
@@ -2269,9 +2299,11 @@ private suspend fun findCompatibleMp4Fallback(failedUrl: String, titleHint: Stri
             if (size < 20_000_000L) continue
 
             val lower = name.lowercase()
-            var score = size / 1_000_000L
-            if (failedStem.isNotBlank() && lower.contains(failedStem.take(18))) score += 10_000L
-            if (cleanHint.length >= 4 && lower.contains(cleanHint)) score += 5_000L
+            val height = f.optString("height").toIntOrNull() ?: 0
+            val isDeriv = lower.endsWith(".ia.mp4") || f.optString("source").equals("derivative", ignoreCase = true)
+            var score = scoreVersionSmoothness(name, height, size, isDeriv)
+            if (failedStem.isNotBlank() && lower.contains(failedStem.take(18))) score += 200L
+            if (cleanHint.length >= 4 && lower.contains(cleanHint)) score += 100L
 
             if (score > bestScore) {
                 bestScore = score
