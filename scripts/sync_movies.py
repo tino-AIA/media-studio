@@ -40,10 +40,12 @@ MAX_MOVIES_SYNC_SECONDS = 165 * 60
 BATCH_SIZE_CANDIDATES = 350
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
 
-# Samo eksplicitni pokazatelji najava, testova, komentara i loših kopija (bez rizičnih kratkih kratica)
+# Eksplicitni pokazatelji najava, specijala, dokumentaraca o snimanju, fan-filmova i loših kopija
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|preview|promo|commercial|camrip|telesync|telecine|"
-    r"screener|dvdscr|workprint|commentary|behind[\s._-]+the[\s._-]+scenes)\b|"
+    r"screener|dvdscr|workprint|commentary|featurette|parody|rifftrax|mockbuster)\b|"
+    r"holiday[\s._-]+special|tv[\s._-]+special|making[\s._-]+of|"
+    r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
     r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage)"
 )
 
@@ -62,8 +64,8 @@ EX_YU_DETECTION_KEYWORDS = (
 )
 
 
-def is_explicit_junk_item(ident, raw_title):
-    blob = f"{ident} {raw_title}"
+def is_explicit_junk_item(ident, raw_title, extra_text=""):
+    blob = f"{ident} {raw_title} {extra_text}"
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
     return bool(EXPLICIT_JUNK_RE.search(blob))
@@ -203,7 +205,7 @@ TMDB_DISCOVER_GENRE_SEEDS = [
 ]
 
 CULT_AND_ANIMATION_SEEDS = [
-    "Dune", "Star Wars", "The Empire Strikes Back", "Return of the Jedi",
+    "Dune", "Star Wars: Episode IV - A New Hope", "The Empire Strikes Back", "Return of the Jedi",
     "2001: A Space Odyssey", "2010: The Year We Make Contact", "Hair", "Footloose",
     "Dirty Dancing", "Grease", "Saturday Night Fever", "Flashdance", "Fame",
     "The Blues Brothers", "The Rocky Horror Picture Show", "West Side Story",
@@ -272,6 +274,11 @@ CURATED_MOVIE_EXCEPTIONS = [
         "min_mins": 150,
     },
 ]
+
+CURATED_ARCHIVE_IDS = {
+    "dune-david-lynch-1984",
+    "DuneTheCompleteSagaVimeo",
+}
 
 
 def extract_archive_title_candidates(raw_title, ident):
@@ -385,6 +392,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
     en_title = details.get("en_title") or orig_title
     orig_lang = details.get("original_language", "")
     is_ex_yu = orig_lang in EX_YU_LANGS
+    is_doc = 99 in (details.get("genre_ids") or [])
 
     search_terms = []
     for t in (orig_title, hr_title, en_title):
@@ -403,7 +411,11 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
     for term in search_terms[:2]:
         if deadline_ts is not None and time.monotonic() > deadline_ts:
             return None
-        query = f'title:"{term}"{year_clause} AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news AND -subject:review'
+        query = (
+            f'title:"{term}"{year_clause} AND mediatype:(movies OR web) '
+            f'AND -subject:trailer AND -subject:news AND -subject:review '
+            f'AND -title:"holiday special" AND -title:"making of"'
+        )
         data = safe_get(
             "https://archive.org/advancedsearch.php",
             params={
@@ -426,11 +438,24 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
             break
         if not ident or ident in exclude_ids or ident.lower().startswith(("youtube-", "yt-")):
             continue
+        raw_doc_title = doc.get("title") or ident
+        if isinstance(raw_doc_title, list):
+            raw_doc_title = raw_doc_title[0]
+        if not is_doc and is_explicit_junk_item(ident, raw_doc_title):
+            continue
+
         videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
         if not videos:
             continue
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
+
+        if not is_doc and is_explicit_junk_item(
+            ident,
+            arch_md.get("title") or raw_doc_title,
+            f"{best.get('filename', '')} {arch_md.get('subject', '')}"
+        ):
+            continue
 
         ok, _ = validate_movie_match(
             ident,
@@ -464,7 +489,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
 
 def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/4 Provjera jezika, naslova i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
+    print(f"1/4 Provjera jezika, naslova, specijala i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
@@ -496,6 +521,22 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
         if not is_author_promoted and base_ident:
             md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=8)
             arch_md = (md_res or {}).get("result") or {}
+
+        # Provjera je li postojeći zapis u bazi zapravo TV/Holiday special, making-of ili krivi upar
+        is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
+        is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
+        if not is_curated and not is_doc_row and is_explicit_junk_item(
+            base_ident,
+            arch_md.get("title") or "",
+            f"{stream_url} {arch_md.get('subject', '')}"
+        ):
+            supabase_patch_row("catalog_items", row_id, {"is_valid": False})
+            with state_lock:
+                if tmdb_id > 0:
+                    seen_tmdb_ids.discard(tmdb_id)
+                removed_count[0] += 1
+            print(f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})", flush=True)
+            return
 
         has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
         looks_blocked_text = contains_blocked_regional_or_arabic(
@@ -1157,6 +1198,7 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 inc_stat("no_tmdb_match")
                 return
 
+            is_doc = 99 in (details.get("genre_ids") or [])
             is_anim = 16 in (details.get("genre_ids") or [])
             videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
             if not videos:
@@ -1164,6 +1206,16 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
                 return
             best = pick_best_video_file(videos)
             arch_mins = best["duration_mins"]
+
+            if not is_doc and is_explicit_junk_item(
+                ident,
+                arch_md.get("title") or raw_title,
+                f"{best.get('filename', '')} {arch_md.get('subject', '')}"
+            ):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+                inc_stat("junk_recorded")
+                return
+
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             require_credits = has_multiple_tmdb_versions(details["orig_title"])
             ok, _ = validate_movie_match(
