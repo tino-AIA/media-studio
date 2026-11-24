@@ -40,11 +40,11 @@ MAX_MOVIES_SYNC_SECONDS = 165 * 60
 BATCH_SIZE_CANDIDATES = 350
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
 
-# Eksplicitni pokazatelji najava, specijala, dokumentaraca o snimanju, fan-filmova i loših kopija
+# Eksplicitni pokazatelji najava, holiday specijala, making-of dokumentaraca, fan-filmova i loših kopija
 EXPLICIT_JUNK_RE = re.compile(
-    r"(?i)(?:\b(?:trailer|sample|teaser|preview|promo|commercial|camrip|telesync|telecine|"
-    r"screener|dvdscr|workprint|commentary|featurette|parody|rifftrax|mockbuster)\b|"
-    r"holiday[\s._-]+special|tv[\s._-]+special|making[\s._-]+of|"
+    r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
+    r"screener|dvdscr|workprint|featurette|parody|rifftrax|mockbuster)\b|"
+    r"holiday[\s._-]+special|making[\s._-]+of|"
     r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
     r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage)"
 )
@@ -64,8 +64,8 @@ EX_YU_DETECTION_KEYWORDS = (
 )
 
 
-def is_explicit_junk_item(ident, raw_title, extra_text=""):
-    blob = f"{ident} {raw_title} {extra_text}"
+def is_explicit_junk_item(ident, raw_title):
+    blob = f"{ident} {raw_title}"
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
     return bool(EXPLICIT_JUNK_RE.search(blob))
@@ -450,11 +450,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
 
-        if not is_doc and is_explicit_junk_item(
-            ident,
-            arch_md.get("title") or raw_doc_title,
-            f"{best.get('filename', '')} {arch_md.get('subject', '')}"
-        ):
+        if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_doc_title):
             continue
 
         ok, _ = validate_movie_match(
@@ -488,6 +484,22 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None):
 
 
 def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years, deadline_ts):
+    # Vrati zapise koji su pogrešno deaktivirani zbog subject tagova (npr. american-pie-2-unrated)
+    for row in all_movie_rows:
+        if not row.get("is_valid", True) and int(row.get("tmdb_id") or 0) > 0:
+            r_ident = (row.get("archive_id") or "").split(",tmdb-")[0].strip()
+            r_title = row.get("title") or ""
+            if r_ident and not is_explicit_junk_item(r_ident, r_title) and \
+               not contains_hentai_or_adult(r_title, row.get("description_hr"), r_ident) and \
+               not contains_blocked_regional_or_arabic(r_title, row.get("description_hr"), r_ident):
+                supabase_patch_row("catalog_items", row["id"], {"is_valid": True})
+                row["is_valid"] = True
+                seen_tmdb_ids.add(int(row["tmdb_id"]))
+                norm_t = normalize_for_exact_title_compare(r_title)
+                if norm_t:
+                    seen_title_years.add((norm_t, int(row.get("release_year") or 0)))
+                print(f"  ↺ Vraćen legitimni zapis u bazu: {r_title} ({r_ident})", flush=True)
+
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
     print(f"1/4 Provjera jezika, naslova, specijala i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
@@ -522,13 +534,12 @@ def audit_and_repair_existing_movies(all_movie_rows, existing_archive_ids, seen_
             md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=8)
             arch_md = (md_res or {}).get("result") or {}
 
-        # Provjera je li postojeći zapis u bazi zapravo TV/Holiday special, making-of ili krivi upar
+        # Provjera je li postojeći zapis u bazi zapravo Holiday special ili making-of (samo po identu i naslovu, bez subject tagova)
         is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
         if not is_curated and not is_doc_row and is_explicit_junk_item(
             base_ident,
-            arch_md.get("title") or "",
-            f"{stream_url} {arch_md.get('subject', '')}"
+            arch_md.get("title") or ""
         ):
             supabase_patch_row("catalog_items", row_id, {"is_valid": False})
             with state_lock:
@@ -1207,11 +1218,7 @@ def mine_archive_collections(existing_archive_ids, seen_tmdb_ids, seen_title_yea
             best = pick_best_video_file(videos)
             arch_mins = best["duration_mins"]
 
-            if not is_doc and is_explicit_junk_item(
-                ident,
-                arch_md.get("title") or raw_title,
-                f"{best.get('filename', '')} {arch_md.get('subject', '')}"
-            ):
+            if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("junk_recorded")
                 return
