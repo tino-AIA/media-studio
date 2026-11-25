@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.Coil
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
@@ -302,7 +303,7 @@ fun HomeScreen(
                         .size(420, 280)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
-                        .allowHardware(false)
+                        .allowHardware(true)
                         .build()
                 }
                 Image(
@@ -489,6 +490,10 @@ fun HomeScreen(
                             onDispose {
                                 viewModel.savedHomeScrollIndex = favGridState.firstVisibleItemIndex
                                 viewModel.savedHomeScrollOffset = favGridState.firstVisibleItemScrollOffset
+                                try {
+                                    Coil.imageLoader(context).memoryCache?.clear()
+                                } catch (_: Exception) {
+                                }
                             }
                         }
 
@@ -552,6 +557,10 @@ fun HomeScreen(
                         onDispose {
                             viewModel.savedHomeScrollIndex = homeListState.firstVisibleItemIndex
                             viewModel.savedHomeScrollOffset = homeListState.firstVisibleItemScrollOffset
+                            try {
+                                Coil.imageLoader(context).memoryCache?.clear()
+                            } catch (_: Exception) {
+                            }
                         }
                     }
 
@@ -1208,7 +1217,7 @@ fun NetflixTop10Card(
                         .size(180, 270)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
-                        .allowHardware(false)
+                        .allowHardware(true)
                         .build()
                 }
                 val painter = rememberAsyncImagePainter(model = imageRequest)
@@ -1230,7 +1239,7 @@ fun NetflixTop10Card(
                                 .size(180, 270)
                                 .scale(Scale.FILL)
                                 .bitmapConfig(Bitmap.Config.RGB_565)
-                                .allowHardware(false)
+                                .allowHardware(true)
                                 .build()
                         }
                         Image(
@@ -1389,7 +1398,7 @@ fun MovieCard(
                         .size(180, 270)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
-                        .allowHardware(false)
+                        .allowHardware(true)
                         .build()
                 }
                 val painter = rememberAsyncImagePainter(model = imageRequest)
@@ -1419,7 +1428,7 @@ fun MovieCard(
                                     .size(180, 270)
                                     .scale(Scale.FILL)
                                     .bitmapConfig(Bitmap.Config.RGB_565)
-                                    .allowHardware(false)
+                                    .allowHardware(true)
                                     .build()
                             }
                             Image(
