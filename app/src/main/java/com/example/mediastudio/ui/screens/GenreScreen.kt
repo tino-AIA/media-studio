@@ -113,7 +113,6 @@ fun GenreScreen(
         onBackClick()
     }
 
-    // Automatsko pomicanje na vrh i prebacivanje fokusa na prvu karticu nove stranice
     LaunchedEffect(movies, isLoading, currentPage, targetPageForFirstFocus) {
         if (targetPageForFirstFocus > 0 &&
             !isLoading &&
@@ -451,7 +450,7 @@ fun RatedMovieGridCard(
                             .size(180, 270)
                             .scale(Scale.FILL)
                             .bitmapConfig(Bitmap.Config.RGB_565)
-                            .allowHardware(false)
+                            .allowHardware(true)
                             .build()
                     }
                     val painter = rememberAsyncImagePainter(model = imageRequest)
@@ -479,7 +478,7 @@ fun RatedMovieGridCard(
                                         .size(180, 270)
                                         .scale(Scale.FILL)
                                         .bitmapConfig(Bitmap.Config.RGB_565)
-                                        .allowHardware(false)
+                                        .allowHardware(true)
                                         .build()
                                 }
                                 Image(
