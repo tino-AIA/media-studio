@@ -143,11 +143,21 @@ fun HomeScreen(
     }
 
     val isSeriesTab = selectedTab == ContentTab.SERIES
-    val isDrawerInteractive = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
+    val isDrawerOpen = drawerState.isOpen
 
-    LaunchedEffect(isLoading, currentHeroMovie, lastFocusedMovieId, isDrawerInteractive) {
-        if (!isLoading && !isDrawerInteractive && !hasRequestedInitialFocus && lastFocusedMovieId.isNullOrBlank()) {
-            delay(100L)
+    // Odmah pri ulasku na ekran postavi fokus na aktivni tab (uvijek je vidljiv i spreman),
+    // a kad se učita Hero banner prebaci fokus na Gledaj odmah
+    LaunchedEffect(Unit) {
+        delay(80L)
+        try {
+            activeTabFR.requestFocus()
+        } catch (_: Exception) {
+        }
+    }
+
+    LaunchedEffect(isLoading, currentHeroMovie, lastFocusedMovieId, isDrawerOpen) {
+        if (!isLoading && !isDrawerOpen && !hasRequestedInitialFocus && lastFocusedMovieId.isNullOrBlank()) {
+            delay(120L)
             try {
                 if (currentHeroMovie != null && selectedTab != ContentTab.FAVORITES) {
                     heroPlayFocusRequester.requestFocus()
@@ -156,12 +166,16 @@ fun HomeScreen(
                 }
                 hasRequestedInitialFocus = true
             } catch (_: Exception) {
+                try {
+                    activeTabFR.requestFocus()
+                } catch (_: Exception) {
+                }
             }
         }
     }
 
-    LaunchedEffect(isDrawerInteractive) {
-        if (isDrawerInteractive) {
+    LaunchedEffect(isDrawerOpen) {
+        if (isDrawerOpen) {
             delay(80L)
             try {
                 drawerFirstItemFocusRequester.requestFocus()
@@ -171,7 +185,7 @@ fun HomeScreen(
     }
 
     BackHandler {
-        if (isDrawerInteractive) {
+        if (isDrawerOpen) {
             scope.launch {
                 drawerState.close()
                 delay(50L)
@@ -213,7 +227,6 @@ fun HomeScreen(
         initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
     )
 
-    // Siguran prijelaz s bilo kojeg gornjeg taba prema dolje (na Hero banner, prvi red ili favorite)
     val tabDownKeyModifier = Modifier.onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
             when {
@@ -261,13 +274,13 @@ fun HomeScreen(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = isDrawerInteractive,
+        gesturesEnabled = isDrawerOpen,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(280.dp),
                 drawerContainerColor = Color(0xFF121212)
             ) {
-                if (isDrawerInteractive) {
+                if (isDrawerOpen) {
                     Column(
                         modifier = Modifier
                             .verticalScroll(rememberScrollState())
@@ -364,7 +377,6 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .focusProperties { canFocus = !isDrawerInteractive }
         ) {
             if (currentHeroPosterUrl.isNotEmpty()) {
                 val heroBgRequest = remember(currentHeroPosterUrl) {
@@ -478,7 +490,6 @@ fun HomeScreen(
                                         left = FocusRequester.Cancel
                                         right = animTabFR
                                         up = menuFocusRequester
-                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -493,7 +504,6 @@ fun HomeScreen(
                                         left = moviesTabFR
                                         right = seriesTabFR
                                         up = menuFocusRequester
-                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -508,7 +518,6 @@ fun HomeScreen(
                                         left = animTabFR
                                         right = concertsTabFR
                                         up = searchFocusRequester
-                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -523,7 +532,6 @@ fun HomeScreen(
                                         left = seriesTabFR
                                         right = favoritesTabFR
                                         up = searchFocusRequester
-                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -538,7 +546,6 @@ fun HomeScreen(
                                         left = concertsTabFR
                                         right = FocusRequester.Cancel
                                         up = searchFocusRequester
-                                        if (favoriteMovies.isNotEmpty()) down = firstFavoriteFocusRequester
                                     }
                             )
                         }
@@ -708,7 +715,6 @@ fun HomeScreen(
                                                         left = FocusRequester.Cancel
                                                         right = heroDetailsFocusRequester
                                                         up = activeTabFR
-                                                        if (hasRowsVisible) down = firstRowFocusRequester
                                                     }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
@@ -732,7 +738,6 @@ fun HomeScreen(
                                                         left = heroPlayFocusRequester
                                                         right = FocusRequester.Cancel
                                                         up = activeTabFR
-                                                        if (hasRowsVisible) down = firstRowFocusRequester
                                                     }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
@@ -777,13 +782,6 @@ fun HomeScreen(
                             val (genre, itemsList) = activeCategories[index]
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             val isRowSeries = isSeriesTab || genre.isSeriesCategory
-                            val firstRowUpModifier = if (index == 0) {
-                                Modifier.focusProperties {
-                                    up = if (hasHeroVisible) heroPlayFocusRequester else activeTabFR
-                                }
-                            } else {
-                                Modifier
-                            }
 
                             MovieCategoryRow(
                                 genre = genre,
@@ -792,7 +790,6 @@ fun HomeScreen(
                                 isSeries = isRowSeries,
                                 viewModel = viewModel,
                                 authorImages = authorImages,
-                                modifier = firstRowUpModifier,
                                 firstItemFocusRequester = if (index == 0) firstRowFocusRequester else null,
                                 lastFocusedMovieId = lastFocusedMovieId,
                                 lastFocusedRowTitle = lastFocusedRowTitle,
