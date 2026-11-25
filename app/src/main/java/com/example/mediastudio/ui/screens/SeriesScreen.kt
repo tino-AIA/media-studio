@@ -67,6 +67,14 @@ import java.net.URLEncoder
 
 private const val SERIES_TMDB_API_KEY = "8265bd1679663a7ea12ac168da84d2e8"
 
+private data class TmdbSeriesDetailsHr(
+    val hrName: String = "",
+    val origName: String = "",
+    val overviewHr: String = "",
+    val cast: String = "",
+    val creators: String = ""
+)
+
 private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Modifier = composed {
     var lastVerticalStepTime by remember { mutableLongStateOf(0L) }
     this.onPreviewKeyEvent { event ->
@@ -86,26 +94,46 @@ private fun Modifier.throttleSeriesVerticalDpad(minIntervalMs: Long = 105L): Mod
     }
 }
 
-private fun looksLikeEnglishText(text: String): Boolean {
-    if (text.isBlank()) return false
-    val padded = " ${text.lowercase()} "
-    val englishMarkers = listOf(
-        " the ", " and ", " with ", " from ", " into ", " their ",
-        " his ", " her ", " show ", " story ", " when ", " where ",
-        " which ", " while ", " after ", " before ", " through ", " against ",
-        " of ", " in ", " to "
+private fun seriesNeedsCroatianTranslation(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.length < 12) return false
+    val padded = " ${trimmed.lowercase()} "
+
+    val foreignMarkers = listOf(
+        " the ", " and ", " with ", " from ", " into ", " their ", " his ", " her ",
+        " which ", " while ", " after ", " before ", " through ", " against ", " about ",
+        " when ", " where ", " who ", " whom ", " whose ", " story ", " series ", " show ",
+        " der ", " die ", " das ", " und ", " mit ", " von ", " ein ", " eine ", " ist ", " auf ",
+        " le ", " la ", " les ", " des ", " une ", " dans ", " pour ", " avec ", " sur ", " est ",
+        " el ", " los ", " las ", " del ", " una ", " por ", " para ", " con ", " que ", " como ",
+        " che ", " gli ", " della ", " delle ", " nel ", " nella ", " sono ", " stato "
     )
-    val hits = englishMarkers.count { padded.contains(it) }
-    val hasCroatianChars = text.any { it in "čćžšđČĆŽŠĐ" }
-    return hits >= 2 && !hasCroatianChars
+    val foreignHits = foreignMarkers.count { padded.contains(it) }
+
+    val croatianMarkers = listOf(
+        " je ", " su ", " bio ", " bila ", " bilo ", " koji ", " koja ", " koje ", " kojeg ",
+        " nakon ", " tijekom ", " između ", " prema ", " dok ", " ali ", " jer ", " kada ",
+        " njegov ", " njezin ", " njihov ", " kako ", " zbog ", " kroz ", " protiv ", " svijet ",
+        " život ", " priča ", " obitelj ", " prijatelj ", " grad ", " godina ", " godine "
+    )
+    val hrHits = croatianMarkers.count { padded.contains(it) }
+    val hasHrDiacritics = trimmed.any { it in "čćžšđČĆŽŠĐ" }
+
+    if (foreignHits >= 2 && foreignHits > hrHits) return true
+    if (hrHits == 0 && !hasHrDiacritics && trimmed.length >= 25) return true
+    return false
 }
 
 private suspend fun translateSeriesDescriptionToCroatian(text: String): String = withContext(Dispatchers.IO) {
-    if (text.isBlank() || text.startsWith("Opis za ovaj naslov") || !looksLikeEnglishText(text)) {
-        return@withContext text
+    val trimmedInput = text.trim()
+    if (trimmedInput.isBlank() || trimmedInput.startsWith("Opis za ovaj naslov") || !seriesNeedsCroatianTranslation(trimmedInput)) {
+        return@withContext trimmedInput
     }
     try {
-        val limitedText = text.take(1500)
+        val limitedText = trimmedInput
+            .replace("\r\n", "\n")
+            .replace(Regex("\\n+"), ". ")
+            .take(1600)
         val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
         val translatedBuilder = StringBuilder()
 
@@ -127,9 +155,9 @@ private suspend fun translateSeriesDescriptionToCroatian(text: String): String =
             }
             translatedBuilder.append(" ")
         }
-        translatedBuilder.toString().trim().ifBlank { text }
+        translatedBuilder.toString().trim().ifBlank { trimmedInput }
     } catch (_: Exception) {
-        text
+        trimmedInput
     }
 }
 
@@ -160,7 +188,7 @@ private fun extractSeriesCastHr(text: String): String {
     return m?.groupValues?.get(1)?.trim().orEmpty()
 }
 
-private suspend fun fetchTmdbSeriesCastHr(tmdbId: Int, title: String): String = withContext(Dispatchers.IO) {
+private suspend fun fetchTmdbSeriesDetailsHr(tmdbId: Int, title: String): TmdbSeriesDetailsHr = withContext(Dispatchers.IO) {
     try {
         var resolvedId = tmdbId
         if (resolvedId <= 0) {
@@ -175,47 +203,89 @@ private suspend fun fetchTmdbSeriesCastHr(tmdbId: Int, title: String): String = 
                 resolvedId = obj.optJSONArray("results")?.optJSONObject(0)?.optInt("id", 0) ?: 0
             }
         }
-        if (resolvedId <= 0) return@withContext ""
+        if (resolvedId <= 0) return@withContext TmdbSeriesDetailsHr()
 
-        val url = "https://api.themoviedb.org/3/tv/$resolvedId/credits?api_key=$SERIES_TMDB_API_KEY&language=hr-HR"
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-        val castArr = obj.optJSONArray("cast") ?: return@withContext ""
+        val hrUrl = "https://api.themoviedb.org/3/tv/$resolvedId?api_key=$SERIES_TMDB_API_KEY&language=hr-HR&append_to_response=credits"
+        val hrConn = URL(hrUrl).openConnection() as HttpURLConnection
+        hrConn.connectTimeout = 5000
+        hrConn.readTimeout = 5000
+        val hrObj = JSONObject(hrConn.inputStream.bufferedReader().use { it.readText() })
 
-        val names = mutableListOf<String>()
-        for (i in 0 until minOf(castArr.length(), 6)) {
-            val n = castArr.optJSONObject(i)?.optString("name", "")?.trim().orEmpty()
-            if (n.isNotBlank() && n !in names) names.add(n)
+        val hrName = hrObj.optString("name", "").trim()
+        val origName = hrObj.optString("original_name", "").trim()
+        var overviewHr = hrObj.optString("overview", "").trim()
+
+        if (overviewHr.isBlank()) {
+            val enUrl = "https://api.themoviedb.org/3/tv/$resolvedId?api_key=$SERIES_TMDB_API_KEY&language=en-US"
+            val enConn = URL(enUrl).openConnection() as HttpURLConnection
+            enConn.connectTimeout = 5000
+            enConn.readTimeout = 5000
+            val enObj = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
+            val enOverview = enObj.optString("overview", "").trim()
+            if (enOverview.isNotBlank()) {
+                overviewHr = translateSeriesDescriptionToCroatian(enOverview)
+            }
+        } else {
+            overviewHr = translateSeriesDescriptionToCroatian(overviewHr)
         }
-        names.joinToString(", ")
+
+        val creatorsArr = hrObj.optJSONArray("created_by")
+        val creatorNames = mutableListOf<String>()
+        if (creatorsArr != null) {
+            for (i in 0 until creatorsArr.length()) {
+                val cName = creatorsArr.optJSONObject(i)?.optString("name", "")?.trim().orEmpty()
+                if (cName.isNotBlank() && cName !in creatorNames) creatorNames.add(cName)
+            }
+        }
+
+        val castArr = hrObj.optJSONObject("credits")?.optJSONArray("cast")
+        val castNames = mutableListOf<String>()
+        if (castArr != null) {
+            for (i in 0 until minOf(castArr.length(), 6)) {
+                val n = castArr.optJSONObject(i)?.optString("name", "")?.trim().orEmpty()
+                if (n.isNotBlank() && n !in castNames) castNames.add(n)
+            }
+        }
+
+        TmdbSeriesDetailsHr(
+            hrName = hrName,
+            origName = origName,
+            overviewHr = overviewHr,
+            cast = castNames.joinToString(", "),
+            creators = creatorNames.joinToString(", ")
+        )
     } catch (_: Exception) {
-        ""
+        TmdbSeriesDetailsHr()
     }
 }
 
-private suspend fun fetchSeriesWikiHr(title: String): String = withContext(Dispatchers.IO) {
-    try {
-        val clean = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
-        if (clean.isBlank()) return@withContext ""
-        val encoded = URLEncoder.encode(clean, "UTF-8")
-        val url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&explaintext=1&format=json&redirects=1")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-        val pages = json.getJSONObject("query").getJSONObject("pages")
-        val pageId = pages.keys().next()
-        if (pageId != "-1") {
-            val extract = pages.getJSONObject(pageId).optString("extract").trim()
-            if (extract.isNotEmpty()) return@withContext extract.take(1600)
+private suspend fun fetchSeriesWikiHr(titlesToTry: List<String>): String = withContext(Dispatchers.IO) {
+    val cleanTitles = titlesToTry
+        .map { it.replace(Regex("\\(\\d{4}\\)"), "").trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+
+    for (clean in cleanTitles) {
+        for (q in listOf("$clean (TV serija)", "$clean (serija)", clean)) {
+            try {
+                val encoded = URLEncoder.encode(q, "UTF-8")
+                val url = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val pages = json.getJSONObject("query").getJSONObject("pages")
+                val pageId = pages.keys().next()
+                if (pageId != "-1") {
+                    val extract = pages.getJSONObject(pageId).optString("extract").trim()
+                    if (extract.length > 35) return@withContext extract.take(1200)
+                }
+            } catch (_: Exception) {
+            }
         }
-        ""
-    } catch (_: Exception) {
-        ""
     }
+    ""
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -288,17 +358,28 @@ fun SeriesScreen(
         val dbDesc = SupabaseRepository.loadItemDescription(series.identifier)
         SupabaseRepository.loadSeriesEpisodes(series.identifier)
         val fullInfo = ArchiveMetadataModule.fetchSeriesFullInfo(series.identifier, series.title)
-        val rawDesc = fullInfo.description.takeIf {
+        val archiveDesc = fullInfo.description.takeIf {
             it.isNotBlank() && !it.startsWith("Opis za ovaj naslov")
-        } ?: dbDesc.ifBlank { fullInfo.description }
-        val hrDesc = translateSeriesDescriptionToCroatian(rawDesc)
-        seriesDescription = hrDesc
+        }.orEmpty()
 
-        val wikiHr = fetchSeriesWikiHr(series.title)
-        val combinedText = "$hrDesc $wikiHr"
-        seriesDirectorHr = ""
-        val tmdbCast = fetchTmdbSeriesCastHr(item?.tmdbId ?: 0, series.title)
-        seriesCastHr = tmdbCast.ifBlank { extractSeriesCastHr(combinedText) }
+        // 1. TMDB (hr-HR) -> 2. Hrvatska Wikipedija -> 3. Baza/Archive prevedeno na hrvatski
+        val tmdbSeries = fetchTmdbSeriesDetailsHr(item?.tmdbId ?: 0, series.title)
+        val wikiHr = fetchSeriesWikiHr(listOf(tmdbSeries.hrName, series.title, tmdbSeries.origName))
+        val dbDescHr = translateSeriesDescriptionToCroatian(dbDesc)
+        val archiveDescHr = translateSeriesDescriptionToCroatian(archiveDesc)
+
+        val finalHrDesc = tmdbSeries.overviewHr
+            .ifBlank { wikiHr }
+            .ifBlank { dbDescHr }
+            .ifBlank { archiveDescHr }
+
+        seriesDescription = finalHrDesc
+
+        val combinedText = listOf(finalHrDesc, wikiHr, dbDescHr, archiveDescHr)
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+        seriesDirectorHr = tmdbSeries.creators
+        seriesCastHr = tmdbSeries.cast.ifBlank { extractSeriesCastHr(combinedText) }
         seriesAwardsHr = extractSeriesAwardsHr(combinedText)
 
         seasons = fullInfo.seasons
@@ -482,7 +563,7 @@ fun SeriesScreen(
                                 SeriesDetailLine("Žanr", seriesGenreHr)
                                 SeriesDetailLine("Godina proizvodnje", resolvedYear)
                                 SeriesDetailLine("Glavni glumci", seriesCastHr)
-                                SeriesDetailLine("Redatelj", seriesDirectorHr)
+                                SeriesDetailLine("Autori", seriesDirectorHr)
                                 SeriesDetailLine("Nagrade", seriesAwardsHr)
 
                                 if (seriesDescription.isNotBlank()) {
