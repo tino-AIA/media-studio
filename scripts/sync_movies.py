@@ -58,7 +58,7 @@ EXPLICIT_JUNK_RE = re.compile(
 
 GENERIC_CAMERA_OR_RIP_FILENAME_RE = re.compile(
     r"(?i)^(?:img|vid|mov|dsc|dcim|title|dvd[\s._-]*video|video|screen[\s._-]*recording|"
-    r"snapsave|rumble|original|[a-z]\d+[\s._-]*t\d+|\d+[\s._-]*\d+|"
+    r"snapsave|rumble|original|m4v\d+|nveexport|[a-z]\d+[\s._-]*t\d+|\d+[\s._-]*\d+|"
     r"[0-9a-f]{12,}|[a-z0-9]{10,})$"
 )
 
@@ -85,7 +85,7 @@ EX_YU_DETECTION_KEYWORDS = (
     "čarobnjakov šešir", "carobnjakov sesir", "surogat"
 )
 
-_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia"}
+_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia", "xvid", "divx", "1cd", "2cd"}
 _SHORT_NUM_TOKENS = {"8", "9", "12"}
 
 
@@ -94,12 +94,17 @@ def _tokenize_words(text):
         return set()
     decoded = unquote(str(text)).replace("½", " 1 2 ").replace("¼", " 1 4 ").replace("¾", " 3 4 ")
     spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", decoded)
+    spaced = re.sub(r"([a-zA-Z])(\d)", r"\1 \2", spaced)
     cleaned = re.sub(r"[\W_]+", " ", spaced.lower()).strip()
-    return {w for w in cleaned.split() if (len(w) >= 3 or w in _SHORT_NUM_TOKENS) and w not in _STOP_WORDS}
+    tokens = [w for w in cleaned.split() if w not in _STOP_WORDS]
+    long_tokens = {w for w in tokens if len(w) >= 3 or w in _SHORT_NUM_TOKENS}
+    if long_tokens:
+        return long_tokens
+    return {w for w in tokens if len(w) >= 2}
 
 
 def _word_prefixes(words):
-    return {w[:4] for w in words if len(w) >= 4} | {w for w in words if len(w) == 3 or w in _SHORT_NUM_TOKENS}
+    return {w[:4] for w in words if len(w) >= 4} | {w for w in words if len(w) < 4}
 
 
 def is_explicit_junk_item(ident, raw_title, extra_text=""):
@@ -125,10 +130,10 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
 
 def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0):
     """
-    Višeslojna provjera (podržava deklinacije stranih jezika putem 4-slovnog korijena i kratke naslove poput 8½):
+    Provjera novih kandidata:
     1. Ako datoteka ima smislene riječi, provjerava podudaranje korijena riječi s naslovima / Archive metapodacima.
-    2. Ako je datoteka generička (npr. IMG_9009.mp4, A4_t00.mkv, DVD_VIDEO.mp4, ScreenRecording...),
-       zahtijeva da sam Archive.org naslov (arch_md.title) odgovara očekivanom filmu.
+    2. Ako je datoteka generička (npr. IMG_9009.mp4, M4V10006.mp4, DVD_VIDEO.mp4),
+       zahtijeva da Archive.org naslov ili ID odgovara očekivanom filmu.
     """
     arch_title = str((arch_md or {}).get("title") or "")
     arch_creator = str((arch_md or {}).get("creator") or "")
@@ -155,8 +160,7 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
     stem_tokens = _tokenize_words(stem)
 
     if not stem_tokens or GENERIC_CAMERA_OR_RIP_FILENAME_RE.match(stem):
-        arch_title_prefixes = _word_prefixes(_tokenize_words(arch_title))
-        if not expected_prefixes or not (expected_prefixes & arch_title_prefixes):
+        if not expected_prefixes or not (expected_prefixes & arch_meta_prefixes):
             return False
         return True
 
@@ -707,7 +711,7 @@ def audit_and_repair_existing_movies(
     deadline_ts
 ):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/4 Višeslojna provjera jezika, naslova, trajanja, Archive metapodataka i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova...", flush=True)
+    print(f"1/4 Provjera jezika, naslova, trajanja, kvalitete i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
@@ -787,15 +791,6 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
             return
 
-        # Provjeravamo isključivo ID i stream_url same datoteke (ne Archive naslov koji često ima "+ Trailer" ili "+ Commentary")
-        if not is_curated and not is_doc_row and is_explicit_junk_item(
-            base_ident,
-            "",
-            stream_url
-        ):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})")
-            return
-
         details = get_tmdb_movie_details(tmdb_id) if tmdb_id > 0 else None
 
         if details and not is_curated and is_runtime_mismatch(details.get("runtime", 0), arch_rt, is_short_allowed=(is_doc_row or is_cartoon_row)):
@@ -805,19 +800,6 @@ def audit_and_repair_existing_movies(
                 f"  ✕ Uklonjen zapis zbog nesklada trajanja ({arch_rt} min vs TMDB {details.get('runtime', 0)} min): {title}"
             )
             return
-
-        if not is_curated and stream_url and arch_md:
-            chosen_fname = stream_url.rsplit("/", 1)[-1]
-            expected_names = [title, arch_md.get("title") or ""]
-            if details:
-                expected_names.extend([details.get("orig_title") or "", details.get("en_title") or "", details.get("hr_title") or ""])
-            if not verify_multilayer_title_and_file(chosen_fname, base_ident, arch_md, expected_names, rel_year):
-                mark_row_invalid(
-                    row,
-                    tmdb_id,
-                    f"  ✕ Uklonjen pogrešan video fajl ({unquote(chosen_fname)}) za naslov: {title} ({base_ident})"
-                )
-                return
 
         has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
         looks_blocked_text = contains_blocked_regional_or_arabic(
