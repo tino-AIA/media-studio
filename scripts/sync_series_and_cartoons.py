@@ -763,6 +763,43 @@ def format_series_display_title(hr_name, orig_name, year):
     return clean_base
 
 
+def audit_and_restore_short_cartoons(all_movie_rows, deadline_ts):
+    """Vraća greškom skrivene kratkometražne i Ex-Yu crtiće (tmdb_id <= 0) u katalog ako imaju valjan stream."""
+    cartoon_rows = [
+        r for r in all_movie_rows
+        if int(r.get("tmdb_id") or 0) <= 0
+        and any(
+            any(k in g.lower() for k in ("animiran", "crtić", "crtic", "cartoon", "disney", "looney"))
+            for g in (r.get("genres") or [])
+        )
+    ]
+    hidden_cartoons = [r for r in cartoon_rows if not r.get("is_valid", True) and (r.get("stream_url") or "").startswith("http")]
+    if not hidden_cartoons:
+        return
+
+    print(f"0/4 Provjera i vraćanje {len(hidden_cartoons)} skrivenih kratkometražnih crtića...", flush=True)
+    restored = [0]
+
+    def restore_one(row):
+        if time.monotonic() > deadline_ts:
+            return
+        url = row.get("stream_url") or ""
+        if not verify_stream_url_playable(url):
+            return
+        patch = {"is_valid": True, "tmdb_id": 0}
+        desc = (row.get("description_hr") or "").strip()
+        if desc and looks_like_english_text(desc):
+            patch["description_hr"] = ensure_croatian_overview(desc)
+        supabase_patch_row("catalog_items", row["id"], patch)
+        with state_lock:
+            restored[0] += 1
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(restore_one, hidden_cartoons))
+
+    print(f"  Vraćeno {restored[0]} kratkometražnih crtića u katalog.", flush=True)
+
+
 def refresh_incomplete_series(existing_series_rows, deadline_ts):
     candidates = [
         r for r in existing_series_rows
@@ -975,7 +1012,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         hr_desc = ensure_croatian_overview(str(desc)[:800])
 
         is_disney_item = is_disney_q or any(tok in blob_check for tok in disney_tokens)
-        genres = when_genres = (
+        genres = (
             ["Animirani klasici", "Ex-Yu crtići", "Klasični crtići"]
             if is_ex_yu_item
             else (
@@ -987,6 +1024,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
 
         row = {
             "archive_id": ident,
+            "tmdb_id": 0,
             "title": clean_t,
             "media_type": "movie",
             "genres": genres,
@@ -1002,6 +1040,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         }
         supabase_upsert("catalog_items", [row], "archive_id")
         with state_lock:
+            existing_archive_ids.add(ident)
             added_counter[0] += 1
 
     with ThreadPoolExecutor(max_workers=10) as pool:
@@ -1210,9 +1249,10 @@ def run_series_and_cartoons_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_SYNC_DURATION_SECONDS
     print("=== [SERIJE I CRTIĆI] Pokretanje sinkronizacije serija, Ex-Yu i klasičnih crtića ===", flush=True)
-    existing_archive_ids, _, _, _ = fetch_existing_catalog_state("movie")
+    existing_archive_ids, _, _, all_movie_rows = fetch_existing_catalog_state("movie")
     _, seen_tmdb_series, _, existing_series_rows = fetch_existing_catalog_state("series")
     print(f"  U bazi već postoji {len(seen_tmdb_series)} potvrđenih serija.", flush=True)
+    audit_and_restore_short_cartoons(all_movie_rows, deadline_ts)
     sync_short_cartoons(existing_archive_ids, deadline_ts)
     refresh_incomplete_series(existing_series_rows, deadline_ts)
     sync_all_series(seen_tmdb_series, deadline_ts)
