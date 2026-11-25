@@ -4,6 +4,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -51,7 +52,7 @@ EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
     r"screener|dvdscr|workprint|featurette|parody|rifftrax|mockbuster|"
     r"commentary|walkthrough|longplay|gameplay|playthrough|speedrun|"
-    r"reaction|reacts|ps2|ps3|ps4|gamecube|xbox|nintendo|wii|pcsx2|dolphin|emulator)\b|"
+    r"ps2|ps3|ps4|gamecube|xbox|nintendo|wii|pcsx2|dolphin|emulator)\b|"
     r"watch[\s._-]*along|audio[\s._-]*commentary|director'?s?[\s._-]*commentary|"
     r"holiday[\s._-]+special|making[\s._-]+of|"
     r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
@@ -97,8 +98,8 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
     if a_mins <= 0:
         return False
     if t_mins >= 65:
-        min_ok = int(t_mins * 0.75)
-        max_ok = int(t_mins * 1.28)
+        min_ok = int(t_mins * 0.72)
+        max_ok = int(t_mins * 1.30)
         return not (min_ok <= a_mins <= max_ok)
     if not is_short_allowed and a_mins < 48:
         return True
@@ -106,36 +107,31 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
 
 
 def filename_matches_expected_titles(chosen_filename, ident, arch_title, expected_titles):
-    """Sprječava krivo uparene datoteke (npr. 'Z1 8 2 2009.mp4' pod 'Inception')."""
+    """Blokira samo očito nasumične šifre bez podudaranja s naslovom ili Archive ID-em (npr. Z1 8 2 2009.mp4)."""
     if not chosen_filename:
         return True
-    stem = os.path.splitext(os.path.basename(chosen_filename))[0]
-    stem_clean = re.sub(r"[^\w\s]", " ", stem.lower()).strip()
-    # Ako je datoteka očiti nasumični kod/datum bez riječi naslova (npr. Z1 8 2 2009)
-    tokens_in_stem = {w for w in stem_clean.split() if len(w) >= 3 and not w.isdigit() and w not in _STOP_WORDS}
+    decoded = unquote(os.path.splitext(os.path.basename(chosen_filename))[0])
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", decoded)
+    stem_clean = re.sub(r"[^\w\s]", " ", spaced.lower()).strip()
+    tokens_in_stem = {w for w in stem_clean.split() if len(w) >= 3 and w not in _STOP_WORDS}
 
-    expected_words = set()
-    for t in expected_titles:
+    if not tokens_in_stem:
+        return False
+
+    ref_words = set()
+    for t in list(expected_titles) + [ident, arch_title]:
         if not t:
             continue
-        cleaned = re.sub(r"[^\w\s]", " ", str(t).lower())
+        t_spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(t))
+        cleaned = re.sub(r"[^\w\s]", " ", t_spaced.lower())
         for w in cleaned.split():
-            if len(w) >= 3 and not w.isdigit() and w not in _STOP_WORDS:
-                expected_words.add(w)
+            if len(w) >= 3 and w not in _STOP_WORDS:
+                ref_words.add(w)
 
-    if not expected_words:
+    if not ref_words:
         return True
 
-    # Ako barem 1 značajna riječ naslova postoji u imenu video datoteke, prihvaćamo
-    if tokens_in_stem & expected_words:
-        return True
-
-    # Ako video datoteka nosi ime samog Archive ID-a (npr. ident.mp4), provjeri poklapanje ID-a i naslova
-    ident_clean = re.sub(r"[^\w\s]", " ", f"{ident} {arch_title}".lower())
-    ident_words = {w for w in ident_clean.split() if len(w) >= 3 and not w.isdigit() and w not in _STOP_WORDS}
-    overlap = len(ident_words & expected_words)
-    needed = 1 if len(expected_words) == 1 else max(1, (len(expected_words) + 1) // 2)
-    return overlap >= needed and len(tokens_in_stem) >= 1
+    return bool(tokens_in_stem & ref_words)
 
 
 def is_mismatched_modern_dune(tmdb_id, *texts):
@@ -571,7 +567,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
     is_anim = 16 in (details.get("genre_ids") or [])
     min_mb = 80 if is_anim else (130 if is_ex_yu else 180)
     require_credits = has_multiple_tmdb_versions(orig_title)
-    year_clause = f" AND year:[{year - 1} TO ${year + 1}]" if year > 0 else ""
+    year_clause = f" AND year:[{year - 1} TO {year + 1}]" if year > 0 else ""
 
     docs_by_id = {}
     for term in search_terms[:2]:
@@ -579,7 +575,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
             return None
         query = (
             f'title:"{term}"{year_clause} AND mediatype:(movies OR web) '
-            f'AND -subject:trailer AND -subject:news AND -subject:review '
+            f'AND -subject:trailer AND -subject:news '
             f'AND -subject:"video games" AND -subject:gameplay '
             f'AND -title:"holiday special" AND -title:"making of" '
             f'AND -title:commentary AND -title:walkthrough AND -title:longplay AND -title:gameplay'
@@ -628,11 +624,11 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         if aspect_tier < min_aspect_tier:
             continue
 
-        meta_subject_desc = f"{arch_md.get('subject') or ''} {arch_md.get('description') or ''} {best['filename']}"
-        if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_doc_title, meta_subject_desc):
+        meta_subject_file = f"{arch_md.get('subject') or ''} {best['filename']}"
+        if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_doc_title, meta_subject_file):
             continue
 
-        if is_runtime_mismatch(details.get("runtime", 0), arch_mins):
+        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
             continue
 
         if not filename_matches_expected_titles(best["filename"], ident, arch_md.get("title") or raw_doc_title, expected_title_list):
@@ -722,7 +718,6 @@ def audit_and_repair_existing_movies(
         is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
 
-        # 1. Brza provjera trajanja i očitih gameplay/commentary/trailer zapisa bez mrežnog poziva
         if not is_curated:
             if is_explicit_junk_item(base_ident, "", stream_url):
                 mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen gameplay/commentary/junk zapis iz baze: {title} ({base_ident})")
@@ -744,7 +739,8 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
             return
 
-        meta_blob = f"{arch_md.get('subject') or ''} {arch_md.get('description') or ''} {stream_url}"
+        # Provjeravamo isključivo subject i stream_url (nikada description kako se ne bi brisali BluRay ripovi)
+        meta_blob = f"{arch_md.get('subject') or ''} {stream_url}"
         if not is_curated and not is_doc_row and is_explicit_junk_item(
             base_ident,
             arch_md.get("title") or "",
@@ -753,7 +749,6 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})")
             return
 
-        # 2. Provjera podudaranja naziva same datoteke s naslovom filma (hvata npr. Z1 8 2 2009 pod Inception)
         if not is_curated and stream_url and arch_md:
             chosen_fname = stream_url.rsplit("/", 1)[-1]
             expected_names = [title, arch_md.get("title") or ""]
@@ -956,7 +951,8 @@ def save_verified_movie_row(
         return False
     if is_explicit_junk_item(arch_id, details["hr_title"], stream_url):
         return False
-    if is_runtime_mismatch(details.get("runtime", 0), arch_mins):
+    is_doc = 99 in (details.get("genre_ids") or [])
+    if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
         return False
 
     norm_t = normalize_for_exact_title_compare(details["hr_title"])
@@ -1571,8 +1567,8 @@ def mine_archive_collections(
                 inc_stat("validation_rejected")
                 return
 
-            meta_subject_desc = f"{arch_md.get('subject') or ''} {arch_md.get('description') or ''} {best['filename']}"
-            if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title, meta_subject_desc):
+            meta_subject_file = f"{arch_md.get('subject') or ''} {best['filename']}"
+            if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title, meta_subject_file):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("junk_recorded")
                 return
