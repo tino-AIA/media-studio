@@ -86,6 +86,16 @@ private data class StructuredDetailSheet(
     val synopsis: String = ""
 )
 
+private data class TmdbMovieFullDetailsHr(
+    val resolvedTmdbId: Int = 0,
+    val hrTitle: String = "",
+    val origTitle: String = "",
+    val overviewHr: String = "",
+    val releaseYear: String = "",
+    val cast: String = "",
+    val director: String = ""
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun DetailsScreen(
@@ -143,7 +153,7 @@ fun DetailsScreen(
             if (sbAuthor != null && sbMovies.isNotEmpty()) {
                 isSupabaseAuthorList = true
                 imageUrl = sbAuthor.photoUrl.ifBlank { viewModel.staticAuthorImages[authorName] ?: "" }
-                val rawBio = sbAuthor.bioHr.ifBlank { fetchWikiTextHr(authorName) }
+                val rawBio = sbAuthor.bioHr.ifBlank { fetchAuthorBioHr(authorName) }
                 val hrBio = cleanWikiMarkupHr(ensureHrText(rawBio))
                 val options = sbMovies.map { m ->
                     val label = if (m.releaseYear > 0) "${m.title} (${m.releaseYear})" else m.title
@@ -168,7 +178,7 @@ fun DetailsScreen(
             } else {
                 val archiveId = viewModel.getAuthorArchiveId(authorName)
                 imageUrl = viewModel.staticAuthorImages[authorName] ?: ""
-                val hrBio = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(authorName)))
+                val hrBio = cleanWikiMarkupHr(ensureHrText(fetchAuthorBioHr(authorName)))
                 val info = ArchiveMetadataModule.fetchMovieFullInfo(archiveId)
                 movieInfo = info
                 detailSheet = StructuredDetailSheet(
@@ -191,45 +201,39 @@ fun DetailsScreen(
                         it.descriptionHr.ifBlank { SupabaseRepository.loadItemDescription(it.archiveId) }
                     }.orEmpty()
                 }
-                val hrDesc = cleanWikiMarkupHr(
-                    ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(displayTitle, yearHint.toIntOrNull() ?: 0) })
-                )
                 detailSheet = buildStructuredSheet(
                     title = displayTitle,
                     identifier = sbCatalogMatch?.archiveId ?: movie.identifier,
                     sbItem = sbCatalogMatch,
                     yearHint = yearHint,
                     directorHint = "",
-                    rawDesc = hrDesc
+                    dbDescription = dbDesc,
+                    archiveFallbackDesc = ""
                 )
             } else if (sbCatalogMatch != null) {
                 imageUrl = sbCatalogMatch.posterUrl
                 val dbDesc = sbCatalogMatch.descriptionHr.ifBlank {
                     SupabaseRepository.loadItemDescription(sbCatalogMatch.archiveId)
                 }
-                val hrDesc = cleanWikiMarkupHr(
-                    ensureHrText(dbDesc.ifBlank { fetchMoviePlotHr(displayTitle, sbCatalogMatch.releaseYear) })
-                )
                 detailSheet = buildStructuredSheet(
                     title = displayTitle,
                     identifier = sbCatalogMatch.archiveId,
                     sbItem = sbCatalogMatch,
                     yearHint = yearHint,
                     directorHint = "",
-                    rawDesc = hrDesc
+                    dbDescription = dbDesc,
+                    archiveFallbackDesc = ""
                 )
             } else {
                 imageUrl = PosterFetcher.fetchPoster(displayTitle, isSeries = false, movie.identifier)
-                val hrDesc = cleanWikiMarkupHr(
-                    ensureHrText(fetchMoviePlotHr(displayTitle, yearHint.toIntOrNull() ?: 0))
-                )
                 detailSheet = buildStructuredSheet(
                     title = displayTitle,
                     identifier = movie.identifier,
                     sbItem = null,
                     yearHint = yearHint,
                     directorHint = "",
-                    rawDesc = hrDesc
+                    dbDescription = "",
+                    archiveFallbackDesc = ""
                 )
             }
             movieInfo = null
@@ -249,63 +253,56 @@ fun DetailsScreen(
                     val authorSlug = movie.identifier.substringBefore(",tmdb-")
                     val matchedAuthor = SupabaseRepository.getAuthors()
                         .find { it.archiveId.equals(authorSlug, ignoreCase = true) }?.name ?: ""
-                    val hrDesc = cleanWikiMarkupHr(
-                        ensureHrText(dbDescription.ifBlank { fetchMoviePlotHr(sbItem.title, sbItem.releaseYear) })
-                    )
-                    movieInfo = MovieFullInfo(
-                        qualities = emptyList(),
-                        description = hrDesc,
-                        year = yearStr,
-                        director = matchedAuthor
-                    )
-                    detailSheet = buildStructuredSheet(
+                    val built = buildStructuredSheet(
                         title = sbItem.title,
                         identifier = movie.identifier,
                         sbItem = sbItem,
                         yearHint = yearStr,
                         directorHint = matchedAuthor,
-                        rawDesc = hrDesc
+                        dbDescription = dbDescription,
+                        archiveFallbackDesc = ""
                     )
+                    movieInfo = MovieFullInfo(
+                        qualities = emptyList(),
+                        description = built.synopsis,
+                        year = built.year.ifBlank { yearStr },
+                        director = built.director.ifBlank { matchedAuthor }
+                    )
+                    detailSheet = built
                 } else {
                     val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
                     val mergedYear = yearStr.ifEmpty { info.year }
-                    val mergedDirector = info.director
-                    movieInfo = info.copy(year = mergedYear)
                     val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else info.description
-                    val hrDesc = cleanWikiMarkupHr(
-                        ensureHrText(
-                            dbDescription
-                                .ifBlank { cleanArchiveDesc }
-                                .ifBlank { fetchMoviePlotHr(sbItem.title.ifBlank { movie.title }, sbItem.releaseYear) }
-                        )
-                    )
-                    detailSheet = buildStructuredSheet(
+                    val built = buildStructuredSheet(
                         title = sbItem.title.ifBlank { movie.title },
                         identifier = movie.identifier,
                         sbItem = sbItem,
                         yearHint = mergedYear,
-                        directorHint = mergedDirector,
-                        rawDesc = hrDesc
+                        directorHint = info.director,
+                        dbDescription = dbDescription,
+                        archiveFallbackDesc = cleanArchiveDesc
                     )
+                    movieInfo = info.copy(
+                        year = built.year.ifBlank { mergedYear },
+                        description = built.synopsis
+                    )
+                    detailSheet = built
                 }
             } else {
                 imageUrl = PosterFetcher.fetchPoster(movie.title, isSeries = false, movie.identifier)
                 val info = ArchiveMetadataModule.fetchMovieFullInfo(movie.identifier)
-                movieInfo = info
                 val cleanArchiveDesc = if (info.description.startsWith("Opis za ovaj naslov")) "" else info.description
-                val hrDesc = cleanWikiMarkupHr(
-                    ensureHrText(
-                        cleanArchiveDesc.ifBlank { fetchMoviePlotHr(movie.title, info.year.toIntOrNull() ?: 0) }
-                    )
-                )
-                detailSheet = buildStructuredSheet(
+                val built = buildStructuredSheet(
                     title = movie.title,
                     identifier = movie.identifier,
                     sbItem = null,
                     yearHint = info.year,
                     directorHint = info.director,
-                    rawDesc = hrDesc
+                    dbDescription = "",
+                    archiveFallbackDesc = cleanArchiveDesc
                 )
+                movieInfo = info.copy(description = built.synopsis)
+                detailSheet = built
             }
         }
 
@@ -1031,7 +1028,7 @@ private fun isGenuineExYuSource(title: String, identifier: String, genres: List<
     return exYuTokens.any { blob.contains(it) }
 }
 
-private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr: String): Pair<String, String> = withContext(Dispatchers.IO) {
+private suspend fun fetchTmdbMovieFullDetailsHr(tmdbId: Int, title: String, yearStr: String): TmdbMovieFullDetailsHr = withContext(Dispatchers.IO) {
     try {
         var resolvedId = tmdbId
         if (resolvedId <= 0) {
@@ -1048,15 +1045,36 @@ private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr:
                 resolvedId = first?.optInt("id", 0) ?: 0
             }
         }
-        if (resolvedId <= 0) return@withContext "" to ""
+        if (resolvedId <= 0) return@withContext TmdbMovieFullDetailsHr()
 
-        val url = "https://api.themoviedb.org/3/movie/$resolvedId/credits?api_key=$DETAILS_TMDB_API_KEY&language=hr-HR"
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        val obj = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val hrUrl = "https://api.themoviedb.org/3/movie/$resolvedId?api_key=$DETAILS_TMDB_API_KEY&language=hr-HR&append_to_response=credits"
+        val hrConn = URL(hrUrl).openConnection() as HttpURLConnection
+        hrConn.connectTimeout = 5000
+        hrConn.readTimeout = 5000
+        val hrObj = JSONObject(hrConn.inputStream.bufferedReader().use { it.readText() })
 
-        val castArr = obj.optJSONArray("cast")
+        val hrTitle = hrObj.optString("title", "").trim()
+        val origTitle = hrObj.optString("original_title", "").trim()
+        var overviewHr = hrObj.optString("overview", "").trim()
+        val relDate = hrObj.optString("release_date", "").trim()
+        val relYear = if (relDate.length >= 4) relDate.substring(0, 4) else ""
+
+        if (overviewHr.isBlank()) {
+            val enUrl = "https://api.themoviedb.org/3/movie/$resolvedId?api_key=$DETAILS_TMDB_API_KEY&language=en-US"
+            val enConn = URL(enUrl).openConnection() as HttpURLConnection
+            enConn.connectTimeout = 5000
+            enConn.readTimeout = 5000
+            val enObj = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
+            val enOverview = enObj.optString("overview", "").trim()
+            if (enOverview.isNotBlank()) {
+                overviewHr = translateToCroatian(enOverview)
+            }
+        } else {
+            overviewHr = ensureHrText(overviewHr)
+        }
+
+        val creditsObj = hrObj.optJSONObject("credits")
+        val castArr = creditsObj?.optJSONArray("cast")
         val castNames = mutableListOf<String>()
         if (castArr != null) {
             for (i in 0 until minOf(castArr.length(), 6)) {
@@ -1067,7 +1085,7 @@ private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr:
             }
         }
 
-        val crewArr = obj.optJSONArray("crew")
+        val crewArr = creditsObj?.optJSONArray("crew")
         val directorNames = mutableListOf<String>()
         if (crewArr != null) {
             for (i in 0 until crewArr.length()) {
@@ -1081,9 +1099,17 @@ private suspend fun fetchTmdbMovieCreditsHr(tmdbId: Int, title: String, yearStr:
             }
         }
 
-        castNames.joinToString(", ") to directorNames.joinToString(", ")
+        TmdbMovieFullDetailsHr(
+            resolvedTmdbId = resolvedId,
+            hrTitle = hrTitle,
+            origTitle = origTitle,
+            overviewHr = overviewHr,
+            releaseYear = relYear,
+            cast = castNames.joinToString(", "),
+            director = directorNames.joinToString(", ")
+        )
     } catch (_: Exception) {
-        "" to ""
+        TmdbMovieFullDetailsHr()
     }
 }
 
@@ -1093,12 +1119,13 @@ private suspend fun buildStructuredSheet(
     sbItem: SupabaseCatalogItem?,
     yearHint: String,
     directorHint: String,
-    rawDesc: String
+    dbDescription: String,
+    archiveFallbackDesc: String
 ): StructuredDetailSheet = withContext(Dispatchers.IO) {
     val genresList = sbItem?.genres.orEmpty()
     val allowExYuTag = isGenuineExYuSource(title, identifier, genresList)
     val genreHr = formatGenresHr(genresList, allowExYuTag)
-    val yearHr = extractYearHr(yearHint, title, identifier)
+    var yearHr = extractYearHr(yearHint, title, identifier)
     val lowerBlob = "${title.lowercase()} ${identifier.lowercase()} ${genresList.joinToString(" ").lowercase()}"
 
     val isConcert = sbItem?.mediaType == "concert" ||
@@ -1123,43 +1150,67 @@ private suspend fun buildStructuredSheet(
         else -> DetailKind.MOVIE_OR_FEATURE_ANIM
     }
 
-    var directorHr = ensureHrText(directorHint)
-    var castHr = extractCastFromTextHr(rawDesc)
-    var awardsHr = extractAwardsFromTextHr(rawDesc)
-    var studioHr = extractStudioFromTextHr(title, identifier, rawDesc, genresList)
-    var tourHr = extractTourFromTextHr(title, rawDesc)
-    var activeHr = extractBandActiveFromTextHr(rawDesc)
-    var membersHr = extractBandMembersFromTextHr(rawDesc)
-    var synopsisHr = rawDesc
-
-    if (kind == DetailKind.MOVIE_OR_FEATURE_ANIM) {
-        val (tmdbCast, tmdbDirector) = fetchTmdbMovieCreditsHr(sbItem?.tmdbId ?: 0, title, yearHr)
-        if (castHr.isBlank() && tmdbCast.isNotBlank()) castHr = tmdbCast
-        if (directorHr.isBlank() && tmdbDirector.isNotBlank()) directorHr = tmdbDirector
+    // 1. TMDB podaci na hrvatskom jeziku (prvi prioritet za igrane i animirane filmove)
+    val tmdbDetails = if (!isConcert) {
+        fetchTmdbMovieFullDetailsHr(sbItem?.tmdbId ?: 0, title, yearHr)
+    } else {
+        TmdbMovieFullDetailsHr()
+    }
+    if (yearHr.isBlank() && tmdbDetails.releaseYear.isNotBlank()) {
+        yearHr = tmdbDetails.releaseYear
     }
 
-    val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
-    if (cleanTitle.isNotBlank()) {
-        val wikiText = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(cleanTitle)))
-        if (castHr.isBlank()) castHr = extractCastFromTextHr(wikiText)
-        if (awardsHr.isBlank()) awardsHr = extractAwardsFromTextHr(wikiText)
-        if (studioHr.isBlank()) studioHr = extractStudioFromTextHr(title, identifier, wikiText, genresList)
-        if (tourHr.isBlank()) tourHr = extractTourFromTextHr(title, wikiText)
-        if (activeHr.isBlank()) activeHr = extractBandActiveFromTextHr(wikiText)
-        if (membersHr.isBlank()) membersHr = extractBandMembersFromTextHr(wikiText)
-        if (directorHr.isBlank() && kind == DetailKind.MOVIE_OR_FEATURE_ANIM) {
-            val dirMatch = Regex("(?i)(?:redatelj|režirao|režirala|director)\\s*[:\\-–]?\\s*([A-ZČĆŽŠĐ][a-zčćžšđ]+(?:\\s+[A-ZČĆŽŠĐ][a-zčćžšđ]+){1,2})").find(wikiText)
-            directorHr = dirMatch?.groupValues?.get(1)?.trim().orEmpty()
-        }
-        if (kind == DetailKind.CONCERT) {
-            val artistPart = cleanTitle.substringBefore(" - ").trim()
-            if (artistPart.isNotBlank() && !artistPart.equals(cleanTitle, ignoreCase = true)) {
-                val artistWiki = cleanWikiMarkupHr(ensureHrText(fetchWikiTextHr(artistPart)))
-                if (activeHr.isBlank()) activeHr = extractBandActiveFromTextHr(artistWiki)
-                if (membersHr.isBlank()) membersHr = extractBandMembersFromTextHr(artistWiki)
-            }
-            if (synopsisHr.isBlank() && wikiText.isNotBlank()) {
-                synopsisHr = wikiText.take(650)
+    // 2. Hrvatska Wikipedija (pretraga po hrvatskom i izvornom naslovu), zatim EN Wikipedia + prijevod
+    val wikiTitlesToTry = listOf(tmdbDetails.hrTitle, title, tmdbDetails.origTitle)
+        .map { it.replace(Regex("\\(\\d{4}\\)"), "").trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+
+    val wikiRaw = if (!isConcert) {
+        fetchMoviePlotHr(wikiTitlesToTry, yearHr.toIntOrNull() ?: 0)
+    } else {
+        fetchWikiTextHr(wikiTitlesToTry.firstOrNull().orEmpty())
+    }
+    val wikiHr = cleanWikiMarkupHr(ensureHrText(wikiRaw))
+
+    val dbDescHr = cleanWikiMarkupHr(ensureHrText(dbDescription))
+    val archiveDescHr = cleanWikiMarkupHr(ensureHrText(archiveFallbackDesc))
+
+    // Strogi poredak sažetka: TMDB (hr-HR) -> Hrvatska Wikipedija -> Baza (prevedeno) -> Archive (prevedeno)
+    var synopsisHr = tmdbDetails.overviewHr
+        .ifBlank { wikiHr }
+        .ifBlank { dbDescHr }
+        .ifBlank { archiveDescHr }
+
+    val combinedMetaSource = listOf(synopsisHr, wikiHr, dbDescHr, archiveDescHr)
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+
+    var directorHr = ensureHrText(directorHint)
+    if (directorHr.isBlank() && tmdbDetails.director.isNotBlank()) {
+        directorHr = tmdbDetails.director
+    }
+    var castHr = tmdbDetails.cast.ifBlank { extractCastFromTextHr(combinedMetaSource) }
+    var awardsHr = extractAwardsFromTextHr(combinedMetaSource)
+    var studioHr = extractStudioFromTextHr(title, identifier, combinedMetaSource, genresList)
+    var tourHr = extractTourFromTextHr(title, combinedMetaSource)
+    var activeHr = extractBandActiveFromTextHr(combinedMetaSource)
+    var membersHr = extractBandMembersFromTextHr(combinedMetaSource)
+
+    if (directorHr.isBlank() && kind == DetailKind.MOVIE_OR_FEATURE_ANIM && wikiHr.isNotBlank()) {
+        val dirMatch = Regex("(?i)(?:redatelj|režirao|režirala|director)\\s*[:\\-–]?\\s*([A-ZČĆŽŠĐ][a-zčćžšđ]+(?:\\s+[A-ZČĆŽŠĐ][a-zčćžšđ]+){1,2})").find(wikiHr)
+        directorHr = dirMatch?.groupValues?.get(1)?.trim().orEmpty()
+    }
+
+    if (kind == DetailKind.CONCERT) {
+        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
+        val artistPart = cleanTitle.substringBefore(" - ").trim()
+        if (artistPart.isNotBlank() && !artistPart.equals(cleanTitle, ignoreCase = true)) {
+            val artistWiki = cleanWikiMarkupHr(ensureHrText(fetchAuthorBioHr(artistPart)))
+            if (activeHr.isBlank()) activeHr = extractBandActiveFromTextHr(artistWiki)
+            if (membersHr.isBlank()) membersHr = extractBandMembersFromTextHr(artistWiki)
+            if (synopsisHr.isBlank() && artistWiki.isNotBlank()) {
+                synopsisHr = artistWiki.take(750)
             }
         }
     }
@@ -1179,112 +1230,158 @@ private suspend fun buildStructuredSheet(
     )
 }
 
-private fun looksLikeEnglishText(text: String): Boolean {
-    if (text.isBlank()) return false
-    val padded = " ${text.lowercase()} "
-    val englishMarkers = listOf(
-        " the ", " and ", " with ", " from ", " into ", " their ",
-        " his ", " her ", " show ", " story ", " when ", " where ",
-        " which ", " while ", " after ", " before ", " through ", " against ",
-        " of ", " in ", " to "
+private fun needsCroatianTranslation(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.length < 12) return false
+    val padded = " ${trimmed.lowercase()} "
+
+    val foreignMarkers = listOf(
+        " the ", " and ", " with ", " from ", " into ", " their ", " his ", " her ",
+        " which ", " while ", " after ", " before ", " through ", " against ", " about ",
+        " when ", " where ", " who ", " whom ", " whose ", " story ", " film ", " directed by ",
+        " der ", " die ", " das ", " und ", " mit ", " von ", " ein ", " eine ", " ist ", " auf ",
+        " le ", " la ", " les ", " des ", " une ", " dans ", " pour ", " avec ", " sur ", " est ",
+        " el ", " los ", " las ", " del ", " una ", " por ", " para ", " con ", " que ", " como ",
+        " che ", " gli ", " della ", " delle ", " nel ", " nella ", " sono ", " stato "
     )
-    val hits = englishMarkers.count { padded.contains(it) }
-    val hasCroatianChars = text.any { it in "čćžšđČĆŽŠĐ" }
-    return hits >= 2 && !hasCroatianChars
+    val foreignHits = foreignMarkers.count { padded.contains(it) }
+
+    val croatianMarkers = listOf(
+        " je ", " su ", " bio ", " bila ", " bilo ", " koji ", " koja ", " koje ", " kojeg ",
+        " nakon ", " tijekom ", " između ", " prema ", " dok ", " ali ", " jer ", " kada ",
+        " njegov ", " njezin ", " njihov ", " kako ", " zbog ", " kroz ", " protiv ", " svijet ",
+        " život ", " priča ", " obitelj ", " prijatelj ", " grad ", " godina ", " godine "
+    )
+    val hrHits = croatianMarkers.count { padded.contains(it) }
+    val hasHrDiacritics = trimmed.any { it in "čćžšđČĆŽŠĐ" }
+
+    if (foreignHits >= 2 && foreignHits > hrHits) return true
+    if (hrHits == 0 && !hasHrDiacritics && trimmed.length >= 25) return true
+    return false
 }
 
 private suspend fun ensureHrText(text: String): String {
     val trimmed = text.trim()
     if (trimmed.isBlank()) return ""
-    return if (looksLikeEnglishText(trimmed)) translateToCroatian(trimmed) else trimmed
+    return if (needsCroatianTranslation(trimmed)) translateToCroatian(trimmed) else trimmed
 }
 
-private suspend fun fetchMoviePlotHr(title: String, year: Int): String = withContext(Dispatchers.IO) {
+private suspend fun queryWikipediaExtract(lang: String, titleQuery: String, introOnly: Boolean): String = withContext(Dispatchers.IO) {
     try {
-        val cleanTitle = title.replace(Regex("\\(\\d{4}\\)"), "").trim()
-        val queries = buildList {
-            if (year > 0) add("$cleanTitle ($year film)")
-            add("$cleanTitle (film)")
-            add(cleanTitle)
-        }
-
-        for (q in queries) {
-            val encoded = URLEncoder.encode(q, "UTF-8")
-            val hrUrl = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
-            val hrConn = hrUrl.openConnection() as HttpURLConnection
-            hrConn.setRequestProperty("User-Agent", "Mozilla/5.0")
-            hrConn.connectTimeout = 5000
-            hrConn.readTimeout = 5000
-            val hrJson = JSONObject(hrConn.inputStream.bufferedReader().use { it.readText() })
-            val hrPages = hrJson.getJSONObject("query").getJSONObject("pages")
-            val hrId = hrPages.keys().next()
-            if (hrId != "-1") {
-                val extract = hrPages.getJSONObject(hrId).optString("extract").trim()
-                if (extract.length > 40) return@withContext extract.take(900)
-            }
-        }
-
-        for (q in queries) {
-            val encoded = URLEncoder.encode(q, "UTF-8")
-            val enUrl = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts&exintro=1&explaintext=1&format=json&redirects=1")
-            val enConn = enUrl.openConnection() as HttpURLConnection
-            enConn.setRequestProperty("User-Agent", "Mozilla/5.0")
-            enConn.connectTimeout = 5000
-            enConn.readTimeout = 5000
-            val enJson = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
-            val enPages = enJson.getJSONObject("query").getJSONObject("pages")
-            val enId = enPages.keys().next()
-            if (enId != "-1") {
-                val extract = enPages.getJSONObject(enId).optString("extract").trim()
-                if (extract.length > 40) return@withContext translateToCroatian(extract.take(900))
-            }
+        val encoded = URLEncoder.encode(titleQuery, "UTF-8")
+        val introParam = if (introOnly) "&exintro=1" else ""
+        val url = URL("https://$lang.wikipedia.org/w/api.php?action=query&titles=$encoded&prop=extracts$introParam&explaintext=1&format=json&redirects=1")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val pages = json.getJSONObject("query").getJSONObject("pages")
+        val pageId = pages.keys().next()
+        if (pageId != "-1") {
+            val extract = pages.getJSONObject(pageId).optString("extract").trim()
+            if (extract.length > 35) return@withContext extract
         }
     } catch (_: Exception) {
     }
     ""
 }
 
-private suspend fun fetchWikiTextHr(queryTitle: String): String = withContext(Dispatchers.IO) {
+private suspend fun searchWikipediaTitle(lang: String, searchQuery: String): String = withContext(Dispatchers.IO) {
     try {
-        val searchName = if (queryTitle == "PTA Filmography") "Paul Thomas Anderson" else queryTitle
-        val encodedName = URLEncoder.encode(searchName, "UTF-8")
-
-        val hrUrl = URL("https://hr.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&explaintext=1&format=json&redirects=1")
-        val hrConn = hrUrl.openConnection() as HttpURLConnection
-        hrConn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        hrConn.connectTimeout = 5000
-        hrConn.readTimeout = 5000
-        val hrJson = JSONObject(hrConn.inputStream.bufferedReader().use { it.readText() })
-        val hrPages = hrJson.getJSONObject("query").getJSONObject("pages")
-        val hrId = hrPages.keys().next()
-        if (hrId != "-1") {
-            val extract = hrPages.getJSONObject(hrId).optString("extract").trim()
-            if (extract.isNotEmpty()) return@withContext extract.take(1800)
-        }
-
-        val enUrl = URL("https://en.wikipedia.org/w/api.php?action=query&titles=$encodedName&prop=extracts&explaintext=1&format=json&redirects=1")
-        val enConn = enUrl.openConnection() as HttpURLConnection
-        enConn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        enConn.connectTimeout = 5000
-        enConn.readTimeout = 5000
-        val enJson = JSONObject(enConn.inputStream.bufferedReader().use { it.readText() })
-        val enPages = enJson.getJSONObject("query").getJSONObject("pages")
-        val enId = enPages.keys().next()
-        if (enId != "-1") {
-            val extract = enPages.getJSONObject(enId).optString("extract").trim()
-            if (extract.isNotEmpty()) return@withContext translateToCroatian(extract.take(1500))
-        }
-        ""
+        val encoded = URLEncoder.encode(searchQuery, "UTF-8")
+        val url = URL("https://$lang.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&srlimit=1&format=json")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        val results = json.optJSONObject("query")?.optJSONArray("search")
+        results?.optJSONObject(0)?.optString("title", "")?.trim().orEmpty()
     } catch (_: Exception) {
         ""
     }
 }
 
+private suspend fun fetchMoviePlotHr(titlesToTry: List<String>, year: Int): String = withContext(Dispatchers.IO) {
+    val candidates = buildList {
+        for (raw in titlesToTry) {
+            val clean = raw.replace(Regex("\\(\\d{4}\\)"), "").trim()
+            if (clean.isBlank()) continue
+            if (year > 0) add("$clean ($year film)")
+            add("$clean (film)")
+            add(clean)
+        }
+    }.distinct()
+
+    // 1. Hrvatska Wikipedija - izravni pogodak
+    for (q in candidates) {
+        val extract = queryWikipediaExtract("hr", q, introOnly = true)
+        if (extract.isNotEmpty()) return@withContext extract.take(1000)
+    }
+
+    // 2. Hrvatska Wikipedija - pretraga članka ako naslov ima drugačiji prijevod
+    for (raw in titlesToTry.take(2)) {
+        val clean = raw.replace(Regex("\\(\\d{4}\\)"), "").trim()
+        if (clean.length < 3) continue
+        val searchTerm = if (year > 0) "$clean $year film" else "$clean film"
+        val foundTitle = searchWikipediaTitle("hr", searchTerm)
+        if (foundTitle.isNotBlank()) {
+            val extract = queryWikipediaExtract("hr", foundTitle, introOnly = true)
+            if (extract.isNotEmpty()) return@withContext extract.take(1000)
+        }
+    }
+
+    // 3. Engleska Wikipedija + prijevod na hrvatski
+    for (q in candidates) {
+        val extract = queryWikipediaExtract("en", q, introOnly = true)
+        if (extract.isNotEmpty()) return@withContext translateToCroatian(extract.take(1000))
+    }
+
+    ""
+}
+
+private suspend fun fetchAuthorBioHr(queryTitle: String): String = withContext(Dispatchers.IO) {
+    val searchName = if (queryTitle == "PTA Filmography") "Paul Thomas Anderson" else queryTitle.trim()
+    if (searchName.isBlank()) return@withContext ""
+
+    val hrDirect = queryWikipediaExtract("hr", searchName, introOnly = false)
+    if (hrDirect.isNotEmpty()) return@withContext hrDirect.take(1800)
+
+    val hrSearchedTitle = searchWikipediaTitle("hr", searchName)
+    if (hrSearchedTitle.isNotBlank()) {
+        val hrSearchedExtract = queryWikipediaExtract("hr", hrSearchedTitle, introOnly = false)
+        if (hrSearchedExtract.isNotEmpty()) return@withContext hrSearchedExtract.take(1800)
+    }
+
+    val enDirect = queryWikipediaExtract("en", searchName, introOnly = false)
+    if (enDirect.isNotEmpty()) return@withContext translateToCroatian(enDirect.take(1500))
+
+    ""
+}
+
+private suspend fun fetchWikiTextHr(queryTitle: String): String = withContext(Dispatchers.IO) {
+    val clean = queryTitle.replace(Regex("\\(\\d{4}\\)"), "").trim()
+    if (clean.isBlank()) return@withContext ""
+
+    val hrDirect = queryWikipediaExtract("hr", clean, introOnly = false)
+    if (hrDirect.isNotEmpty()) return@withContext hrDirect.take(1600)
+
+    val enDirect = queryWikipediaExtract("en", clean, introOnly = false)
+    if (enDirect.isNotEmpty()) return@withContext translateToCroatian(enDirect.take(1400))
+
+    ""
+}
+
 private suspend fun translateToCroatian(text: String): String = withContext(Dispatchers.IO) {
     if (text.isBlank()) return@withContext ""
     try {
-        val limitedText = text.take(1500)
-        val sentences = limitedText.split(Regex("(?<=[.!?])\\s+"))
+        val normalized = text
+            .replace("\r\n", "\n")
+            .replace(Regex("\\n+"), ". ")
+            .replace(Regex("\\.\\s*\\."), ".")
+            .take(1600)
+        val sentences = normalized.split(Regex("(?<=[.!?])\\s+"))
         val translatedBuilder = StringBuilder()
 
         for (sentence in sentences) {
