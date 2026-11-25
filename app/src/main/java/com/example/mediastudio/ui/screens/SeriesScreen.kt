@@ -7,13 +7,16 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
@@ -29,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -38,6 +42,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,6 +57,7 @@ import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -230,6 +236,10 @@ fun SeriesScreen(
     var seriesAwardsHr by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
 
+    val backButtonFocusRequester = remember { FocusRequester() }
+    val infoCardFocusRequester = remember { FocusRequester() }
+    val favButtonFocusRequester = remember { FocusRequester() }
+
     val firstArchiveId = series.identifier.split(",").first()
     val sbItem = remember(series.identifier) {
         SupabaseRepository.getCatalogItem(series.identifier)
@@ -245,8 +255,21 @@ fun SeriesScreen(
             ?: ""
     }
 
+    val headerTitleWithYear = remember(series.title, resolvedYear) {
+        if (resolvedYear.isNotBlank() && !series.title.contains(resolvedYear)) {
+            "${series.title} ($resolvedYear)"
+        } else {
+            series.title
+        }
+    }
+
     val favInteractionSource = remember { MutableInteractionSource() }
     val isFavFocused by favInteractionSource.collectIsFocusedAsState()
+
+    val infoInteractionSource = remember { MutableInteractionSource() }
+    val isInfoFocused by infoInteractionSource.collectIsFocusedAsState()
+    val infoScrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     val isFavorite = viewModel.favoriteMovies.collectAsState().value.any { it.identifier == series.identifier }
 
@@ -323,7 +346,14 @@ fun SeriesScreen(
                     TvHighlightIconButton(
                         onClick = onBackClick,
                         contentDescription = "Povratak",
-                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
+                        modifier = Modifier
+                            .focusRequester(backButtonFocusRequester)
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                if (!isLoading) {
+                                    down = infoCardFocusRequester
+                                }
+                            }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
@@ -342,7 +372,7 @@ fun SeriesScreen(
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 64.dp),
+                contentPadding = PaddingValues(start = 24.dp, top = 12.dp, end = 24.dp, bottom = 64.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier
                     .fillMaxSize()
@@ -351,109 +381,170 @@ fun SeriesScreen(
                     .throttleSeriesVerticalDpad()
             ) {
                 item(key = "series_header") {
-                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = headerTitleWithYear,
+                            color = Color.White,
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 14.dp)
+                        )
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
                             val posterRequest = remember(posterUrl) {
                                 ImageRequest.Builder(context)
                                     .data(posterUrl)
-                                    .size(200, 290)
+                                    .size(340, 490)
                                     .scale(Scale.FILL)
                                     .bitmapConfig(Bitmap.Config.RGB_565)
-                                    .allowHardware(false)
+                                    .allowHardware(true)
                                     .build()
                             }
                             Image(
                                 painter = rememberAsyncImagePainter(posterRequest),
                                 contentDescription = series.title,
                                 modifier = Modifier
-                                    .width(100.dp)
-                                    .height(140.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .border(1.5.dp, Color.Gray, RoundedCornerShape(10.dp)),
+                                    .width(175.dp)
+                                    .height(255.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
                                 contentScale = ContentScale.Crop
                             )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = series.title,
-                                    color = Color.White,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
 
-                                Box(
-                                    modifier = Modifier
-                                        .height(44.dp)
-                                        .focusProperties { left = FocusRequester.Cancel }
-                                        .background(
-                                            color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .border(
-                                            width = if (isFavFocused) 3.5.dp else 1.dp,
-                                            color = if (isFavFocused) Color.White else Color.DarkGray,
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable(interactionSource = favInteractionSource, indication = null) {
-                                            viewModel.toggleFavorite(series)
-                                        }
-                                        .padding(horizontal = 16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
-                                            contentDescription = null,
-                                            tint = if (isFavorite) Color.Red else Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 255.dp, max = 330.dp)
+                                    .focusRequester(infoCardFocusRequester)
+                                    .focusProperties {
+                                        left = FocusRequester.Cancel
+                                        right = FocusRequester.Cancel
+                                        up = backButtonFocusRequester
+                                        down = favButtonFocusRequester
                                     }
+                                    .background(
+                                        color = if (isInfoFocused) Color(0xFF1B1B1B) else Color(0xFF141414),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .border(
+                                        width = if (isInfoFocused) 3.dp else 1.dp,
+                                        color = if (isInfoFocused) Color.White else Color(0xFF2B2B2B),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .onPreviewKeyEvent { event ->
+                                        if (event.type == KeyEventType.KeyDown) {
+                                            when (event.key) {
+                                                Key.DirectionDown -> {
+                                                    if (infoScrollState.value < infoScrollState.maxValue) {
+                                                        coroutineScope.launch {
+                                                            infoScrollState.animateScrollTo(
+                                                                (infoScrollState.value + 140).coerceAtMost(infoScrollState.maxValue)
+                                                            )
+                                                        }
+                                                        true
+                                                    } else {
+                                                        false
+                                                    }
+                                                }
+                                                Key.DirectionUp -> {
+                                                    if (infoScrollState.value > 0) {
+                                                        coroutineScope.launch {
+                                                            infoScrollState.animateScrollTo(
+                                                                (infoScrollState.value - 140).coerceAtLeast(0)
+                                                            )
+                                                        }
+                                                        true
+                                                    } else {
+                                                        false
+                                                    }
+                                                }
+                                                else -> false
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    .focusable(interactionSource = infoInteractionSource)
+                                    .verticalScroll(infoScrollState)
+                                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                SeriesDetailLine("Žanr", seriesGenreHr)
+                                SeriesDetailLine("Godina proizvodnje", resolvedYear)
+                                SeriesDetailLine("Glavni glumci", seriesCastHr)
+                                SeriesDetailLine("Redatelj", seriesDirectorHr)
+                                SeriesDetailLine("Nagrade", seriesAwardsHr)
+
+                                if (seriesDescription.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Divider(color = Color(0xFF262626))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "Kratki sadržaj",
+                                        color = Color(0xFFFF5252),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = seriesDescription,
+                                        color = Color(0xFFDDDDDD),
+                                        fontSize = 14.sp,
+                                        lineHeight = 21.sp
+                                    )
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                        Column(
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF141414), RoundedCornerShape(12.dp))
-                                .border(1.dp, Color(0xFF2B2B2B), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            SeriesDetailLine("Žanr", seriesGenreHr)
-                            SeriesDetailLine("Godina proizvodnje", resolvedYear)
-                            SeriesDetailLine("Glavni glumci", seriesCastHr)
-                            SeriesDetailLine("Redatelj", seriesDirectorHr)
-                            SeriesDetailLine("Nagrade", seriesAwardsHr)
-
-                            if (seriesDescription.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Divider(color = Color(0xFF262626))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Kratki sadržaj",
-                                    color = Color(0xFFFF5252),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
+                                .fillMaxWidth(0.8f)
+                                .height(48.dp)
+                                .focusRequester(favButtonFocusRequester)
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                    up = infoCardFocusRequester
+                                }
+                                .background(
+                                    color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
+                                    shape = RoundedCornerShape(10.dp)
                                 )
+                                .border(
+                                    width = if (isFavFocused) 3.5.dp else 1.dp,
+                                    color = if (isFavFocused) Color.White else Color.DarkGray,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable(interactionSource = favInteractionSource, indication = null) {
+                                    viewModel.toggleFavorite(series)
+                                }
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = null,
+                                    tint = if (isFavorite) Color.Red else Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = seriesDescription,
-                                    color = Color(0xFFCCCCCC),
+                                    text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
                                     fontSize = 14.sp,
-                                    lineHeight = 20.sp
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
                                 )
                             }
                         }
@@ -507,6 +598,7 @@ private fun SeriesDetailLine(label: String, value: String) {
             text = value,
             color = Color.White,
             fontSize = 14.sp,
+            lineHeight = 20.sp,
             modifier = Modifier.weight(1f)
         )
     }
