@@ -386,7 +386,7 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
         return False
 
     parts = [identifier, filename]
-    for field in ["title", "description", "subject", "language"]:
+    for field in ["title", "language"]:
         val = archive_md.get(field)
         if isinstance(val, list):
             parts.extend(str(x) for x in val)
@@ -394,15 +394,20 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
             parts.append(str(val))
     blob = " ".join(parts).lower()
 
-    has_english_or_dual = bool(re.search(r"\b(eng|english|dual[\s\-_]?audio|multi[\s\-_]?audio)\b", blob))
-    if has_english_or_dual:
+    has_english_or_multi = bool(
+        re.search(r"(?i)(?:^|[\W_])(eng|english|dual|multi|2audio|3audio|orig|original)(?:$|[\W_])", blob)
+    )
+    if has_english_or_multi:
+        return False
+
+    lang_field = archive_md.get("language")
+    if isinstance(lang_field, list) and len(lang_field) >= 2:
         return False
 
     if any(kw in blob for kw in EXPLICIT_DUB_KEYWORDS):
         return True
 
     if orig_lang == "en":
-        lang_field = archive_md.get("language")
         lang_list = lang_field if isinstance(lang_field, list) else ([lang_field] if lang_field else [])
         lang_tokens = {
             tok for item in lang_list for tok in re.split(r"[^a-zA-Zčćžšđãõáéíóúñ]+", str(item).lower()) if tok
