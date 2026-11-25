@@ -787,10 +787,10 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
             return
 
-        # Provjeravamo isključivo ID, Archive naslov i stream_url (bez subject/description tagova)
+        # Provjeravamo isključivo ID i stream_url same datoteke (ne Archive naslov koji često ima "+ Trailer" ili "+ Commentary")
         if not is_curated and not is_doc_row and is_explicit_junk_item(
             base_ident,
-            arch_md.get("title") or "",
+            "",
             stream_url
         ):
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})")
