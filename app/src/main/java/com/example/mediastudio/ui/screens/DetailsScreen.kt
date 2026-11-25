@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -53,6 +54,7 @@ import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -102,7 +104,10 @@ fun DetailsScreen(
     var isSupabaseAuthorList by remember { mutableStateOf(false) }
     var lastSelectedAuthorItemUrl by remember(movie.identifier) { mutableStateOf<String?>(null) }
 
+    val backButtonFocusRequester = remember { FocusRequester() }
+    val infoCardFocusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
+    val favButtonFocusRequester = remember { FocusRequester() }
     val firstEpisodeFocusRequester = remember { FocusRequester() }
     val selectedAuthorItemFocusRequester = remember { FocusRequester() }
 
@@ -325,6 +330,22 @@ fun DetailsScreen(
     val showCollectionList = !isDirectLinkMode &&
         ((isAuthorMode && (movieInfo?.qualities?.isNotEmpty() == true)) || (movieInfo?.qualities?.size ?: 0) > 1)
 
+    val baseHeaderTitle = if (isAuthorMode) movie.identifier.substringAfter("AUTHOR|") else movie.title
+    val headerYear = detailSheet?.year?.takeIf { it.isNotBlank() }
+        ?: movie.year?.takeIf { it.isNotBlank() && it != "0" }
+        ?: ""
+    val headerTitleWithYear = if (!isAuthorMode && headerYear.isNotBlank() && !baseHeaderTitle.contains(headerYear)) {
+        "$baseHeaderTitle ($headerYear)"
+    } else {
+        baseHeaderTitle
+    }
+
+    val infoCardDownTargetFR = when {
+        showCollectionList -> favButtonFocusRequester
+        movieInfo != null || isDirectLinkMode -> playButtonFocusRequester
+        else -> FocusRequester.Default
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -346,7 +367,14 @@ fun DetailsScreen(
                     TvHighlightIconButton(
                         onClick = onBackClick,
                         contentDescription = "Povratak",
-                        modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
+                        modifier = Modifier
+                            .focusRequester(backButtonFocusRequester)
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                if (!isLoading && detailSheet != null) {
+                                    down = infoCardFocusRequester
+                                }
+                            }
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
                     }
@@ -362,65 +390,86 @@ fun DetailsScreen(
                 .padding(paddingValues)
                 .clipToBounds()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 12.dp),
+                .padding(horizontal = 24.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (imageUrl.isNotEmpty()) {
-                val detailImageRequest = remember(imageUrl) {
-                    ImageRequest.Builder(context)
-                        .data(imageUrl)
-                        .size(360, 510)
-                        .scale(Scale.FILL)
-                        .bitmapConfig(Bitmap.Config.RGB_565)
-                        .allowHardware(false)
-                        .build()
-                }
-                Image(
-                    painter = rememberAsyncImagePainter(detailImageRequest),
-                    contentDescription = movie.title,
-                    modifier = Modifier
-                        .width(180.dp)
-                        .height(255.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            } else {
-                Spacer(modifier = Modifier.height(10.dp))
-            }
-
             Text(
-                text = if (isAuthorMode) movie.identifier.substringAfter("AUTHOR|") else movie.title,
+                text = headerTitleWithYear,
                 color = Color.White,
-                fontSize = 28.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp)
             )
 
             if (isLoading) {
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(24.dp))
                 CircularProgressIndicator(color = Color.Red)
             } else {
                 val sheet = detailSheet
                 val currentInfo = movieInfo
 
-                if (sheet != null) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    StructuredInfoCard(sheet = sheet)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    if (imageUrl.isNotEmpty()) {
+                        val detailImageRequest = remember(imageUrl) {
+                            ImageRequest.Builder(context)
+                                .data(imageUrl)
+                                .size(340, 490)
+                                .scale(Scale.FILL)
+                                .bitmapConfig(Bitmap.Config.RGB_565)
+                                .allowHardware(true)
+                                .build()
+                        }
+                        Image(
+                            painter = rememberAsyncImagePainter(detailImageRequest),
+                            contentDescription = movie.title,
+                            modifier = Modifier
+                                .width(175.dp)
+                                .height(255.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
+                            contentScale = ContentScale.Crop,
+                            alignment = if (isAuthorMode) Alignment.TopCenter else Alignment.Center
+                        )
+                    }
+
+                    if (sheet != null) {
+                        StructuredInfoCard(
+                            sheet = sheet,
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(infoCardFocusRequester)
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    right = FocusRequester.Cancel
+                                    up = backButtonFocusRequester
+                                    down = infoCardDownTargetFR
+                                }
+                        )
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 if (currentInfo != null && showCollectionList) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
                             .height(50.dp)
-                            .padding(bottom = 24.dp)
+                            .padding(bottom = 20.dp)
+                            .focusRequester(favButtonFocusRequester)
                             .focusProperties {
                                 left = FocusRequester.Cancel
                                 right = FocusRequester.Cancel
+                                if (sheet != null) {
+                                    up = infoCardFocusRequester
+                                }
                             }
                             .background(
                                 color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
@@ -510,6 +559,9 @@ fun DetailsScreen(
                                 .focusProperties {
                                     left = FocusRequester.Cancel
                                     right = FocusRequester.Cancel
+                                    if (index == 0) {
+                                        up = favButtonFocusRequester
+                                    }
                                 }
                                 .background(
                                     color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
@@ -555,7 +607,7 @@ fun DetailsScreen(
                     }
                 } else if (currentInfo != null || isDirectLinkMode) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(0.9f),
+                        modifier = Modifier.fillMaxWidth(0.95f),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -564,7 +616,12 @@ fun DetailsScreen(
                                 .weight(1f)
                                 .height(54.dp)
                                 .focusRequester(playButtonFocusRequester)
-                                .focusProperties { left = FocusRequester.Cancel }
+                                .focusProperties {
+                                    left = FocusRequester.Cancel
+                                    if (sheet != null) {
+                                        up = infoCardFocusRequester
+                                    }
+                                }
                                 .background(
                                     color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
                                     shape = RoundedCornerShape(12.dp)
@@ -606,7 +663,13 @@ fun DetailsScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(54.dp)
-                                .focusProperties { right = FocusRequester.Cancel }
+                                .focusRequester(favButtonFocusRequester)
+                                .focusProperties {
+                                    right = FocusRequester.Cancel
+                                    if (sheet != null) {
+                                        up = infoCardFocusRequester
+                                    }
+                                }
                                 .background(
                                     color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
                                     shape = RoundedCornerShape(12.dp)
@@ -652,12 +715,62 @@ fun DetailsScreen(
 }
 
 @Composable
-private fun StructuredInfoCard(sheet: StructuredDetailSheet) {
+private fun StructuredInfoCard(
+    sheet: StructuredDetailSheet,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val cardScrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF141414), RoundedCornerShape(12.dp))
-            .border(1.dp, Color(0xFF2B2B2B), RoundedCornerShape(12.dp))
+        modifier = modifier
+            .heightIn(min = 255.dp, max = 330.dp)
+            .background(
+                color = if (isFocused) Color(0xFF1B1B1B) else Color(0xFF141414),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .border(
+                width = if (isFocused) 3.dp else 1.dp,
+                color = if (isFocused) Color.White else Color(0xFF2B2B2B),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    when (event.key) {
+                        Key.DirectionDown -> {
+                            if (cardScrollState.value < cardScrollState.maxValue) {
+                                coroutineScope.launch {
+                                    cardScrollState.animateScrollTo(
+                                        (cardScrollState.value + 140).coerceAtMost(cardScrollState.maxValue)
+                                    )
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Key.DirectionUp -> {
+                            if (cardScrollState.value > 0) {
+                                coroutineScope.launch {
+                                    cardScrollState.animateScrollTo(
+                                        (cardScrollState.value - 140).coerceAtLeast(0)
+                                    )
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        else -> false
+                    }
+                } else {
+                    false
+                }
+            }
+            .focusable(interactionSource = interactionSource)
+            .verticalScroll(cardScrollState)
             .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -717,7 +830,7 @@ private fun StructuredInfoCard(sheet: StructuredDetailSheet) {
             Divider(color = Color(0xFF262626))
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Kratki sadržaj",
+                text = if (sheet.kind == DetailKind.AUTHOR_COLLECTION) "Biografija" else "Kratki sadržaj",
                 color = Color(0xFFFF5252),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
