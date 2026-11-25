@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -14,7 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -114,6 +115,7 @@ fun HomeScreen(
     val heroPlayFocusRequester = remember { FocusRequester() }
     val heroDetailsFocusRequester = remember { FocusRequester() }
     val firstRowFocusRequester = remember { FocusRequester() }
+    val firstFavoriteFocusRequester = remember { FocusRequester() }
 
     val activeTabFR = when (selectedTab) {
         ContentTab.MOVIES -> moviesTabFR
@@ -124,6 +126,7 @@ fun HomeScreen(
     }
 
     var showExitDialog by remember { mutableStateOf(false) }
+    var hasRequestedInitialFocus by remember { mutableStateOf(false) }
 
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
     var currentHeroPosterUrl by remember { mutableStateOf("") }
@@ -141,6 +144,21 @@ fun HomeScreen(
 
     val isSeriesTab = selectedTab == ContentTab.SERIES
     val isDrawerInteractive = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
+
+    LaunchedEffect(isLoading, currentHeroMovie, lastFocusedMovieId, isDrawerInteractive) {
+        if (!isLoading && !isDrawerInteractive && !hasRequestedInitialFocus && lastFocusedMovieId.isNullOrBlank()) {
+            delay(100L)
+            try {
+                if (currentHeroMovie != null && selectedTab != ContentTab.FAVORITES) {
+                    heroPlayFocusRequester.requestFocus()
+                } else {
+                    activeTabFR.requestFocus()
+                }
+                hasRequestedInitialFocus = true
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     LaunchedEffect(isDrawerInteractive) {
         if (isDrawerInteractive) {
@@ -181,6 +199,64 @@ fun HomeScreen(
         ContentTab.SERIES -> viewModel.seriesGenreDefinitions
         ContentTab.CONCERTS -> viewModel.concertGenreDefinitions
         else -> emptyList()
+    }
+
+    val hasHeroVisible = currentHeroMovie != null && selectedTab != ContentTab.FAVORITES
+    val hasRowsVisible = activeCategories.isNotEmpty() && selectedTab != ContentTab.FAVORITES
+
+    val homeListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
+        initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
+    )
+    val favGridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
+        initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
+    )
+
+    // Siguran prijelaz s bilo kojeg gornjeg taba prema dolje (na Hero banner, prvi red ili favorite)
+    val tabDownKeyModifier = Modifier.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+            when {
+                selectedTab == ContentTab.FAVORITES && favoriteMovies.isNotEmpty() -> {
+                    scope.launch {
+                        if (favGridState.firstVisibleItemIndex > 0 || favGridState.firstVisibleItemScrollOffset > 0) {
+                            favGridState.scrollToItem(0)
+                            delay(40L)
+                        }
+                        try {
+                            firstFavoriteFocusRequester.requestFocus()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    true
+                }
+                hasHeroVisible -> {
+                    scope.launch {
+                        if (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0) {
+                            homeListState.scrollToItem(0)
+                            delay(40L)
+                        }
+                        try {
+                            heroPlayFocusRequester.requestFocus()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    true
+                }
+                hasRowsVisible -> {
+                    scope.launch {
+                        try {
+                            firstRowFocusRequester.requestFocus()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    true
+                }
+                else -> false
+            }
+        } else {
+            false
+        }
     }
 
     ModalNavigationDrawer(
@@ -342,10 +418,7 @@ fun HomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .focusProperties { up = FocusRequester.Cancel }
-                                .onPreviewKeyEvent { event ->
-                                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp
-                                },
+                                .focusGroup(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
@@ -354,6 +427,7 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .focusRequester(menuFocusRequester)
                                     .focusProperties {
+                                        up = FocusRequester.Cancel
                                         left = FocusRequester.Cancel
                                         right = searchFocusRequester
                                         down = activeTabFR
@@ -377,6 +451,7 @@ fun HomeScreen(
                                     .weight(1f)
                                     .focusRequester(searchFocusRequester)
                                     .focusProperties {
+                                        up = FocusRequester.Cancel
                                         left = menuFocusRequester
                                         right = FocusRequester.Cancel
                                         down = activeTabFR
@@ -387,7 +462,8 @@ fun HomeScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .focusGroup(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             TabButton(
@@ -396,11 +472,13 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.MOVIES) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .then(tabDownKeyModifier)
                                     .focusRequester(moviesTabFR)
                                     .focusProperties {
                                         left = FocusRequester.Cancel
                                         right = animTabFR
                                         up = menuFocusRequester
+                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -409,11 +487,13 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.ANIMATION) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .then(tabDownKeyModifier)
                                     .focusRequester(animTabFR)
                                     .focusProperties {
                                         left = moviesTabFR
                                         right = seriesTabFR
                                         up = menuFocusRequester
+                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -422,11 +502,13 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.SERIES) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .then(tabDownKeyModifier)
                                     .focusRequester(seriesTabFR)
                                     .focusProperties {
                                         left = animTabFR
                                         right = concertsTabFR
                                         up = searchFocusRequester
+                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -435,11 +517,13 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.CONCERTS) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .then(tabDownKeyModifier)
                                     .focusRequester(concertsTabFR)
                                     .focusProperties {
                                         left = seriesTabFR
                                         right = favoritesTabFR
                                         up = searchFocusRequester
+                                        if (hasHeroVisible) down = heroPlayFocusRequester
                                     }
                             )
                             TabButton(
@@ -448,11 +532,13 @@ fun HomeScreen(
                                 onClick = { viewModel.selectTab(ContentTab.FAVORITES) },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .then(tabDownKeyModifier)
                                     .focusRequester(favoritesTabFR)
                                     .focusProperties {
                                         left = concertsTabFR
                                         right = FocusRequester.Cancel
                                         up = searchFocusRequester
+                                        if (favoriteMovies.isNotEmpty()) down = firstFavoriteFocusRequester
                                     }
                             )
                         }
@@ -470,11 +556,6 @@ fun HomeScreen(
                             Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 16.sp)
                         }
                     } else {
-                        val favGridState = rememberLazyGridState(
-                            initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
-                            initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
-                        )
-
                         DisposableEffect(favGridState) {
                             onDispose {
                                 viewModel.savedHomeScrollIndex = favGridState.firstVisibleItemIndex
@@ -510,10 +591,10 @@ fun HomeScreen(
                                 .padding(paddingValues)
                                 .clipToBounds()
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = favoriteMovies,
-                                key = { it.identifier }
-                            ) { movie ->
+                                key = { _, m -> m.identifier }
+                            ) { index, movie ->
                                 val isDbSeries = SupabaseRepository.getCatalogItem(movie.identifier)?.mediaType == "series"
                                 val isProbablySeries = isDbSeries ||
                                     movie.identifier.startsWith("tmdb-tv-") ||
@@ -524,6 +605,7 @@ fun HomeScreen(
                                     isSeries = isProbablySeries,
                                     viewModel = viewModel,
                                     authorImages = authorImages,
+                                    externalFocusRequester = if (index == 0) firstFavoriteFocusRequester else null,
                                     shouldRestoreFocus = movie.identifier == lastFocusedMovieId,
                                     onFocusRestored = { viewModel.clearLastFocusedMovie() },
                                     onMovieClick = { item ->
@@ -537,11 +619,6 @@ fun HomeScreen(
                         }
                     }
                 } else {
-                    val homeListState = rememberLazyListState(
-                        initialFirstVisibleItemIndex = viewModel.savedHomeScrollIndex,
-                        initialFirstVisibleItemScrollOffset = viewModel.savedHomeScrollOffset
-                    )
-
                     DisposableEffect(homeListState) {
                         onDispose {
                             viewModel.savedHomeScrollIndex = homeListState.firstVisibleItemIndex
@@ -569,7 +646,7 @@ fun HomeScreen(
 
                     LazyColumn(
                         state = homeListState,
-                        contentPadding = PaddingValues(top = 6.dp, bottom = 64.dp),
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 72.dp),
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(paddingValues)
@@ -579,8 +656,8 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(295.dp)
-                                    .padding(start = 24.dp, bottom = 14.dp, end = 24.dp)
+                                    .height(275.dp)
+                                    .padding(start = 24.dp, bottom = 10.dp, end = 24.dp)
                             ) {
                                 currentHeroMovie?.let { (movie, isSeries) ->
                                     Column(
@@ -590,10 +667,10 @@ fun HomeScreen(
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 34.sp,
+                                            fontSize = 32.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             maxLines = 2,
-                                            lineHeight = 38.sp,
+                                            lineHeight = 36.sp,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.width(650.dp)
                                         )
@@ -617,7 +694,10 @@ fun HomeScreen(
                                             )
                                         }
 
-                                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.focusGroup(),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
                                             HeroButton(
                                                 text = "Gledaj odmah",
                                                 icon = Icons.Default.PlayArrow,
@@ -628,24 +708,7 @@ fun HomeScreen(
                                                         left = FocusRequester.Cancel
                                                         right = heroDetailsFocusRequester
                                                         up = activeTabFR
-                                                    }
-                                                    .onPreviewKeyEvent { event ->
-                                                        if (event.type == KeyEventType.KeyDown &&
-                                                            event.key == Key.DirectionDown &&
-                                                            activeCategories.isNotEmpty()
-                                                        ) {
-                                                            scope.launch {
-                                                                homeListState.scrollToItem(1)
-                                                                delay(50L)
-                                                                try {
-                                                                    firstRowFocusRequester.requestFocus()
-                                                                } catch (_: Exception) {
-                                                                }
-                                                            }
-                                                            true
-                                                        } else {
-                                                            false
-                                                        }
+                                                        if (hasRowsVisible) down = firstRowFocusRequester
                                                     }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
@@ -669,24 +732,7 @@ fun HomeScreen(
                                                         left = heroPlayFocusRequester
                                                         right = FocusRequester.Cancel
                                                         up = activeTabFR
-                                                    }
-                                                    .onPreviewKeyEvent { event ->
-                                                        if (event.type == KeyEventType.KeyDown &&
-                                                            event.key == Key.DirectionDown &&
-                                                            activeCategories.isNotEmpty()
-                                                        ) {
-                                                            scope.launch {
-                                                                homeListState.scrollToItem(1)
-                                                                delay(50L)
-                                                                try {
-                                                                    firstRowFocusRequester.requestFocus()
-                                                                } catch (_: Exception) {
-                                                                }
-                                                            }
-                                                            true
-                                                        } else {
-                                                            false
-                                                        }
+                                                        if (hasRowsVisible) down = firstRowFocusRequester
                                                     }
                                                     .onFocusChanged { state ->
                                                         if (state.isFocused &&
@@ -732,24 +778,8 @@ fun HomeScreen(
                             val isTop10 = genre.title.startsWith("Top 10") || genre.title.startsWith("Najgledaniji")
                             val isRowSeries = isSeriesTab || genre.isSeriesCategory
                             val firstRowUpModifier = if (index == 0) {
-                                Modifier.onPreviewKeyEvent { event ->
-                                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-                                        scope.launch {
-                                            homeListState.scrollToItem(0)
-                                            delay(50L)
-                                            try {
-                                                if (heroMovies.isNotEmpty()) {
-                                                    heroPlayFocusRequester.requestFocus()
-                                                } else {
-                                                    activeTabFR.requestFocus()
-                                                }
-                                            } catch (_: Exception) {
-                                            }
-                                        }
-                                        true
-                                    } else {
-                                        false
-                                    }
+                                Modifier.focusProperties {
+                                    up = if (hasHeroVisible) heroPlayFocusRequester else activeTabFR
                                 }
                             } else {
                                 Modifier
@@ -1075,8 +1105,7 @@ fun MovieCategoryRow(
     Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
                 .focusProperties { left = FocusRequester.Cancel }
                 .background(
                     color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
@@ -1089,8 +1118,7 @@ fun MovieCategoryRow(
                 )
                 .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = displayTitle,
@@ -1098,26 +1126,26 @@ fun MovieCategoryRow(
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Svi",
-                    color = if (isHeaderFocused) Color.White else Color.Gray,
-                    fontSize = 13.sp,
-                    fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
-                )
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = "Otvori žanr",
-                    tint = if (isHeaderFocused) Color.White else Color.Gray,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Svi",
+                color = if (isHeaderFocused) Color.White else Color.Gray,
+                fontSize = 13.sp,
+                fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
+            )
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "Otvori žanr",
+                tint = if (isHeaderFocused) Color.White else Color.Gray,
+                modifier = Modifier.size(20.dp)
+            )
         }
 
         LazyRow(
             state = rowListState,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp)
+            horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp),
+            modifier = Modifier.focusGroup()
         ) {
             itemsIndexed(
                 items = movies,
