@@ -936,11 +936,36 @@ fun PlayerScreen(
                 }
             },
             update = { playerView ->
-                if (playerView.resizeMode != videoResizeMode) {
-                    playerView.resizeMode = videoResizeMode
+                playerView.resizeMode = videoResizeMode
+                val contentFrame = playerView.findViewById<AspectRatioFrameLayout>(
+                    androidx.media3.ui.R.id.exo_content_frame
+                )
+                contentFrame?.let { frame ->
+                    frame.resizeMode = videoResizeMode
+                    if (videoResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM &&
+                        detectedWidth > 0 && detectedHeight > 0
+                    ) {
+                        val nativeRatio = detectedWidth.toFloat() / detectedHeight.toFloat()
+                        if (nativeRatio < 1.55f) {
+                            frame.setAspectRatio(16f / 9f)
+                        } else {
+                            frame.setAspectRatio(nativeRatio)
+                        }
+                    } else if (detectedWidth > 0 && detectedHeight > 0) {
+                        frame.setAspectRatio(detectedWidth.toFloat() / detectedHeight.toFloat())
+                    }
+                    frame.requestLayout()
                 }
+                playerView.requestLayout()
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = if (videoResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) {
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(16f / 9f)
+                    .align(Alignment.Center)
+            } else {
+                Modifier.fillMaxSize()
+            }
         )
 
         if (isBuffering) {
@@ -1083,7 +1108,7 @@ fun PlayerScreen(
                         )
 
                         val formatLabel = when (videoResizeMode) {
-                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "📐 Zoom 16:9"
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "📐 16:9"
                             AspectRatioFrameLayout.RESIZE_MODE_FILL -> "📐 Rastegni"
                             else -> "📐 Original"
                         }
@@ -1096,6 +1121,12 @@ fun PlayerScreen(
                                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                                     else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 }
+                                quickHudMessage = when (videoResizeMode) {
+                                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "📐 Format slike: 16:9 (Zoom)"
+                                    AspectRatioFrameLayout.RESIZE_MODE_FILL -> "📐 Format slike: Rastegni (Puni ekran)"
+                                    else -> "📐 Format slike: Original"
+                                }
+                                quickHudTick++
                                 controlsInteractionTick++
                             }
                         )
