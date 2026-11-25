@@ -64,28 +64,16 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
 import java.net.HttpURLConnection
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
-import java.util.concurrent.Callable
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.GZIPInputStream
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToLong
 
 private const val SUBTITLES_SUPABASE_URL = "https://jpjezjcbayontfwywvay.supabase.co/rest/v1"
@@ -96,277 +84,6 @@ private const val STREAM_USER_AGENT =
 private val UNWANTED_CLIP_REGEX = Regex(
     "(?i)(trailer|sample|teaser|preview|promo|pencil[\\s._-]*test|shot[\\s._-]*demo|transformation|test[\\s._-]*footage|commentary|subtlet|review)"
 )
-
-/**
- * Lokalni multi-threaded HTTP Range proxy na 127.0.0.1 koji ubrzava spori single-stream
- * prijenos s Archive.org-a (4 paralelne veze po 512 KB blokovima, maks. ~2.5 MB u memoriji).
- */
-private class LocalParallelStreamProxy {
-    private val running = AtomicBoolean(true)
-    private val serverSocket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
-    val port: Int = serverSocket.localPort
-    private val idGen = AtomicInteger(1)
-    private val urlByToken = ConcurrentHashMap<String, String>()
-    private val resolvedCache = ConcurrentHashMap<String, Pair<String, Long>>()
-    private val acceptExecutor = Executors.newCachedThreadPool()
-    private val chunkExecutor = Executors.newFixedThreadPool(6)
-
-    init {
-        acceptExecutor.execute {
-            while (running.get() && !serverSocket.isClosed) {
-                try {
-                    val client = serverSocket.accept()
-                    client.tcpNoDelay = true
-                    acceptExecutor.execute { handleClient(client) }
-                } catch (_: Exception) {
-                    if (!running.get()) break
-                }
-            }
-        }
-    }
-
-    fun wrapUrl(remoteUrl: String): String {
-        if (!remoteUrl.startsWith("https://archive.org/download/") &&
-            !remoteUrl.startsWith("http://archive.org/download/")
-        ) {
-            return remoteUrl
-        }
-        val token = "s${idGen.getAndIncrement()}"
-        urlByToken[token] = remoteUrl
-        return "http://127.0.0.1:$port/$token"
-    }
-
-    fun close() {
-        running.set(false)
-        try {
-            serverSocket.close()
-        } catch (_: Exception) {
-        }
-        try {
-            acceptExecutor.shutdownNow()
-        } catch (_: Exception) {
-        }
-        try {
-            chunkExecutor.shutdownNow()
-        } catch (_: Exception) {
-        }
-        urlByToken.clear()
-        resolvedCache.clear()
-    }
-
-    private fun resolveRemoteTarget(originalUrl: String): Pair<String, Long>? {
-        resolvedCache[originalUrl]?.let { return it }
-        var current = originalUrl
-        for (hop in 0..5) {
-            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", STREAM_USER_AGENT)
-                setRequestProperty("Range", "bytes=0-1")
-                connectTimeout = 7000
-                readTimeout = 7000
-            }
-            val code = conn.responseCode
-            if (code in 301..308) {
-                val loc = conn.getHeaderField("Location") ?: return null
-                current = URL(URL(current), loc).toString()
-                try {
-                    conn.inputStream.close()
-                } catch (_: Exception) {
-                }
-                conn.disconnect()
-                continue
-            }
-            val contentRange = conn.getHeaderField("Content-Range").orEmpty()
-            val totalSize = if (contentRange.contains("/")) {
-                contentRange.substringAfterLast("/").trim().toLongOrNull() ?: -1L
-            } else {
-                conn.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
-            }
-            try {
-                conn.inputStream.close()
-            } catch (_: Exception) {
-            }
-            conn.disconnect()
-            if (code == 206 && totalSize > 0L) {
-                val resolved = current to totalSize
-                resolvedCache[originalUrl] = resolved
-                return resolved
-            }
-            return null
-        }
-        return null
-    }
-
-    private fun fetchRangeBytes(targetUrl: String, start: Long, endInclusive: Long): ByteArray? {
-        for (attempt in 0..2) {
-            var conn: HttpURLConnection? = null
-            try {
-                conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    requestMethod = "GET"
-                    setRequestProperty("User-Agent", STREAM_USER_AGENT)
-                    setRequestProperty("Range", "bytes=$start-$endInclusive")
-                    setRequestProperty("Accept-Encoding", "identity")
-                    connectTimeout = 7000
-                    readTimeout = 14000
-                }
-                val code = conn.responseCode
-                if (code == 206 || code == 200) {
-                    val expected = (endInclusive - start + 1L).toInt()
-                    val buf = ByteArray(expected)
-                    var offset = 0
-                    BufferedInputStream(conn.inputStream, 32 * 1024).use { input ->
-                        while (offset < expected) {
-                            val r = input.read(buf, offset, expected - offset)
-                            if (r <= 0) break
-                            offset += r
-                        }
-                    }
-                    if (offset == expected) return buf
-                }
-            } catch (_: Exception) {
-            } finally {
-                try {
-                    conn?.disconnect()
-                } catch (_: Exception) {
-                }
-            }
-        }
-        return null
-    }
-
-    private fun handleClient(client: Socket) {
-        client.use { sock ->
-            try {
-                val input = sock.getInputStream()
-                val out = sock.getOutputStream()
-                val requestLines = readHeaderLines(input)
-                if (requestLines.isEmpty()) return
-
-                val firstLine = requestLines[0]
-                val parts = firstLine.split(" ")
-                if (parts.size < 2) return
-                val method = parts[0].uppercase(Locale.US)
-                val token = parts[1].trimStart('/').substringBefore("?")
-                val originalUrl = urlByToken[token] ?: return
-
-                var rangeHeader = ""
-                for (line in requestLines) {
-                    if (line.startsWith("Range:", ignoreCase = true)) {
-                        rangeHeader = line.substringAfter(":").trim()
-                        break
-                    }
-                }
-
-                val resolved = resolveRemoteTarget(originalUrl)
-                if (resolved == null) {
-                    // Fallback na standardni 302 redirect ako server ne podržava Range
-                    val resp = "HTTP/1.1 302 Found\r\nLocation: $originalUrl\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    out.write(resp.toByteArray(Charsets.UTF_8))
-                    out.flush()
-                    return
-                }
-
-                val (directTargetUrl, totalSize) = resolved
-                var startByte = 0L
-                var endByte = totalSize - 1L
-                var isPartial = false
-
-                if (rangeHeader.startsWith("bytes=", ignoreCase = true)) {
-                    isPartial = true
-                    val spec = rangeHeader.substringAfter("=").trim()
-                    val startStr = spec.substringBefore("-").trim()
-                    val endStr = spec.substringAfter("-", "").trim()
-                    startByte = startStr.toLongOrNull() ?: 0L
-                    endByte = if (endStr.isNotEmpty()) {
-                        (endStr.toLongOrNull() ?: (totalSize - 1L)).coerceAtMost(totalSize - 1L)
-                    } else {
-                        totalSize - 1L
-                    }
-                }
-
-                if (startByte > endByte || startByte >= totalSize) {
-                    val err = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$totalSize\r\nConnection: close\r\n\r\n"
-                    out.write(err.toByteArray(Charsets.UTF_8))
-                    out.flush()
-                    return
-                }
-
-                val contentLen = endByte - startByte + 1L
-                val statusLine = if (isPartial) "HTTP/1.1 206 Partial Content" else "HTTP/1.1 200 OK"
-                val headers = buildString {
-                    append("$statusLine\r\n")
-                    append("Content-Type: video/mp4\r\n")
-                    append("Accept-Ranges: bytes\r\n")
-                    append("Content-Length: $contentLen\r\n")
-                    if (isPartial) {
-                        append("Content-Range: bytes $startByte-$endByte/$totalSize\r\n")
-                    }
-                    append("Connection: close\r\n\r\n")
-                }
-                out.write(headers.toByteArray(Charsets.UTF_8))
-                out.flush()
-
-                if (method == "HEAD") return
-
-                streamParallelChunks(directTargetUrl, startByte, endByte, out)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    private fun streamParallelChunks(
-        targetUrl: String,
-        startByte: Long,
-        endByte: Long,
-        out: OutputStream
-    ) {
-        val chunkSize = 512L * 1024L // 512 KB po bloku
-        val parallelWorkers = 4
-        var cursor = startByte
-
-        while (running.get() && cursor <= endByte) {
-            val tasks = ArrayList<Callable<ByteArray?>>(parallelWorkers)
-            var batchCursor = cursor
-            for (w in 0 until parallelWorkers) {
-                if (batchCursor > endByte) break
-                val cStart = batchCursor
-                val cEnd = min(cStart + chunkSize - 1L, endByte)
-                batchCursor = cEnd + 1L
-                tasks.add(Callable { fetchRangeBytes(targetUrl, cStart, cEnd) })
-            }
-            if (tasks.isEmpty()) break
-
-            val futures = chunkExecutor.invokeAll(tasks)
-            for (f in futures) {
-                val data = f.get() ?: return
-                out.write(data)
-            }
-            out.flush()
-            cursor = batchCursor
-        }
-    }
-
-    private fun readHeaderLines(input: InputStream): List<String> {
-        val lines = mutableListOf<String>()
-        val sb = StringBuilder()
-        while (true) {
-            val b = input.read()
-            if (b == -1) break
-            if (b == '\n'.code) {
-                val line = sb.toString().trimEnd('\r')
-                sb.setLength(0)
-                if (line.isEmpty()) break
-                lines.add(line)
-            } else {
-                sb.append(b.toChar())
-                if (sb.length > 4096) break
-            }
-        }
-        return lines
-    }
-}
 
 data class SrtCue(
     val startMs: Long,
@@ -467,14 +184,6 @@ fun PlayerScreen(
     val rootFocusRequester = remember { FocusRequester() }
     val centerPauseFocusRequester = remember { FocusRequester() }
 
-    val streamProxy = remember {
-        try {
-            LocalParallelStreamProxy()
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     val exoPlayer = remember {
         val loadControl = DefaultLoadControl.Builder()
             .setAllocator(DefaultAllocator(true, 64 * 1024))
@@ -492,8 +201,8 @@ fun PlayerScreen(
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(STREAM_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(8_000)
-            .setReadTimeoutMs(20_000)
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(22_000)
             .setDefaultRequestProperties(
                 mapOf(
                     "Accept-Encoding" to "identity",
@@ -528,9 +237,13 @@ fun PlayerScreen(
         player
     }
 
-    fun playUriWithProxy(remoteUrl: String, startPositionMs: Long) {
-        val playableUrl = streamProxy?.wrapUrl(remoteUrl) ?: remoteUrl
-        exoPlayer.setMediaItem(MediaItem.fromUri(playableUrl), startPositionMs)
+    fun startStreamDirect(remoteUrl: String, startPositionMs: Long) {
+        val safeHttpsUrl = if (remoteUrl.startsWith("http://archive.org/")) {
+            "https://" + remoteUrl.removePrefix("http://")
+        } else {
+            remoteUrl
+        }
+        exoPlayer.setMediaItem(MediaItem.fromUri(safeHttpsUrl), startPositionMs)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
     }
@@ -566,7 +279,6 @@ fun PlayerScreen(
                 }
             }
 
-            // Za zastoje tijekom reprodukcije preferiraj manju / lakšu kopiju (ispod 1.4 GB ili 720p)
             val lighterCandidates = if (reasonLabel.contains("Zastoj", ignoreCase = true)) {
                 pool.filter { opt ->
                     !urlsMatchArchiveFile(opt.url, activeStreamUrl) &&
@@ -595,7 +307,7 @@ fun PlayerScreen(
                 midStreamRetryCount = 0
                 stallCountForCurrentStream = 0
                 streamAttemptToken++
-                playUriWithProxy(candidate, resumePos)
+                startStreamDirect(candidate, resumePos)
                 quickHudMessage = "⚡ $reasonLabel — prebačeno na lakšu/bržu kopiju"
                 quickHudTick++
             } else {
@@ -610,17 +322,15 @@ fun PlayerScreen(
 
     LaunchedEffect(activeStreamUrl, streamAttemptToken) {
         if (activeStreamUrl.isBlank()) return@LaunchedEffect
-        delay(8_500L)
+        delay(10_000L)
         if (duration <= 0L && exoPlayer.playWhenReady && !exhaustedAllFallbacks) {
             switchToFallbackStream("Sporo pokretanje")
         }
     }
 
-    // Nadzor zapinjanja tijekom reprodukcije: ako video stoji u BUFFERING duže od 4.5s (ili 2 puta zapne),
-    // automatski prebacuje na lakšu derivativnu kopiju (npr. 720p / .ia.mp4) s istog položaja.
     LaunchedEffect(isBuffering, isPlaying, activeStreamUrl, streamAttemptToken) {
         if (isBuffering && isPlaying && duration > 0L && activeStreamUrl.isNotBlank() && !exhaustedAllFallbacks) {
-            delay(4_500L)
+            delay(5_000L)
             if (isBuffering && isPlaying && !exhaustedAllFallbacks) {
                 stallCountForCurrentStream++
                 val isHeavyFile = detectedSizeBytes > 1_350_000_000L || detectedHeight >= 1080
@@ -750,10 +460,10 @@ fun PlayerScreen(
 
         activeStreamUrl = initialUrl
         streamAttemptToken++
-        playUriWithProxy(initialUrl, 0L)
+        startStreamDirect(initialUrl, 0L)
 
         launch {
-            delay(2000L)
+            delay(1800L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
             val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, sbMeta?.mediaType)
             val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
@@ -780,8 +490,13 @@ fun PlayerScreen(
                 }
                 val bestOption = discoveredVersions.first()
                 val currentRank = currentMatched?.languageRank ?: classifyVersionLanguageRank("$cleanArchiveId $activeStreamUrl")
+                val currentIsHeavy = (currentMatched?.sizeBytes ?: 0L) > 1_650_000_000L &&
+                    bestOption.sizeBytes in 250_000_000L..1_450_000_000L &&
+                    bestOption.height >= 720
 
-                if (currentRank >= 2 && bestOption.languageRank < currentRank && !urlsMatchArchiveFile(bestOption.url, activeStreamUrl)) {
+                if ((currentRank >= 2 && bestOption.languageRank < currentRank && !urlsMatchArchiveFile(bestOption.url, activeStreamUrl)) ||
+                    (currentIsHeavy && !urlsMatchArchiveFile(bestOption.url, activeStreamUrl))
+                ) {
                     val resumePos = exoPlayer.currentPosition.coerceAtLeast(0L)
                     selectedVersion = bestOption
                     activeStreamUrl = bestOption.url
@@ -792,8 +507,12 @@ fun PlayerScreen(
                     midStreamRetryCount = 0
                     stallCountForCurrentStream = 0
                     streamAttemptToken++
-                    playUriWithProxy(bestOption.url, resumePos)
-                    quickHudMessage = "🔊 Odabrana engleska verzija (ostale u ⚙ Verzije)"
+                    startStreamDirect(bestOption.url, resumePos)
+                    quickHudMessage = if (currentIsHeavy) {
+                        "⚡ Odabrana glatka verzija (${formatFileSizeHuman(bestOption.sizeBytes)})"
+                    } else {
+                        "🔊 Odabrana engleska verzija (ostale u ⚙ Verzije)"
+                    }
                     quickHudTick++
                 } else {
                     selectedVersion = currentMatched ?: bestOption
@@ -1063,7 +782,7 @@ fun PlayerScreen(
                     coroutineScope.launch {
                         delay(700L * midStreamRetryCount)
                         streamAttemptToken++
-                        playUriWithProxy(activeStreamUrl, resumePos)
+                        startStreamDirect(activeStreamUrl, resumePos)
                     }
                     return
                 }
@@ -1105,7 +824,6 @@ fun PlayerScreen(
         onDispose {
             exoPlayer.removeListener(listener)
             exoPlayer.release()
-            streamProxy?.close()
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -1629,7 +1347,7 @@ fun PlayerScreen(
                                     exhaustedAllFallbacks = false
                                     fallbackAttemptsUsed = 0
                                     streamAttemptToken++
-                                    playUriWithProxy(version.url, savedPos)
+                                    startStreamDirect(version.url, savedPos)
                                     showQualityDialog = false
                                 }
                             )
