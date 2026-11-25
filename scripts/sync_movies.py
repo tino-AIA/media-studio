@@ -86,19 +86,20 @@ EX_YU_DETECTION_KEYWORDS = (
 )
 
 _STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia"}
+_SHORT_NUM_TOKENS = {"8", "9", "12"}
 
 
 def _tokenize_words(text):
     if not text:
         return set()
-    decoded = unquote(str(text))
+    decoded = unquote(str(text)).replace("½", " 1 2 ").replace("¼", " 1 4 ").replace("¾", " 3 4 ")
     spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", decoded)
     cleaned = re.sub(r"[\W_]+", " ", spaced.lower()).strip()
-    return {w for w in cleaned.split() if len(w) >= 3 and w not in _STOP_WORDS}
+    return {w for w in cleaned.split() if (len(w) >= 3 or w in _SHORT_NUM_TOKENS) and w not in _STOP_WORDS}
 
 
 def _word_prefixes(words):
-    return {w[:4] for w in words if len(w) >= 4} | {w for w in words if len(w) == 3}
+    return {w[:4] for w in words if len(w) >= 4} | {w for w in words if len(w) == 3 or w in _SHORT_NUM_TOKENS}
 
 
 def is_explicit_junk_item(ident, raw_title, extra_text=""):
@@ -124,7 +125,7 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
 
 def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0):
     """
-    Višeslojna provjera (podržava deklinacije stranih jezika putem 4-slovnog korijena):
+    Višeslojna provjera (podržava deklinacije stranih jezika putem 4-slovnog korijena i kratke naslove poput 8½):
     1. Ako datoteka ima smislene riječi, provjerava podudaranje korijena riječi s naslovima / Archive metapodacima.
     2. Ako je datoteka generička (npr. IMG_9009.mp4, A4_t00.mkv, DVD_VIDEO.mp4, ScreenRecording...),
        zahtijeva da sam Archive.org naslov (arch_md.title) odgovara očekivanom filmu.
