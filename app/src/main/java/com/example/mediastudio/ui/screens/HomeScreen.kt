@@ -127,6 +127,7 @@ fun HomeScreen(
 
     var showExitDialog by remember { mutableStateOf(false) }
     var hasRequestedInitialFocus by remember { mutableStateOf(false) }
+    var isAnyElementFocused by remember { mutableStateOf(false) }
 
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
     var currentHeroPosterUrl by remember { mutableStateOf("") }
@@ -145,32 +146,26 @@ fun HomeScreen(
     val isSeriesTab = selectedTab == ContentTab.SERIES
     val isDrawerOpen = drawerState.isOpen
 
-    // Odmah pri ulasku na ekran postavi fokus na aktivni tab (uvijek je vidljiv i spreman),
-    // a kad se učita Hero banner prebaci fokus na Gledaj odmah
-    LaunchedEffect(Unit) {
-        delay(80L)
-        try {
-            activeTabFR.requestFocus()
-        } catch (_: Exception) {
-        }
-    }
-
-    LaunchedEffect(isLoading, currentHeroMovie, lastFocusedMovieId, isDrawerOpen) {
+    // Postavi početni fokus samo jednom pri prvom učitavanju ekrana,
+    // bez ponovnog okidanja kad se Hero banner rotira u pozadini
+    LaunchedEffect(isLoading) {
         if (!isLoading && !isDrawerOpen && !hasRequestedInitialFocus && lastFocusedMovieId.isNullOrBlank()) {
-            delay(120L)
-            try {
-                if (currentHeroMovie != null && selectedTab != ContentTab.FAVORITES) {
-                    heroPlayFocusRequester.requestFocus()
-                } else {
-                    activeTabFR.requestFocus()
-                }
-                hasRequestedInitialFocus = true
-            } catch (_: Exception) {
+            delay(100L)
+            if (!isAnyElementFocused) {
                 try {
-                    activeTabFR.requestFocus()
+                    if (currentHeroMovie != null && selectedTab != ContentTab.FAVORITES) {
+                        heroPlayFocusRequester.requestFocus()
+                    } else {
+                        activeTabFR.requestFocus()
+                    }
                 } catch (_: Exception) {
+                    try {
+                        activeTabFR.requestFocus()
+                    } catch (_: Exception) {
+                    }
                 }
             }
+            hasRequestedInitialFocus = true
         }
     }
 
@@ -377,6 +372,7 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .onFocusChanged { isAnyElementFocused = it.hasFocus }
         ) {
             if (currentHeroPosterUrl.isNotEmpty()) {
                 val heroBgRequest = remember(currentHeroPosterUrl) {
