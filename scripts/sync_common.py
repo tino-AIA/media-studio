@@ -381,8 +381,37 @@ def contains_blocked_regional_or_arabic(*texts, orig_lang=""):
     return any(re.search(rf"\b{re.escape(kw)}\b", blob_lower) for kw in BLOCKED_REGIONAL_AND_ARABIC_KEYWORDS)
 
 
+def _stream_has_english_or_multi_audio_track(stream_url):
+    """Provjerava prvih 128 KB MKV datoteke za englesku ili više audio traka putem HTTP Range zahtjeva."""
+    if not stream_url or ".mkv" not in stream_url.lower():
+        return False
+    try:
+        r = session.get(
+            stream_url,
+            headers={"Range": "bytes=0-131071"},
+            allow_redirects=True,
+            timeout=8
+        )
+        if r.status_code in (200, 206) and r.content:
+            head = r.content
+            # Matroska TrackType = Audio (\x83\x02) — ako se pojavi >= 2 puta, datoteka ima više audio traka
+            if head.count(b"\x83\x02") >= 2:
+                return True
+            # Matroska Language element (\x22\xb5\x9c) s vrijednošću 'eng' ili 'und'
+            if b"\x22\xb5\x9c\x83eng" in head or b"\x22\xb5\x9c\x83und" in head:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lang=""):
     if orig_lang and orig_lang.lower() in EX_YU_LANGUAGES:
+        return False
+
+    # Nijemi filmovi (prije 1930.) nemaju govornu sinkronizaciju (samo prevedene međunaslove)
+    arch_year = extract_year_from_text(f"{identifier} {archive_md.get('title') or ''} {archive_md.get('year') or ''}")
+    if 1890 <= arch_year <= 1929:
         return False
 
     parts = [identifier, filename]
@@ -402,6 +431,10 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
 
     lang_field = archive_md.get("language")
     if isinstance(lang_field, list) and len(lang_field) >= 2:
+        return False
+
+    # Ako je link na .mkv datoteku, provjeri prvih 128 KB ima li više audio traka ili 'eng' track
+    if filename and filename.startswith("http") and _stream_has_english_or_multi_audio_track(filename):
         return False
 
     if any(kw in blob for kw in EXPLICIT_DUB_KEYWORDS):
