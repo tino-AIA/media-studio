@@ -1,7 +1,10 @@
 package com.example.mediastudio
 
+import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -38,6 +41,7 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.example.mediastudio.data.api.SupabaseRepository
 import com.example.mediastudio.data.model.ArchiveMovie
 import com.example.mediastudio.data.update.AppReleaseInfo
 import com.example.mediastudio.data.update.AppUpdateManager
@@ -54,6 +58,60 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 class MainActivity : ComponentActivity() {
+
+    private var lastDpadRepeatTimeMs = 0L
+
+    companion object {
+        @Volatile
+        private var imageLoaderInitialized = false
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        val isDpadDirection = code == KeyEvent.KEYCODE_DPAD_UP ||
+            code == KeyEvent.KEYCODE_DPAD_DOWN ||
+            code == KeyEvent.KEYCODE_DPAD_LEFT ||
+            code == KeyEvent.KEYCODE_DPAD_RIGHT
+
+        // Sprječava preplavljivanje Compose fokus-sustava i RAM-a kad se na Firesticku drži tipka smjera
+        if (isDpadDirection && event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastDpadRepeatTimeMs < 115L) {
+                return true
+            }
+            lastDpadRepeatTimeMs = now
+        } else if (isDpadDirection && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            lastDpadRepeatTimeMs = SystemClock.uptimeMillis()
+        }
+
+        return try {
+            super.dispatchKeyEvent(event)
+        } catch (_: Exception) {
+            // Hvata rijetki Compose FocusSearch rubni pad na TV uređajima umjesto rušenja aplikacije
+            true
+        }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            try {
+                Coil.imageLoader(applicationContext).memoryCache?.clear()
+                SupabaseRepository.trimMemoryCaches()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        try {
+            Coil.imageLoader(applicationContext).memoryCache?.clear()
+            SupabaseRepository.trimMemoryCaches()
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -61,23 +119,26 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
 
         // Ograničava potrošnju RAM-a za plakate na Fire TV Sticku pri brzom listanju
-        val imageLoader = ImageLoader.Builder(applicationContext)
-            .bitmapConfig(Bitmap.Config.RGB_565)
-            .allowHardware(false)
-            .crossfade(false)
-            .memoryCache {
-                MemoryCache.Builder(applicationContext)
-                    .maxSizePercent(0.15)
-                    .build()
-            }
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(File(applicationContext.cacheDir, "poster_image_cache"))
-                    .maxSizeBytes(48L * 1024L * 1024L)
-                    .build()
-            }
-            .build()
-        Coil.setImageLoader(imageLoader)
+        if (!imageLoaderInitialized) {
+            val imageLoader = ImageLoader.Builder(applicationContext)
+                .bitmapConfig(Bitmap.Config.RGB_565)
+                .allowHardware(true)
+                .crossfade(false)
+                .memoryCache {
+                    MemoryCache.Builder(applicationContext)
+                        .maxSizePercent(0.10)
+                        .build()
+                }
+                .diskCache {
+                    DiskCache.Builder()
+                        .directory(File(applicationContext.cacheDir, "poster_image_cache"))
+                        .maxSizeBytes(48L * 1024L * 1024L)
+                        .build()
+                }
+                .build()
+            Coil.setImageLoader(imageLoader)
+            imageLoaderInitialized = true
+        }
 
         setContent {
             MaterialTheme {
