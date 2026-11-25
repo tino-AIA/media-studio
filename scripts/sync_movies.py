@@ -38,16 +38,13 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Sigurnosni limit od 165 min (2h 45m) kako bi skripta uvijek uredno završila prije GitHub limita
 MAX_MOVIES_SYNC_SECONDS = 165 * 60
 BATCH_SIZE_CANDIDATES = 350
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
 
-# Dopušta do 2 kvalitetne verzije po filmu; VHS/4:3 se briše čim se pronađe bolja verzija
 MAX_VERSIONS_PER_MOVIE = 2
 MAX_VHS_UPGRADE_CHECKS_PER_RUN = 40
 
-# Eksplicitni pokazatelji najava, gameplaya, komentara, holiday specijala i loših kopija
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
     r"screener|dvdscr|workprint|featurette|parody|rifftrax|mockbuster|"
@@ -57,6 +54,12 @@ EXPLICIT_JUNK_RE = re.compile(
     r"holiday[\s._-]+special|making[\s._-]+of|"
     r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
     r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage|no[\s._-]+memory[\s._-]+card)"
+)
+
+GENERIC_CAMERA_OR_RIP_FILENAME_RE = re.compile(
+    r"(?i)^(?:img|vid|mov|dsc|dcim|title|dvd[\s._-]*video|video|screen[\s._-]*recording|"
+    r"snapsave|rumble|original|[a-z]\d+[\s._-]*t\d+|\d+[\s._-]*\d+|"
+    r"[0-9a-f]{12,}|[a-z0-9]{10,})$"
 )
 
 SPECIAL_EDITION_RE = re.compile(
@@ -82,7 +85,16 @@ EX_YU_DETECTION_KEYWORDS = (
     "čarobnjakov šešir", "carobnjakov sesir", "surogat"
 )
 
-_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s"}
+_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia"}
+
+
+def _tokenize_words(text):
+    if not text:
+        return set()
+    decoded = unquote(str(text))
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", decoded)
+    cleaned = re.sub(r"[\W_]+", " ", spaced.lower()).strip()
+    return {w for w in cleaned.split() if len(w) >= 3 and w not in _STOP_WORDS}
 
 
 def is_explicit_junk_item(ident, raw_title, extra_text=""):
@@ -106,32 +118,50 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
     return False
 
 
-def filename_matches_expected_titles(chosen_filename, ident, arch_title, expected_titles):
-    """Blokira samo očito nasumične šifre bez podudaranja s naslovom ili Archive ID-em (npr. Z1 8 2 2009.mp4)."""
+def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0):
+    """
+    Višeslojna provjera:
+    1. Ako datoteka ima smislene riječi, provjerava podudaranje s naslovima / Archive metapodacima.
+    2. Ako je datoteka generička (npr. IMG_9009.mp4, A4_t00.mkv, DVD_VIDEO.mp4, ScreenRecording...),
+       zahtijeva da sam Archive.org naslov (arch_md.title) ili opis sadrži riječi očekivanog filma.
+    """
+    arch_title = str((arch_md or {}).get("title") or "")
+    arch_creator = str((arch_md or {}).get("creator") or "")
+    arch_year = str((arch_md or {}).get("year") or (arch_md or {}).get("date") or "")
+
+    expected_words = set()
+    for t in expected_titles:
+        expected_words |= _tokenize_words(t)
+
+    # Sloj A: Provjera Archive.org metapodataka (naslov + ID) u odnosu na očekivane TMDB naslove
+    arch_meta_words = _tokenize_words(f"{arch_title} {ident}")
+    if expected_words and arch_meta_words and not (expected_words & arch_meta_words):
+        # Dopusti samo ako se poklapa godina + barem jedna riječ u opisu/kreatoru
+        desc_words = _tokenize_words(f"{(arch_md or {}).get('description') or ''} {arch_creator}")
+        year_ok = (rel_year > 0 and str(rel_year) in arch_year)
+        if not (year_ok and (expected_words & desc_words)):
+            return False
+
     if not chosen_filename:
         return True
-    decoded = unquote(os.path.splitext(os.path.basename(chosen_filename))[0])
-    spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", decoded)
-    stem_clean = re.sub(r"[^\w\s]", " ", spaced.lower()).strip()
-    tokens_in_stem = {w for w in stem_clean.split() if len(w) >= 3 and w not in _STOP_WORDS}
 
-    if not tokens_in_stem:
-        return False
+    stem = unquote(os.path.splitext(os.path.basename(chosen_filename))[0]).strip()
+    stem_tokens = _tokenize_words(stem)
 
-    ref_words = set()
-    for t in list(expected_titles) + [ident, arch_title]:
-        if not t:
-            continue
-        t_spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(t))
-        cleaned = re.sub(r"[^\w\s]", " ", t_spaced.lower())
-        for w in cleaned.split():
-            if len(w) >= 3 and w not in _STOP_WORDS:
-                ref_words.add(w)
+    # Sloj B: Generička imena datoteka (IMG_9009, ScreenRecording, DVD_VIDEO, TITLE60, A4_t00, hash...)
+    if not stem_tokens or GENERIC_CAMERA_OR_RIP_FILENAME_RE.match(stem):
+        # Za generičke datoteke Archive.org naslov (arch_title) MORA izravno odgovarati očekivanom naslovu filma
+        arch_title_words = _tokenize_words(arch_title)
+        if not expected_words or not (expected_words & arch_title_words):
+            return False
+        return True
 
+    # Sloj C: Datoteka ima vlastite riječi -> moraju se poklopiti s TMDB naslovima ili potvrđenim Archive naslovom
+    ref_words = expected_words | _tokenize_words(f"{ident} {arch_title}")
     if not ref_words:
         return True
 
-    return bool(tokens_in_stem & ref_words)
+    return bool(stem_tokens & ref_words)
 
 
 def is_mismatched_modern_dune(tmdb_id, *texts):
@@ -311,7 +341,7 @@ ARCHIVE_FEATURE_COLLECTIONS = [
 
 EX_YU_ARCHIVE_QUERIES = [
     'mediatype:(movies OR web) AND language:(Croatian OR Serbian OR "Serbo-Croatian" OR Bosnian OR Slovenian OR Macedonian OR hrv OR srp OR scr OR bos OR slv OR mac) AND -subject:news AND -subject:trailer',
-    'mediatype:(movies OR web) AND (subject:(Yugoslavia OR Yugoslav OR "Yugoslav cinema" OR "Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Triglav Film" OR "Croatia Film" OR "ex-yu" OR "domaci film" OR "domaći film") OR creator:("Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Croatia Film")) AND -subject:news AND -subject:trailer',
+    'mediatype:(movies OR web) AND (subject:(Yugoslavia OR Yugoslav OR "Yugoslav cinema" OR "Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Triglav Film" OR "Croatia Film" OR "ex-yu" OR "domaci film" OR "domaći film") OR creator:("Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Triglav Film" OR "Croatia Film")) AND -subject:news AND -subject:trailer',
     'mediatype:(movies OR web) AND title:("domaci film" OR "domaći film" OR "jugoslavenski film" OR "jugoslovenski film" OR "hrvatski film" OR "srpski film" OR "zagreb film") AND -subject:news AND -subject:trailer',
 ]
 
@@ -631,7 +661,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
             continue
 
-        if not filename_matches_expected_titles(best["filename"], ident, arch_md.get("title") or raw_doc_title, expected_title_list):
+        if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_title_list, year):
             continue
 
         ok, _ = validate_movie_match(
@@ -673,7 +703,7 @@ def audit_and_repair_existing_movies(
     deadline_ts
 ):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/4 Provjera jezika, naslova, trajanja, kvalitete i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
+    print(f"1/4 Višeslojna provjera jezika, naslova, trajanja, Archive metapodataka i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
@@ -706,7 +736,10 @@ def audit_and_repair_existing_movies(
         is_author_promoted = ",tmdb-" in ident
         base_ident = ident.split(",tmdb-")[0].strip()
 
-        if check_ex_yu(title, ident, row.get("description_hr")) and not any(
+        is_ex_yu_row = check_ex_yu(title, ident, row.get("description_hr")) or any(
+            g in ("Ex-Yu filmovi", "Ex-Yu klasici", "Ex-Yu crtići") for g in existing_genres
+        )
+        if is_ex_yu_row and not any(
             g in ("Ex-Yu filmovi", "Ex-Yu klasici", "Ex-Yu crtići") for g in existing_genres
         ):
             is_anim_row = any("animiran" in g.lower() or "crtić" in g.lower() for g in existing_genres)
@@ -718,6 +751,12 @@ def audit_and_repair_existing_movies(
         is_curated = base_ident in CURATED_ARCHIVE_IDS or "alternative-edition-redux" in base_ident.lower()
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
 
+        # Sloj 1: Odbaci zapise bez TMDB ID-a (kolekcijski dumpovi / osobni uploadi poput vodkabuild, lasubo2004...)
+        if tmdb_id <= 0 and not is_ex_yu_row and not is_curated:
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen nepoznat/kolekcijski zapis bez TMDB-a: {title} ({base_ident})")
+            return
+
+        # Sloj 2: Brza provjera trajanja i očitih gameplay/commentary/trailer zapisa
         if not is_curated:
             if is_explicit_junk_item(base_ident, "", stream_url):
                 mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen gameplay/commentary/junk zapis iz baze: {title} ({base_ident})")
@@ -739,8 +778,8 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
             return
 
-        # Provjeravamo isključivo subject i stream_url (nikada description kako se ne bi brisali BluRay ripovi)
-        meta_blob = f"{arch_md.get('subject') or ''} {stream_url}"
+        # Sloj 3: Provjera Archive subject/collection/title (bez description polja)
+        meta_blob = f"{arch_md.get('subject') or ''} {arch_md.get('collection') or ''} {stream_url}"
         if not is_curated and not is_doc_row and is_explicit_junk_item(
             base_ident,
             arch_md.get("title") or "",
@@ -749,14 +788,27 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen krivi/specijalni zapis iz baze: {title} ({base_ident})")
             return
 
+        details = get_tmdb_movie_details(tmdb_id) if tmdb_id > 0 else None
+
+        if details and not is_curated and is_runtime_mismatch(details.get("runtime", 0), arch_rt, is_short_allowed=is_doc_row):
+            mark_row_invalid(
+                row,
+                tmdb_id,
+                f"  ✕ Uklonjen zapis zbog nesklada trajanja ({arch_rt} min vs TMDB {details.get('runtime', 0)} min): {title}"
+            )
+            return
+
+        # Sloj 4: Višeslojna provjera naslova (HR + EN + Original TMDB + Archive metadata + dekodirani naziv datoteke)
         if not is_curated and stream_url and arch_md:
             chosen_fname = stream_url.rsplit("/", 1)[-1]
             expected_names = [title, arch_md.get("title") or ""]
-            if not filename_matches_expected_titles(chosen_fname, base_ident, arch_md.get("title") or "", expected_names):
+            if details:
+                expected_names.extend([details.get("orig_title") or "", details.get("en_title") or "", details.get("hr_title") or ""])
+            if not verify_multilayer_title_and_file(chosen_fname, base_ident, arch_md, expected_names, rel_year):
                 mark_row_invalid(
                     row,
                     tmdb_id,
-                    f"  ✕ Uklonjen pogrešan video fajl ({chosen_fname}) za naslov: {title} ({base_ident})"
+                    f"  ✕ Uklonjen pogrešan video fajl ({unquote(chosen_fname)}) za naslov: {title} ({base_ident})"
                 )
                 return
 
@@ -769,21 +821,9 @@ def audit_and_repair_existing_movies(
         if not has_non_latin_title and not looks_blocked_text and not suspect_dub:
             return
 
-        if tmdb_id <= 0:
+        if not details:
             if looks_blocked_text or is_foreign_dub_without_english(arch_md, base_ident, stream_url, orig_lang=""):
                 mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena strana sinkronizacija: {title}")
-            return
-
-        details = get_tmdb_movie_details(tmdb_id)
-        if not details:
-            return
-
-        if not is_curated and is_runtime_mismatch(details.get("runtime", 0), arch_rt, is_short_allowed=is_doc_row):
-            mark_row_invalid(
-                row,
-                tmdb_id,
-                f"  ✕ Uklonjen zapis zbog nesklada trajanja ({arch_rt} min vs TMDB {details.get('runtime', 0)} min): {title}"
-            )
             return
 
         orig_lang = details.get("original_language", "")
@@ -1577,8 +1617,9 @@ def mine_archive_collections(
                 inc_stat("validation_rejected")
                 return
 
+            rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             expected_titles = [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates
-            if not filename_matches_expected_titles(best["filename"], ident, arch_md.get("title") or raw_title, expected_titles):
+            if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year):
                 inc_stat("validation_rejected")
                 return
 
@@ -1589,7 +1630,6 @@ def mine_archive_collections(
                     inc_stat("already_in_db")
                     return
 
-            rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             require_credits = has_multiple_tmdb_versions(details["orig_title"])
             ok, _ = validate_movie_match(
                 ident,
