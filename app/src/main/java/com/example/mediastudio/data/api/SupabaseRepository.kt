@@ -67,6 +67,13 @@ object SupabaseRepository {
         "id,archive_id,tmdb_id,title,media_type,genres,release_year,rating,popularity_score," +
             "poster_url,stream_url,is_featured,is_valid,tmdb_runtime,archive_runtime"
 
+    private const val CATALOG_CACHE_FILE = "supabase_catalog_ultralite_v4.json"
+
+    private val JUNK_MEDIA_REGEX = Regex(
+        "(?i)(commentary|watch[\\s._-]*along|walkthrough|longplay|gameplay|playthrough|speedrun|" +
+            "trailer|teaser|preview|review|reaction|reacts|ps2|ps3|ps4|gamecube|xbox|nintendo|wii|pcsx2|dolphin|emulator)"
+    )
+
     private var filesDirRef: File? = null
     private var cacheDirRef: File? = null
 
@@ -95,6 +102,7 @@ object SupabaseRepository {
             listOf(
                 "supabase_catalog_cache.json",
                 "supabase_catalog_lite_v2.json",
+                "supabase_catalog_ultralite_v3.json",
                 "supabase_author_movies_cache.json"
             ).forEach { oldName ->
                 try { File(fDir, oldName).delete() } catch (_: Exception) { }
@@ -122,7 +130,7 @@ object SupabaseRepository {
     }
 
     private fun loadFromDiskCache() {
-        readCacheFile("supabase_catalog_ultralite_v3.json")?.let { jsonStr ->
+        readCacheFile(CATALOG_CACHE_FILE)?.let { jsonStr ->
             try { updateCatalogMemory(parseCatalogArray(JSONArray(jsonStr))) } catch (_: Exception) { }
         }
         readCacheFile("supabase_authors_cache.json")?.let { jsonStr ->
@@ -137,7 +145,7 @@ object SupabaseRepository {
             "catalog_items?select=$CATALOG_ULTRA_LITE_COLUMNS&is_valid=eq.true&order=popularity_score.desc"
         )
         if (catalogArr != null && catalogArr.length() > 0) {
-            writeCacheFile("supabase_catalog_ultralite_v3.json", catalogArr.toString())
+            writeCacheFile(CATALOG_CACHE_FILE, catalogArr.toString())
             updateCatalogMemory(parseCatalogArray(catalogArr))
             anySuccess = true
         }
@@ -252,7 +260,7 @@ object SupabaseRepository {
     }
 
     private fun updateCatalogMemory(items: List<SupabaseCatalogItem>) {
-        val validItems = items.filter { it.isValid }
+        val validItems = items.filter { it.isValid && !isFalsePositiveCatalogItem(it) }
         catalogItems = validItems
 
         val nextByArchive = HashMap<String, SupabaseCatalogItem>(validItems.size)
@@ -289,6 +297,22 @@ object SupabaseRepository {
         itemByStreamUrl.putAll(nextByStream)
         posterByArchiveId.clear()
         posterByArchiveId.putAll(nextPosterById)
+    }
+
+    private fun isFalsePositiveCatalogItem(item: SupabaseCatalogItem): Boolean {
+        val junkBlob = "${item.archiveId} ${item.streamUrl}"
+        if (JUNK_MEDIA_REGEX.containsMatchIn(junkBlob)) return true
+
+        if (item.mediaType == "movie" && item.archiveRuntime > 0) {
+            if (item.tmdbRuntime >= 65) {
+                val minAllowed = (item.tmdbRuntime * 0.72).toInt()
+                val maxAllowed = (item.tmdbRuntime * 1.30).toInt()
+                if (item.archiveRuntime !in minAllowed..maxAllowed) return true
+            } else if (item.archiveRuntime < 45 && !item.title.contains("kratki", ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
     }
 
     fun getCatalogItems(): List<SupabaseCatalogItem> = catalogItems
@@ -380,13 +404,12 @@ object SupabaseRepository {
             conn.requestMethod = "GET"
             conn.setRequestProperty("apikey", SUPABASE_PUBLISHABLE_KEY)
             conn.setRequestProperty("Accept", "application/json")
-            // Uključena GZIP kompresija za drastično ubrzanje skidanja
-            conn.setRequestProperty("Accept-Encoding", "gzip") 
+            conn.setRequestProperty("Accept-Encoding", "gzip")
             conn.setRequestProperty("Range-Unit", "items")
             conn.setRequestProperty("Range", "$rangeStart-$rangeEnd")
             conn.connectTimeout = 10000
             conn.readTimeout = 12000
-            
+
             val code = conn.responseCode
             if (code == 200 || code == 206) {
                 val encoding = conn.contentEncoding
@@ -444,28 +467,28 @@ object SupabaseRepository {
                 }
             }
 
-            list.add(
-                SupabaseCatalogItem(
-                    id = obj.optLong("id"),
-                    archiveId = obj.optString("archive_id", ""),
-                    tmdbId = obj.optInt("tmdb_id", 0),
-                    title = obj.optString("title", ""),
-                    mediaType = obj.optString("media_type", "movie"),
-                    genres = genres,
-                    releaseYear = obj.optInt("release_year", 0),
-                    rating = obj.optDouble("rating", 0.0),
-                    popularityScore = obj.optDouble("popularity_score", 0.0),
-                    descriptionHr = obj.optString("description_hr", ""),
-                    posterUrl = obj.optString("poster_url", ""),
-                    backdropUrl = obj.optString("backdrop_url", ""),
-                    streamUrl = obj.optString("stream_url", ""),
-                    episodes = parseEpisodesArray(obj.optJSONArray("episodes")),
-                    isFeatured = obj.optBoolean("is_featured", false),
-                    isValid = isValid,
-                    tmdbRuntime = obj.optInt("tmdb_runtime", 0),
-                    archiveRuntime = obj.optInt("archive_runtime", 0)
-                )
+            val item = SupabaseCatalogItem(
+                id = obj.optLong("id"),
+                archiveId = obj.optString("archive_id", ""),
+                tmdbId = obj.optInt("tmdb_id", 0),
+                title = obj.optString("title", ""),
+                mediaType = obj.optString("media_type", "movie"),
+                genres = genres,
+                releaseYear = obj.optInt("release_year", 0),
+                rating = obj.optDouble("rating", 0.0),
+                popularityScore = obj.optDouble("popularity_score", 0.0),
+                descriptionHr = obj.optString("description_hr", ""),
+                posterUrl = obj.optString("poster_url", ""),
+                backdropUrl = obj.optString("backdrop_url", ""),
+                streamUrl = obj.optString("stream_url", ""),
+                episodes = parseEpisodesArray(obj.optJSONArray("episodes")),
+                isFeatured = obj.optBoolean("is_featured", false),
+                isValid = isValid,
+                tmdbRuntime = obj.optInt("tmdb_runtime", 0),
+                archiveRuntime = obj.optInt("archive_runtime", 0)
             )
+            if (isFalsePositiveCatalogItem(item)) continue
+            list.add(item)
         }
         return list
     }
