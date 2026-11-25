@@ -112,6 +112,7 @@ fun HomeScreen(
     val concertsTabFR = remember { FocusRequester() }
     val favoritesTabFR = remember { FocusRequester() }
     val heroPlayFocusRequester = remember { FocusRequester() }
+    val heroDetailsFocusRequester = remember { FocusRequester() }
     val firstRowFocusRequester = remember { FocusRequester() }
 
     val activeTabFR = when (selectedTab) {
@@ -180,13 +181,6 @@ fun HomeScreen(
         ContentTab.SERIES -> viewModel.seriesGenreDefinitions
         ContentTab.CONCERTS -> viewModel.concertGenreDefinitions
         else -> emptyList()
-    }
-
-    val tabDownTargetFR = when {
-        selectedTab == ContentTab.FAVORITES -> FocusRequester.Default
-        heroMovies.isNotEmpty() -> heroPlayFocusRequester
-        activeCategories.isNotEmpty() -> firstRowFocusRequester
-        else -> FocusRequester.Default
     }
 
     ModalNavigationDrawer(
@@ -407,7 +401,6 @@ fun HomeScreen(
                                         left = FocusRequester.Cancel
                                         right = animTabFR
                                         up = menuFocusRequester
-                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -421,7 +414,6 @@ fun HomeScreen(
                                         left = moviesTabFR
                                         right = seriesTabFR
                                         up = menuFocusRequester
-                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -435,7 +427,6 @@ fun HomeScreen(
                                         left = animTabFR
                                         right = concertsTabFR
                                         up = searchFocusRequester
-                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -449,7 +440,6 @@ fun HomeScreen(
                                         left = seriesTabFR
                                         right = favoritesTabFR
                                         up = searchFocusRequester
-                                        down = tabDownTargetFR
                                     }
                             )
                             TabButton(
@@ -463,7 +453,6 @@ fun HomeScreen(
                                         left = concertsTabFR
                                         right = FocusRequester.Cancel
                                         up = searchFocusRequester
-                                        down = tabDownTargetFR
                                     }
                             )
                         }
@@ -637,9 +626,25 @@ fun HomeScreen(
                                                     .focusRequester(heroPlayFocusRequester)
                                                     .focusProperties {
                                                         left = FocusRequester.Cancel
+                                                        right = heroDetailsFocusRequester
                                                         up = activeTabFR
-                                                        if (activeCategories.isNotEmpty()) {
-                                                            down = firstRowFocusRequester
+                                                    }
+                                                    .onPreviewKeyEvent { event ->
+                                                        if (event.type == KeyEventType.KeyDown &&
+                                                            event.key == Key.DirectionDown &&
+                                                            activeCategories.isNotEmpty()
+                                                        ) {
+                                                            scope.launch {
+                                                                homeListState.scrollToItem(1)
+                                                                delay(50L)
+                                                                try {
+                                                                    firstRowFocusRequester.requestFocus()
+                                                                } catch (_: Exception) {
+                                                                }
+                                                            }
+                                                            true
+                                                        } else {
+                                                            false
                                                         }
                                                     }
                                                     .onFocusChanged { state ->
@@ -659,10 +664,28 @@ fun HomeScreen(
                                                 icon = Icons.Default.Info,
                                                 isPrimary = false,
                                                 modifier = Modifier
+                                                    .focusRequester(heroDetailsFocusRequester)
                                                     .focusProperties {
+                                                        left = heroPlayFocusRequester
+                                                        right = FocusRequester.Cancel
                                                         up = activeTabFR
-                                                        if (activeCategories.isNotEmpty()) {
-                                                            down = firstRowFocusRequester
+                                                    }
+                                                    .onPreviewKeyEvent { event ->
+                                                        if (event.type == KeyEventType.KeyDown &&
+                                                            event.key == Key.DirectionDown &&
+                                                            activeCategories.isNotEmpty()
+                                                        ) {
+                                                            scope.launch {
+                                                                homeListState.scrollToItem(1)
+                                                                delay(50L)
+                                                                try {
+                                                                    firstRowFocusRequester.requestFocus()
+                                                                } catch (_: Exception) {
+                                                                }
+                                                            }
+                                                            true
+                                                        } else {
+                                                            false
                                                         }
                                                     }
                                                     .onFocusChanged { state ->
@@ -713,7 +736,7 @@ fun HomeScreen(
                                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                                         scope.launch {
                                             homeListState.scrollToItem(0)
-                                            delay(40L)
+                                            delay(50L)
                                             try {
                                                 if (heroMovies.isNotEmpty()) {
                                                     heroPlayFocusRequester.requestFocus()
@@ -1102,21 +1125,19 @@ fun MovieCategoryRow(
             ) { index, movie ->
                 val shouldRestore = isTargetRow && movie.identifier == lastFocusedMovieId
                 val edgeModifier = if (index == 0) {
-                    val base = Modifier.focusProperties { left = FocusRequester.Cancel }
-                    if (firstItemFocusRequester != null) {
-                        base.focusRequester(firstItemFocusRequester)
-                    } else {
-                        base
-                    }
+                    Modifier.focusProperties { left = FocusRequester.Cancel }
                 } else {
                     Modifier
                 }
+                val itemFR = if (index == 0) firstItemFocusRequester else null
+
                 if (isNetflixTop10) {
                     NetflixTop10Card(
                         movie = movie,
                         rankNumber = index + 1,
                         isSeries = isSeries,
                         modifier = edgeModifier,
+                        externalFocusRequester = itemFR,
                         shouldRestoreFocus = shouldRestore,
                         onFocusRestored = { viewModel.clearLastFocusedMovie() },
                         onMovieClick = onMovieClick
@@ -1128,6 +1149,7 @@ fun MovieCategoryRow(
                         viewModel = viewModel,
                         authorImages = authorImages,
                         modifier = edgeModifier,
+                        externalFocusRequester = itemFR,
                         shouldRestoreFocus = shouldRestore,
                         onFocusRestored = { viewModel.clearLastFocusedMovie() },
                         onMovieClick = onMovieClick
@@ -1144,6 +1166,7 @@ fun NetflixTop10Card(
     rankNumber: Int,
     isSeries: Boolean,
     modifier: Modifier = Modifier,
+    externalFocusRequester: FocusRequester? = null,
     shouldRestoreFocus: Boolean = false,
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
@@ -1154,13 +1177,14 @@ fun NetflixTop10Card(
     val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    val cardFocusRequester = remember { FocusRequester() }
+    val internalFocusRequester = remember { FocusRequester() }
+    val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
     LaunchedEffect(shouldRestoreFocus) {
         if (shouldRestoreFocus) {
             delay(60L)
             try {
-                cardFocusRequester.requestFocus()
+                activeFocusRequester.requestFocus()
                 onFocusRestored()
             } catch (_: Exception) {
             }
@@ -1190,7 +1214,7 @@ fun NetflixTop10Card(
                 scaleX = scaleVal
                 scaleY = scaleVal
             }
-            .focusRequester(cardFocusRequester)
+            .focusRequester(activeFocusRequester)
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
@@ -1306,6 +1330,7 @@ fun MovieCard(
     viewModel: HomeViewModel,
     authorImages: Map<String, String>,
     modifier: Modifier = Modifier,
+    externalFocusRequester: FocusRequester? = null,
     shouldRestoreFocus: Boolean = false,
     onFocusRestored: () -> Unit = {},
     onMovieClick: (ArchiveMovie) -> Unit
@@ -1316,13 +1341,14 @@ fun MovieCard(
     val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
     val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
-    val cardFocusRequester = remember { FocusRequester() }
+    val internalFocusRequester = remember { FocusRequester() }
+    val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
     LaunchedEffect(shouldRestoreFocus) {
         if (shouldRestoreFocus) {
             delay(60L)
             try {
-                cardFocusRequester.requestFocus()
+                activeFocusRequester.requestFocus()
                 onFocusRestored()
             } catch (_: Exception) {
             }
@@ -1376,7 +1402,7 @@ fun MovieCard(
                 scaleX = scaleVal
                 scaleY = scaleVal
             }
-            .focusRequester(cardFocusRequester)
+            .focusRequester(activeFocusRequester)
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
