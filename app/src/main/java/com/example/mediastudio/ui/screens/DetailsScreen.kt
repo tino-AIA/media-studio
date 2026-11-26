@@ -437,7 +437,7 @@ fun DetailsScreen(
                                 .width(146.dp)
                                 .height(214.dp)
                                 .clip(RoundedCornerShape(11.dp))
-                                .border(1.5.dp, Color.Gray, RoundedCornerShape(11.dp)),
+                                .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(11.dp)),
                             contentScale = ContentScale.Crop,
                             alignment = if (isAuthorMode) Alignment.TopCenter else Alignment.Center
                         )
@@ -480,8 +480,8 @@ fun DetailsScreen(
                                 shape = RoundedCornerShape(10.dp)
                             )
                             .border(
-                                width = if (isFavFocused) 2.5.dp else 1.dp,
-                                color = if (isFavFocused) Color.White else Color.DarkGray,
+                                width = if (isFavFocused) 1.8.dp else 0.8.dp,
+                                color = if (isFavFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.25f),
                                 shape = RoundedCornerShape(10.dp)
                             )
                             .clickable(interactionSource = favInteractionSource, indication = null) {
@@ -572,8 +572,8 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(8.dp)
                                 )
                                 .border(
-                                    width = if (isEpFocused) 2.5.dp else 1.dp,
-                                    color = if (isEpFocused) Color.White else Color.DarkGray,
+                                    width = if (isEpFocused) 1.8.dp else 0.8.dp,
+                                    color = if (isEpFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.22f),
                                     shape = RoundedCornerShape(8.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
@@ -636,8 +636,8 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .border(
-                                    width = if (isPlayFocused) 2.5.dp else 1.dp,
-                                    color = if (isPlayFocused) Color.White else Color.Transparent,
+                                    width = if (isPlayFocused) 1.8.dp else 0.dp,
+                                    color = if (isPlayFocused) Color.White.copy(alpha = 0.90f) else Color.Transparent,
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
@@ -684,8 +684,8 @@ fun DetailsScreen(
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .border(
-                                    width = if (isFavFocused) 2.5.dp else 1.dp,
-                                    color = if (isFavFocused) Color.White else Color.DarkGray,
+                                    width = if (isFavFocused) 1.8.dp else 0.8.dp,
+                                    color = if (isFavFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.25f),
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = favInteractionSource, indication = null) {
@@ -742,8 +742,8 @@ private fun StructuredInfoCard(
                 shape = RoundedCornerShape(10.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
-                color = if (isFocused) Color.White else Color(0xFF2B2B2B),
+                width = if (isFocused) 1.8.dp else 0.8.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.18f),
                 shape = RoundedCornerShape(10.dp)
             )
             .onPreviewKeyEvent { event ->
@@ -1433,8 +1433,8 @@ private fun TvHighlightIconButton(
                 shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
+                width = if (isFocused) 1.8.dp else 0.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
