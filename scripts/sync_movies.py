@@ -38,12 +38,13 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-MAX_MOVIES_SYNC_SECONDS = 165 * 60
-BATCH_SIZE_CANDIDATES = 350
-MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 25 * 60
+# Siguran vremenski okvir (50 min) da se skripta uvijek uredno završi prije GitHub Actions timeouta
+MAX_MOVIES_SYNC_SECONDS = 50 * 60
+BATCH_SIZE_CANDIDATES = 50
+MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 4 * 60
 
 MAX_VERSIONS_PER_MOVIE = 2
-MAX_VHS_UPGRADE_CHECKS_PER_RUN = 40
+MAX_VHS_UPGRADE_CHECKS_PER_RUN = 25
 
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
@@ -129,12 +130,6 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
 
 
 def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0):
-    """
-    Provjera novih kandidata:
-    1. Ako datoteka ima smislene riječi, provjerava podudaranje korijena riječi s naslovima / Archive metapodacima.
-    2. Ako je datoteka generička (npr. IMG_9009.mp4, M4V10006.mp4, DVD_VIDEO.mp4),
-       zahtijeva da Archive.org naslov ili ID odgovara očekivanom filmu.
-    """
     arch_title = str((arch_md or {}).get("title") or "")
     arch_creator = str((arch_md or {}).get("creator") or "")
     arch_year = str((arch_md or {}).get("year") or (arch_md or {}).get("date") or "")
@@ -711,7 +706,7 @@ def audit_and_repair_existing_movies(
     deadline_ts
 ):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
-    print(f"1/4 Provjera jezika, naslova, trajanja, kvalitete i Ex-Yu kategorija za {len(valid_rows)} postojećih filmova u bazi...", flush=True)
+    print(f"1/4 Brza provjera {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
     removed_count = [0]
     translated_count = [0]
@@ -748,7 +743,6 @@ def audit_and_repair_existing_movies(
             any(k in g.lower() for k in ("animiran", "crtić", "crtic", "cartoon", "disney", "looney"))
             for g in existing_genres
         )
-        # Kratke klasične crtiće s tmdb_id == 0 održava sync_series_and_cartoons.py
         if tmdb_id <= 0 and is_cartoon_row:
             return
 
@@ -782,48 +776,30 @@ def audit_and_repair_existing_movies(
                 )
                 return
 
+        if is_mismatched_modern_dune(tmdb_id, base_ident, stream_url, title):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
+            return
+
+        has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
+        looks_blocked_text = contains_blocked_regional_or_arabic(title, ident, stream_url)
+        suspect_dub = is_foreign_dub_without_english({}, base_ident, stream_url, orig_lang="en")
+
+        # Ako naslov i link nemaju nikakvih znakova problema, preskoči vanjske API pozive
+        if not has_non_latin_title and not looks_blocked_text and not suspect_dub:
+            return
+
         arch_md = {}
         if not is_author_promoted and base_ident:
             md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=8)
             arch_md = (md_res or {}).get("result") or {}
 
-        if is_mismatched_modern_dune(tmdb_id, base_ident, stream_url, arch_md.get("title")):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
-            return
-
         details = get_tmdb_movie_details(tmdb_id) if tmdb_id > 0 else None
-
-        if details and not is_curated and is_runtime_mismatch(details.get("runtime", 0), arch_rt, is_short_allowed=(is_doc_row or is_cartoon_row)):
-            mark_row_invalid(
-                row,
-                tmdb_id,
-                f"  ✕ Uklonjen zapis zbog nesklada trajanja ({arch_rt} min vs TMDB {details.get('runtime', 0)} min): {title}"
-            )
-            return
-
-        has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
-        looks_blocked_text = contains_blocked_regional_or_arabic(
-            title, ident, arch_md.get("title"), arch_md.get("language")
-        )
-        suspect_dub = is_foreign_dub_without_english(arch_md, base_ident, stream_url, orig_lang="en")
-
-        if not has_non_latin_title and not looks_blocked_text and not suspect_dub:
-            return
-
         if not details:
             if looks_blocked_text or is_foreign_dub_without_english(arch_md, base_ident, stream_url, orig_lang=""):
                 mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena strana sinkronizacija: {title}")
             return
 
         orig_lang = details.get("original_language", "")
-        if orig_lang in EX_YU_LANGS and not any(
-            g in ("Ex-Yu filmovi", "Ex-Yu klasici", "Ex-Yu crtići") for g in existing_genres
-        ):
-            tag_to_add = "Ex-Yu crtići" if 16 in (details.get("genre_ids") or []) else "Ex-Yu filmovi"
-            supabase_patch_row("catalog_items", row_id, {"genres": existing_genres + [tag_to_add]})
-            with state_lock:
-                ex_yu_tagged_count[0] += 1
-
         if contains_blocked_regional_or_arabic(
             details["orig_title"], details["hr_title"], title, orig_lang=orig_lang
         ):
@@ -1086,10 +1062,12 @@ def sync_ex_yu_movies(
             record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             return
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             return
 
         title_candidates, parsed_y = extract_archive_title_candidates(str(raw_title), ident)
         if not title_candidates:
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             return
 
         results = []
@@ -1115,6 +1093,7 @@ def sync_ex_yu_movies(
                 break
 
         if not results:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
@@ -1141,19 +1120,23 @@ def sync_ex_yu_movies(
                 chosen_hit = first_hit
 
         if chosen_hit is None:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         mid = int(chosen_hit["id"])
         if is_mismatched_modern_dune(mid, ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
         cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
         special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
         with state_lock:
             if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 return
 
         details = get_tmdb_movie_details(mid)
         if not details or not details["poster_path"]:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         orig_lang = details.get("original_language", "")
@@ -1162,16 +1145,19 @@ def sync_ex_yu_movies(
             or check_ex_yu(ident, raw_title, details["orig_title"], details["hr_title"], " ".join(details["companies"]))
         )
         if not is_confirmed_ex_yu:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         is_anim = 16 in (details.get("genre_ids") or [])
         videos, arch_md = get_archive_item_details(ident, min_size_mb=(70 if is_anim else 130), allow_mkv=True)
         if not videos:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
 
         if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_anim):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         rel_year = extract_year_from_text(details["release_date"]) or parsed_y
@@ -1188,6 +1174,7 @@ def sync_ex_yu_movies(
             chosen_size_mb=best["size_mb"]
         )
         if not ok or not verify_stream_url_playable(best["stream_url"]):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
         downloads = float(doc.get("downloads") or 0)
@@ -1395,7 +1382,7 @@ def mine_archive_collections(
     deadline_ts,
     all_movie_rows=None
 ):
-    print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija...", flush=True)
+    print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija (paketi po 50)...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
@@ -1446,10 +1433,12 @@ def mine_archive_collections(
             skipped_pre += 1
             continue
         if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             skipped_pre += 1
             continue
         title_candidates, parsed_y = extract_archive_title_candidates(str(raw_title), ident)
         if not title_candidates:
+            record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             skipped_pre += 1
             continue
         primary_norm = normalize_for_exact_title_compare(title_candidates[0])
@@ -1462,7 +1451,7 @@ def mine_archive_collections(
         remaining_pool.append((doc, title_candidates, parsed_y))
 
     print(
-        f"  Ukupno {len(remaining_pool)} novih kandidata u redu (preskočeno {skipped_pre} postojećih/odbačenih/nevažećih)...",
+        f"  Ukupno {len(remaining_pool)} novih kandidata u redu (preskočeno {skipped_pre} postojećih/odbačenih)...",
         flush=True
     )
 
@@ -1491,7 +1480,6 @@ def mine_archive_collections(
         )
 
         batch_added = [0]
-        processed_in_batch = [0]
 
         def process_archive_doc(entry):
             if time.monotonic() > deadline_ts:
@@ -1501,15 +1489,6 @@ def mine_archive_collections(
             raw_title = doc.get("title") or ident
             if isinstance(raw_title, list):
                 raw_title = raw_title[0]
-
-            with state_lock:
-                processed_in_batch[0] += 1
-                p_now = processed_in_batch[0]
-                if p_now % 100 == 0:
-                    print(
-                        f"  ... [Paket #{batch_num}] Obrađeno {p_now}/{len(batch_slice)} (dodano u paketu: {batch_added[0]})...",
-                        flush=True
-                    )
 
             if is_explicit_junk_item(ident, raw_title):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
@@ -1539,6 +1518,7 @@ def mine_archive_collections(
                     break
 
             if not results:
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_tmdb_match")
                 return
 
@@ -1566,11 +1546,13 @@ def mine_archive_collections(
                     chosen_hit = first_hit
 
             if chosen_hit is None:
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_tmdb_match")
                 return
 
             mid = int(chosen_hit["id"])
             if is_mismatched_modern_dune(mid, ident, raw_title):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
             with state_lock:
@@ -1580,6 +1562,7 @@ def mine_archive_collections(
 
             details = get_tmdb_movie_details(mid)
             if not details or not details["poster_path"]:
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_tmdb_match")
                 return
 
@@ -1587,12 +1570,14 @@ def mine_archive_collections(
             is_anim = 16 in (details.get("genre_ids") or [])
             videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
             if not videos:
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_video_file")
                 return
             best = pick_best_video_file(videos)
             arch_mins = best["duration_mins"]
 
             if is_mismatched_modern_dune(mid, ident, raw_title, best["filename"], arch_md.get("title")):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
 
@@ -1602,12 +1587,14 @@ def mine_archive_collections(
                 return
 
             if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
 
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             expected_titles = [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates
             if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
 
@@ -1631,6 +1618,7 @@ def mine_archive_collections(
                 chosen_size_mb=best["size_mb"]
             )
             if not ok or not verify_stream_url_playable(best["stream_url"]):
+                record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
 
@@ -1645,13 +1633,13 @@ def mine_archive_collections(
                     batch_added[0] += 1
                     total_added[0] += 1
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=10) as pool:
             futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
             for fut in as_completed(futures):
                 fut.result()
 
         print(
-            f"  ✓ Paket #{batch_num} završen: dodano {batch_added[0]} filmova.",
+            f"  ✓ Paket #{batch_num} (50) završen: dodano {batch_added[0]} filmova (ukupno dodano: {total_added[0]}).",
             flush=True
         )
 
@@ -1661,16 +1649,15 @@ def mine_archive_collections(
         if remaining_secs < MIN_REMAINING_SECONDS_FOR_NEXT_BATCH:
             print(
                 f"  ⏱ Preostalo {remaining_secs / 60.0:.1f} min (< {MIN_REMAINING_SECONDS_FOR_NEXT_BATCH / 60.0:.0f} min) — "
-                f"završavam nakon {batch_num} paketa ({len(remaining_pool) - cursor} kandidata ostaje za sljedeće pokretanje).",
+                f"uredno završavam nakon {batch_num} paketa ({len(remaining_pool) - cursor} kandidata ostaje za sljedeće pokretanje).",
                 flush=True
             )
             break
 
     print(
         f"  Dodano ukupno {total_added[0]} filmova u {batch_num} paketu/paketa "
-        f"(zabilježeno odbačenih: {stats['junk_recorded']}, već u bazi: {stats['already_in_db']}, "
-        f"bez TMDB podudaranja: {stats['no_tmdb_match']}, bez video datoteke: {stats['no_video_file']}, "
-        f"odbačeno provjerom: {stats['validation_rejected']}).",
+        f"(odbačeno i zapamćeno: {stats['junk_recorded'] + stats['no_tmdb_match'] + stats['no_video_file'] + stats['validation_rejected']}, "
+        f"već u bazi: {stats['already_in_db']}).",
         flush=True
     )
 
