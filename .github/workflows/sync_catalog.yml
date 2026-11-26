@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search, franchises_search)'
+        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search, franchises_search, export_layers)'
         required: true
         default: 'all'
         type: choice
@@ -18,6 +18,7 @@ on:
           - concerts
           - directors_search
           - franchises_search
+          - export_layers
 
 permissions:
   contents: write
@@ -158,9 +159,34 @@ jobs:
             fransize_rezultati.xlsx
             fransize_sve_verzije.csv
 
+  export-archive-layers:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'export_layers'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Export Archive.org Movies Layer Structure
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/export_archive_layers.py
+      - name: Upload Layer Structure File
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-movies-layer-structure
+          path: scripts/archive_movies_layers.md
+
   keep-repo-alive:
     if: always()
-    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive, search-franchises-archive]
+    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive, search-franchises-archive, export-archive-layers]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
