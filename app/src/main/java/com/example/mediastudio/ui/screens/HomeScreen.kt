@@ -130,8 +130,10 @@ fun HomeScreen(
     var isAnyElementFocused by remember { mutableStateOf(false) }
 
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
-    var currentHeroImageUrl by remember { mutableStateOf("") }
-    var isHeroImagePortraitPoster by remember { mutableStateOf(false) }
+    var currentHeroBackdropUrl by remember { mutableStateOf("") }
+    var currentHeroPosterUrl by remember { mutableStateOf("") }
+    var currentHeroMetaLine by remember { mutableStateOf("") }
+    var currentHeroOverview by remember { mutableStateOf("") }
 
     LaunchedEffect(currentHeroMovie) {
         currentHeroMovie?.let { (movie, isSeries) ->
@@ -140,17 +142,24 @@ fun HomeScreen(
             val sbBackdrop = sbItem?.backdropUrl.orEmpty()
             val sbPoster = sbItem?.posterUrl.orEmpty()
 
-            if (sbBackdrop.isNotBlank()) {
-                currentHeroImageUrl = sbBackdrop
-                isHeroImagePortraitPoster = false
-            } else if (sbPoster.isNotBlank()) {
-                currentHeroImageUrl = sbPoster
-                isHeroImagePortraitPoster = true
-            } else {
-                val fetched = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
-                currentHeroImageUrl = fetched.ifBlank { "https://archive.org/services/img/$firstId" }
-                isHeroImagePortraitPoster = true
+            val resolvedPoster = sbPoster.ifBlank {
+                PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                    .ifBlank { "https://archive.org/services/img/$firstId" }
             }
+            currentHeroPosterUrl = resolvedPoster
+            currentHeroBackdropUrl = sbBackdrop
+
+            val parts = mutableListOf<String>()
+            val yearVal = sbItem?.releaseYear ?: 0
+            if (yearVal > 0) parts.add(yearVal.toString())
+            val ratingVal = sbItem?.rating ?: 0.0
+            if (ratingVal > 0.0) parts.add("★ ${String.format("%.1f", ratingVal)}")
+            val genresText = sbItem?.genres?.take(2)?.joinToString(" • ").orEmpty()
+            if (genresText.isNotBlank()) parts.add(genresText)
+
+            currentHeroMetaLine = parts.joinToString("   •   ").ifBlank { "Istaknuto na Media Studiju" }
+            currentHeroOverview = sbItem?.descriptionHr?.takeIf { it.isNotBlank() }
+                ?: movie.description.orEmpty()
         }
     }
 
@@ -636,26 +645,19 @@ fun HomeScreen(
                                     .height(156.dp)
                                     .background(Color(0xFF0A0A0A))
                             ) {
-                                if (currentHeroImageUrl.isNotEmpty()) {
+                                // Diskretna 16:9 backdrop pozadina u desnoj polovici za dubinu
+                                if (currentHeroBackdropUrl.isNotEmpty()) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxHeight()
-                                            .then(
-                                                if (isHeroImagePortraitPoster) {
-                                                    Modifier
-                                                        .padding(end = 28.dp, top = 4.dp, bottom = 4.dp)
-                                                        .aspectRatio(0.68f)
-                                                } else {
-                                                    Modifier.fillMaxWidth(0.46f)
-                                                }
-                                            )
+                                            .fillMaxWidth(0.55f)
                                             .align(Alignment.CenterEnd)
                                     ) {
-                                        val heroBgRequest = remember(currentHeroImageUrl) {
+                                        val heroBgRequest = remember(currentHeroBackdropUrl) {
                                             ImageRequest.Builder(context)
-                                                .data(currentHeroImageUrl)
+                                                .data(currentHeroBackdropUrl)
                                                 .size(480, 270)
-                                                .scale(Scale.FIT)
+                                                .scale(Scale.FILL)
                                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                                 .allowHardware(true)
                                                 .build()
@@ -663,36 +665,31 @@ fun HomeScreen(
                                         Image(
                                             painter = rememberAsyncImagePainter(heroBgRequest),
                                             contentDescription = null,
-                                            contentScale = if (isHeroImagePortraitPoster) ContentScale.Fit else ContentScale.Crop,
+                                            contentScale = ContentScale.Crop,
                                             alignment = Alignment.Center,
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .alpha(0.88f)
+                                                .alpha(0.32f)
                                         )
-
-                                        // Horizontalni fade-to-black prijelaz na lijevom rubu slike
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .background(
                                                     Brush.horizontalGradient(
                                                         0.0f to Color(0xFF0A0A0A),
-                                                        0.28f to Color(0xFF0A0A0A).copy(alpha = 0.55f),
-                                                        0.55f to Color.Transparent,
+                                                        0.45f to Color(0xFF0A0A0A).copy(alpha = 0.65f),
                                                         1.0f to Color.Transparent
                                                     )
                                                 )
                                         )
-
-                                        // Blago stapanje donjeg ruba s pozadinom
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .background(
                                                     Brush.verticalGradient(
-                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.25f),
-                                                        0.20f to Color.Transparent,
-                                                        0.82f to Color.Transparent,
+                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.35f),
+                                                        0.25f to Color.Transparent,
+                                                        0.78f to Color.Transparent,
                                                         1.0f to Color(0xFF0A0A0A)
                                                     )
                                                 )
@@ -701,94 +698,142 @@ fun HomeScreen(
                                 }
 
                                 currentHeroMovie?.let { (movie, isSeries) ->
-                                    Column(
+                                    // Centrirani raspored: tekst lijevo + oštar plakat desno
+                                    Row(
                                         modifier = Modifier
-                                            .align(Alignment.CenterStart)
-                                            .padding(start = 20.dp, end = 16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            .align(Alignment.Center)
+                                            .fillMaxWidth(0.84f)
+                                            .padding(bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(24.dp)
                                     ) {
-                                        Text(
-                                            text = movie.title,
-                                            color = Color.White,
-                                            fontSize = 21.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            maxLines = 1,
-                                            lineHeight = 24.sp,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.fillMaxWidth(0.54f)
-                                        )
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = movie.title,
+                                                color = Color.White,
+                                                fontSize = 20.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                maxLines = 1,
+                                                lineHeight = 23.sp,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
 
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = if (isSeries) "SERIJA" else "FILM",
-                                                color = Color.LightGray,
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = if (isSeries) "SERIJA" else "FILM",
+                                                    color = Color.White,
+                                                    fontSize = 9.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier
+                                                        .background(Color(0xFFE50914).copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                                        .padding(horizontal = 5.dp, vertical = 1.5.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = currentHeroMetaLine,
+                                                    color = Color.LightGray,
+                                                    fontSize = 11.5.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+
+                                            if (currentHeroOverview.isNotBlank()) {
+                                                Text(
+                                                    text = currentHeroOverview,
+                                                    color = Color.Gray,
+                                                    fontSize = 11.sp,
+                                                    lineHeight = 14.sp,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+
+                                            Row(
                                                 modifier = Modifier
-                                                    .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 5.dp, vertical = 1.5.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = "Istaknuto na Media Studiju",
-                                                color = Color.Gray,
-                                                fontSize = 11.5.sp,
-                                                fontWeight = FontWeight.Medium
-                                            )
+                                                    .padding(top = 3.dp)
+                                                    .focusGroup(),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                HeroButton(
+                                                    text = "Gledaj odmah",
+                                                    icon = Icons.Default.PlayArrow,
+                                                    isPrimary = true,
+                                                    modifier = Modifier
+                                                        .focusRequester(heroPlayFocusRequester)
+                                                        .focusProperties {
+                                                            left = FocusRequester.Cancel
+                                                            right = heroDetailsFocusRequester
+                                                            up = activeTabFR
+                                                        }
+                                                        .onFocusChanged { state ->
+                                                            if (state.isFocused &&
+                                                                (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                            ) {
+                                                                scope.launch { homeListState.scrollToItem(0) }
+                                                            }
+                                                        },
+                                                    onClick = {
+                                                        viewModel.clearLastFocusedMovie()
+                                                        if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
+                                                    }
+                                                )
+                                                HeroButton(
+                                                    text = "Detalji",
+                                                    icon = Icons.Default.Info,
+                                                    isPrimary = false,
+                                                    modifier = Modifier
+                                                        .focusRequester(heroDetailsFocusRequester)
+                                                        .focusProperties {
+                                                            left = heroPlayFocusRequester
+                                                            right = FocusRequester.Cancel
+                                                            up = activeTabFR
+                                                        }
+                                                        .onFocusChanged { state ->
+                                                            if (state.isFocused &&
+                                                                (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
+                                                            ) {
+                                                                scope.launch { homeListState.scrollToItem(0) }
+                                                            }
+                                                        },
+                                                    onClick = {
+                                                        viewModel.clearLastFocusedMovie()
+                                                        if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
+                                                    }
+                                                )
+                                            }
                                         }
 
-                                        Row(
-                                            modifier = Modifier
-                                                .padding(top = 2.dp)
-                                                .focusGroup(),
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            HeroButton(
-                                                text = "Gledaj odmah",
-                                                icon = Icons.Default.PlayArrow,
-                                                isPrimary = true,
+                                        if (currentHeroPosterUrl.isNotEmpty()) {
+                                            Card(
                                                 modifier = Modifier
-                                                    .focusRequester(heroPlayFocusRequester)
-                                                    .focusProperties {
-                                                        left = FocusRequester.Cancel
-                                                        right = heroDetailsFocusRequester
-                                                        up = activeTabFR
-                                                    }
-                                                    .onFocusChanged { state ->
-                                                        if (state.isFocused &&
-                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
-                                                        ) {
-                                                            scope.launch { homeListState.scrollToItem(0) }
-                                                        }
-                                                    },
-                                                onClick = {
-                                                    viewModel.clearLastFocusedMovie()
-                                                    if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
+                                                    .width(92.dp)
+                                                    .height(134.dp)
+                                                    .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(8.dp)),
+                                                shape = RoundedCornerShape(8.dp),
+                                                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
+                                            ) {
+                                                val posterReq = remember(currentHeroPosterUrl) {
+                                                    ImageRequest.Builder(context)
+                                                        .data(currentHeroPosterUrl)
+                                                        .size(180, 260)
+                                                        .scale(Scale.FILL)
+                                                        .bitmapConfig(Bitmap.Config.RGB_565)
+                                                        .allowHardware(true)
+                                                        .build()
                                                 }
-                                            )
-                                            HeroButton(
-                                                text = "Detalji",
-                                                icon = Icons.Default.Info,
-                                                isPrimary = false,
-                                                modifier = Modifier
-                                                    .focusRequester(heroDetailsFocusRequester)
-                                                    .focusProperties {
-                                                        left = heroPlayFocusRequester
-                                                        right = FocusRequester.Cancel
-                                                        up = activeTabFR
-                                                    }
-                                                    .onFocusChanged { state ->
-                                                        if (state.isFocused &&
-                                                            (homeListState.firstVisibleItemIndex > 0 || homeListState.firstVisibleItemScrollOffset > 0)
-                                                        ) {
-                                                            scope.launch { homeListState.scrollToItem(0) }
-                                                        }
-                                                    },
-                                                onClick = {
-                                                    viewModel.clearLastFocusedMovie()
-                                                    if (isSeries) onSeriesClick(movie) else onMovieClick(movie)
-                                                }
-                                            )
+                                                Image(
+                                                    painter = rememberAsyncImagePainter(posterReq),
+                                                    contentDescription = movie.title,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            }
                                         }
                                     }
 
