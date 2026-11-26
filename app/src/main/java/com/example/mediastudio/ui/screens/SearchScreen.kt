@@ -113,7 +113,7 @@ fun SearchScreen(
                         text = "Pretraži filmove i serije",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp
+                        fontSize = 17.sp
                     )
                 },
                 navigationIcon = {
@@ -121,7 +121,12 @@ fun SearchScreen(
                         onClick = onBackClick,
                         contentDescription = "Natrag"
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Natrag", tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = "Natrag",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
@@ -134,15 +139,15 @@ fun SearchScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .clipToBounds()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .width(330.dp)
+                    .width(280.dp)
                     .fillMaxHeight()
                     .verticalScroll(rememberScrollState())
-                    .padding(bottom = 24.dp)
+                    .padding(bottom = 20.dp)
             ) {
                 OutlinedTextField(
                     value = query,
@@ -151,8 +156,16 @@ fun SearchScreen(
                     },
                     modifier = Modifier.fillMaxWidth(),
                     readOnly = true,
-                    placeholder = { Text("Upiši naziv filma ili serije...", color = Color.Gray, fontSize = 14.sp) },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Red) },
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                    placeholder = { Text("Upiši naziv filma ili serije...", color = Color.Gray, fontSize = 12.sp) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Color.Red,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
@@ -169,11 +182,11 @@ fun SearchScreen(
                     )
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     NetflixKeyButton(
                         label = "RAZMAK",
@@ -200,13 +213,13 @@ fun SearchScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     keys.chunked(6).forEachIndexed { rowIndex, rowKeys ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             rowKeys.forEachIndexed { colIndex, keyChar ->
                                 val mod = if (rowIndex == 0 && colIndex == 0) {
@@ -242,28 +255,28 @@ fun SearchScreen(
                             Text(
                                 text = "Odaberi slova na tipkovnici lijevo",
                                 color = Color.LightGray,
-                                fontSize = 18.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(5.dp))
                             Text(
                                 text = "Rezultati pretrage prikazuju se automatski",
                                 color = Color.Gray,
-                                fontSize = 14.sp
+                                fontSize = 12.sp
                             )
                         }
                     }
                     isSearching -> {
                         CircularProgressIndicator(
                             color = Color.Red,
-                            modifier = Modifier.align(Alignment.Center)
+                            modifier = Modifier.align(Alignment.Center).size(36.dp)
                         )
                     }
                     searchResults.isEmpty() -> {
                         Text(
                             text = "Nema pronađenih naslova za \"${query.trim()}\"",
                             color = Color.Gray,
-                            fontSize = 16.sp,
+                            fontSize = 14.sp,
                             modifier = Modifier.align(Alignment.Center)
                         )
                     }
@@ -273,14 +286,14 @@ fun SearchScreen(
                                 text = "Rezultati za \"${query.trim()}\" (${searchResults.size})",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                modifier = Modifier.padding(bottom = 10.dp)
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(bottom = 8.dp)
                             )
                             LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = 125.dp),
-                                contentPadding = PaddingValues(top = 4.dp, bottom = 64.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                columns = GridCells.Adaptive(minSize = 100.dp),
+                                contentPadding = PaddingValues(top = 3.dp, bottom = 52.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clipToBounds()
@@ -332,15 +345,15 @@ private fun NetflixKeyButton(
 
     Box(
         modifier = modifier
-            .height(42.dp)
+            .height(35.dp)
             .background(
                 color = if (isFocused) Color.Red else Color(0xFF1F1F1F),
-                shape = RoundedCornerShape(6.dp)
+                shape = RoundedCornerShape(5.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
+                width = if (isFocused) 2.dp else 1.dp,
                 color = if (isFocused) Color.White else Color.DarkGray,
-                shape = RoundedCornerShape(6.dp)
+                shape = RoundedCornerShape(5.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
         contentAlignment = Alignment.Center
@@ -349,7 +362,7 @@ private fun NetflixKeyButton(
             text = label,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = if (label.length > 2) 11.sp else 15.sp,
+            fontSize = if (label.length > 2) 10.sp else 13.sp,
             textAlign = TextAlign.Center,
             maxLines = 1
         )
