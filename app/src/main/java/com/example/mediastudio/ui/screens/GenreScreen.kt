@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -331,8 +332,8 @@ private fun PaginationNavButton(
                 shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused && enabled) 2.5.dp else 1.dp,
-                color = if (isFocused && enabled) Color.White else Color.Gray.copy(alpha = 0.6f),
+                width = if (isFocused && enabled) 1.8.dp else 0.8.dp,
+                color = if (isFocused && enabled) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.25f),
                 shape = RoundedCornerShape(7.dp)
             )
             .clickable(enabled = enabled, interactionSource = interactionSource, indication = null) { onClick() }
@@ -362,9 +363,23 @@ fun RatedMovieGridCard(
     val movie = ratedMovie.movie
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scaleVal = if (isFocused) 1.05f else 1f
-    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 2.5.dp else 1.dp
+    val scaleVal = if (isFocused) 1.035f else 1f
+    val borderWidth = if (isFocused) 1.8.dp else 0.8.dp
+    val borderBrush = if (isFocused) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.92f),
+                Color.White.copy(alpha = 0.50f)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.22f),
+                Color.White.copy(alpha = 0.10f)
+            )
+        )
+    }
     val cardFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(shouldRestoreFocus) {
@@ -431,8 +446,9 @@ fun RatedMovieGridCard(
             Card(
                 modifier = Modifier
                     .fillMaxSize()
-                    .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
+                    .border(borderWidth, borderBrush, RoundedCornerShape(9.dp)),
                 shape = RoundedCornerShape(9.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isFocused) 8.dp else 0.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
             ) {
                 val activeImageUrl = posterUrl.ifBlank { fallbackUrl }
@@ -512,7 +528,7 @@ fun RatedMovieGridCard(
                         .align(Alignment.TopEnd)
                         .padding(5.dp)
                         .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(5.dp))
-                        .border(1.dp, Color(0xFFFFC107), RoundedCornerShape(5.dp))
+                        .border(0.8.dp, Color(0xFFFFC107).copy(alpha = 0.85f), RoundedCornerShape(5.dp))
                         .padding(horizontal = 5.dp, vertical = 1.5.dp)
                 ) {
                     Text(
