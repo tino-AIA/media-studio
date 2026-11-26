@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search)'
+        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search, franchises_search)'
         required: true
         default: 'all'
         type: choice
@@ -17,6 +17,7 @@ on:
           - series_cartoons
           - concerts
           - directors_search
+          - franchises_search
 
 permissions:
   contents: write
@@ -130,9 +131,36 @@ jobs:
             directors_traži_rezultati.csv
             directors_pronađeni_filmovi.csv
 
+  search-franchises-archive:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'franchises_search'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl
+      - name: Search Franchises on TMDB & Archive.org
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/search_franchises_archive.py
+      - name: Upload Franchise Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fransize-archive-rezultati
+          path: |
+            fransize_rezultati.xlsx
+            fransize_sve_verzije.csv
+
   keep-repo-alive:
     if: always()
-    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive]
+    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive, search-franchises-archive]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
