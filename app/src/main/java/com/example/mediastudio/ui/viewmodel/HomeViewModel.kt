@@ -1,4 +1,219 @@
-val exactAuthorOrder = listOf(
+package com.example.mediastudio.ui.viewmodel
+
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import coil.Coil
+import com.example.mediastudio.data.api.SupabaseCatalogItem
+import com.example.mediastudio.data.api.SupabaseRepository
+import com.example.mediastudio.data.model.ArchiveMovie
+import com.example.mediastudio.data.update.AppUpdateManager
+import com.squareup.moshi.Json
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
+import kotlin.math.ceil
+
+enum class ContentTab {
+    MOVIES, ANIMATION, SERIES, CONCERTS, FAVORITES
+}
+
+data class GenreOption(
+    val title: String,
+    val query: String,
+    val defaultSort: String = "downloads desc",
+    val isAdultCategory: Boolean = false,
+    val isAnimationCategory: Boolean = false,
+    val isSeriesCategory: Boolean = false,
+    val isConcertCategory: Boolean = false,
+    val isAuthorCollection: Boolean = false
+)
+
+data class RatedMovie(
+    val movie: ArchiveMovie,
+    val rating: String,
+    val relevanceScore: Double = 0.0
+)
+
+private data class CatalogSnapshot(
+    val sourceItemsRef: List<SupabaseCatalogItem>,
+    val deduplicatedAll: List<SupabaseCatalogItem>,
+    val adultMovies: List<SupabaseCatalogItem>,
+    val liveActionMovies: List<SupabaseCatalogItem>,
+    val animatedMoviesAndShorts: List<SupabaseCatalogItem>,
+    val liveActionSeries: List<SupabaseCatalogItem>,
+    val animatedSeries: List<SupabaseCatalogItem>,
+    val concerts: List<SupabaseCatalogItem>
+)
+
+private data class ArchiveSearchResponse(val response: ArchiveResponseBody?)
+private data class ArchiveResponseBody(
+    val numFound: Int?,
+    val docs: List<RawArchiveDoc>?
+)
+private data class RawArchiveDoc(
+    val identifier: String?,
+    val title: Any?,
+    val creator: Any?,
+    val description: Any?,
+    val collection: Any?,
+    val subject: Any? = null,
+    val runtime: Any?,
+    @Json(name = "item_size") val itemSize: Any? = null,
+    val year: Any? = null,
+    @Json(name = "avg_rating") val avgRating: Any?,
+    @Json(name = "num_reviews") val numReviews: Any?
+)
+
+private interface ArchiveSearchApi {
+    @GET("advancedsearch.php")
+    suspend fun searchMovies(
+        @Query("q") query: String,
+        @Query("fl[]") fields: List<String> = listOf(
+            "identifier", "title", "creator", "description", "collection",
+            "subject", "runtime", "item_size", "year", "avg_rating", "num_reviews"
+        ),
+        @Query("sort[]") sort: String = "downloads desc",
+        @Query("rows") rows: Int = 150,
+        @Query("page") page: Int = 1,
+        @Query("output") output: String = "json"
+    ): ArchiveSearchResponse
+}
+
+class HomeViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val prefs = application.getSharedPreferences("MediaStudioPrefs", Context.MODE_PRIVATE)
+
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+
+    private val favoritesAdapter = moshi.adapter<List<ArchiveMovie>>(
+        Types.newParameterizedType(List::class.java, ArchiveMovie::class.java)
+    )
+
+    private val api: ArchiveSearchApi = Retrofit.Builder()
+        .baseUrl("https://archive.org/")
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(ArchiveSearchApi::class.java)
+
+    private val adultEroticKeywords = listOf(
+        "18+", "erotski", "erotic", "erotica", "erotik", "xxx", "porn", "porno",
+        "pornography", "adult film", "adult movie", "adultvhs", "softcore", "hardcore",
+        "playboy", "penthouse", "orgy", "fetish", "nc-17", "alpha france", "nsfw",
+        "vintage porn", "baise moi", "baise-moi", "fick mich", "schulmädchen", "sexfilm",
+        "tinto brass", "jess franco", "zalman king", "just jaeckin", "radley metzger",
+        "emmanuelle", "caligula", "kaligula", "last tango in paris", "posljednji tango u parizu",
+        "9½ weeks", "9 1/2 weeks", "nine 1/2 weeks", "devet i pol tjedana", "showgirls",
+        "basic instinct", "sirove strasti", "fifty shades", "pedeset nijansi", "365 days",
+        "365 dana", "salò", "belle de jour", "ljepotica dana", "henry & june", "henry i june",
+        "realm of the senses", "empire des sens", "carstvo čula", "romance x",
+        "anatomy of hell", "anatomija pakla", "jeune & jolie", "young & beautiful",
+        "below her mouth", "room in rome", "soba u rimu", "shortbus", "the brown bunny",
+        "histoire d'o", "story of o", "lady chatterley", "ai no corrida"
+    )
+
+    private val adultShortRegexes = adultEroticKeywords
+        .filter { it.length <= 5 }
+        .map { Regex("\\b${Regex.escape(it)}\\b") }
+
+    private val adultLongKeywords = adultEroticKeywords.filter { it.length > 5 }
+
+    private val blockedSpecificAdultKeywords = listOf(
+        "hentai", "ecchi", "yaoi", "yuri", "adult anime", "gay porn", "boy love"
+    )
+
+    private val blockedRegionalAndArabicKeywords = listOf(
+        "bollywood", "tollywood", "kollywood", "hindi", "telugu", "tamil", "urdu",
+        "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
+        "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh"
+    )
+
+    private val blockedUnicodeScriptRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u0900-\\u0D7F]")
+    private val blockedRegionalWordRegex = Regex(
+        "\\b(${blockedRegionalAndArabicKeywords.joinToString("|") { Regex.escape(it) }})\\b"
+    )
+    private val yearParenRegex = Regex("\\(\\d{4}\\)")
+    private val nonAlnumTitleRegex = Regex("[^a-z0-9čćžšđ]")
+    private val nonSearchCharRegex = Regex("[^a-z0-9čćžšđ\\s]")
+    private val multiSpaceRegex = Regex("\\s+")
+    private val seriesIndicatorRegex = Regex("(?i)\\b(s\\d{1,2}e\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|\\d+x\\d+|tv\\s*series)\\b")
+    private val numericCleanRegex = Regex("[^0-9.]")
+
+    private val hdWidescreenQualityRegex = Regex(
+        "(?i)\\b(1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip|widescreen|16x9|16_9|16-9|remastered|restored)\\b"
+    )
+    private val lowVhsQualityRegex = Regex(
+        "(?i)\\b(vhs|vhdrip|laserdisc|ldrip|fullscreen|full[\\s._-]*screen|4x3|4_3|4-3|480p|360p|240p|camrip|telesync|telecine|dvdscr)\\b"
+    )
+
+    private val blockedSearchNoiseKeywords = listOf(
+        "all 6", "movies 1 -", "movies 1-", "n64", "ps1", "ps2", "snes", "nes",
+        "gameplay", "longplay", "walkthrough", "speedrun", "soundtrack", "audiobook",
+        "radio drama", "fan film", "fan-film", "trailer", "teaser", "tv spot",
+        "movie_trailers", "sneak peek", "featurette", "screen test", "test footage",
+        "gag reel", "blooper", "unboxing", "reaction", "commercial", "promo"
+    )
+
+    private val animationKeywords = listOf(
+        "animirani", "crtani", "crtić", "cartoon", "animation", "anime", "pixar", "disney",
+        "looney tunes", "tom and jerry", "bugs bunny", "popeye", "ghibli", "chihiro",
+        "koralina", "coraline", "angry birds", "mačak u čizmama", "puss in boots",
+        "evangelion", "wolfwalkers", "klaus", "bojack", "phineas", "gumball", "dr.stone",
+        "batman: crtana", "animated series", "south park", "simpsons",
+        "baltazar", "balthazar", "šegrt hlapić", "čudesna šuma", "čarobnjakov šešir", "surogat"
+    )
+
+    private val animGenresSet = setOf(
+        "animirani klasici",
+        "disney i pixar klasici",
+        "disney kratki crtići",
+        "animirani filmovi",
+        "klasični crtići",
+        "animirane serije",
+        "ex-yu crtići"
+    )
+
+    private val disneyPixarKeywords = listOf(
+        "disney", "pixar", "walt disney", "mickey mouse", "donald duck", "goofy",
+        "pluto", "silly symphon", "toy story", "finding nemo", "lion king", "frozen", "aladdin"
+    )
+
+    private val exYuGenreNames = setOf(
+        "ex-yu filmovi",
+        "ex-yu klasici",
+        "ex-yu crtići",
+        "ex-yu animirani",
+        "ex-yu serije"
+    )
+
+    private val exYuKeywords = listOf(
+        "ex-yu", "ex yu", "zagreb film", "jadran film", "avala film", "centar film",
+        "sutjeska film", "bosna film", "vardar film", "croatia film", "domaci film",
+        "domaći film", "jugoslavija", "yugoslavia", "baltazar", "balthazar",
+        "šegrt hlapić", "čudesna šuma", "čarobnjakov šešir", "surogat",
+        "ko to tamo peva", "maratonci", "balkanski špijun", "tko pjeva zlo ne misli",
+        "vlak u snijegu", "družba pere kvržice", "bitka na neretvi",
+        "valter brani sarajevo", "walter brani sarajevo",
+        "gosti iz galaksije", "izbavitelj", "gruntovčani", "malo misto", "velo misto",
+        "smogovci", "otpisani", "bolji život", "vruć vetar", "kamiondžije"
+    )
+
+    val exactAuthorOrder = listOf(
         "Martin Scorsese", "Steven Spielberg", "Quentin Tarantino", "Stanley Kubrick",
         "Christopher Nolan", "Ridley Scott", "James Cameron", "Peter Jackson",
         "Tim Burton", "David Fincher", "Robert Zemeckis", "Guillermo del Toro",
@@ -177,3 +392,1120 @@ val exactAuthorOrder = listOf(
         "Gaspar Noé" to "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Gaspar_No%C3%A9_Cannes_2015.jpg/400px-Gaspar_No%C3%A9_Cannes_2015.jpg",
         "Peter Greenaway" to "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Peter_Greenaway_2013.jpg/400px-Peter_Greenaway_2013.jpg"
     )
+
+    var staticAuthorImages: Map<String, String> = fallbackAuthorImages
+        private set
+
+    private val movieBaseQuery = "mediatype:movies AND (collection:feature_films OR collection:opensource_movies OR collection:SciFi_Films OR collection:film_noir) AND -collection:television AND -subject:news AND -subject:animation AND -subject:cartoon"
+
+    val movieGenreDefinitions = listOf(
+        GenreOption("Top 10 danas", movieBaseQuery, "downloads desc"),
+        GenreOption("Klasici i Najgledanije", movieBaseQuery, "downloads desc"),
+        GenreOption(
+            "Ex-Yu klasici",
+            "mediatype:(movies OR web) AND (language:(Croatian OR Serbian OR \"Serbo-Croatian\" OR Bosnian OR Slovenian OR Macedonian) OR subject:(Yugoslavia OR \"Jadran Film\" OR \"Avala Film\" OR \"Zagreb Film\" OR \"domaci film\"))",
+            "downloads desc"
+        ),
+        GenreOption("Filmografije i Kolekcije Autora", "", "", isAuthorCollection = true),
+        GenreOption("Sci-Fi klasici", "$movieBaseQuery AND subject:(sci-fi OR \"science fiction\")"),
+        GenreOption("Akcija i avantura", "$movieBaseQuery AND subject:(action OR adventure)"),
+        GenreOption("Triler i misterija", "$movieBaseQuery AND subject:(thriller OR mystery OR noir)"),
+        GenreOption("Komedija", "$movieBaseQuery AND subject:comedy"),
+        GenreOption("Horor", "$movieBaseQuery AND subject:horror"),
+        GenreOption("Drama", "$movieBaseQuery AND subject:drama"),
+        GenreOption("Krimi", "$movieBaseQuery AND subject:(crime OR gangster)"),
+        GenreOption("Romantični", "$movieBaseQuery AND subject:romance"),
+        GenreOption("Vestern", "$movieBaseQuery AND subject:western"),
+        GenreOption("Ratni", "$movieBaseQuery AND subject:war"),
+        GenreOption(
+            title = "18+ / Erotski",
+            query = "mediatype:movies AND (collection:(adultvhs OR mensmagazines_post70s) OR subject:(erotica OR porn OR \"adult film\" OR nsfw OR \"vintage porn\" OR sex) OR creator:(\"alpha france\" OR \"jess franco\" OR \"tinto brass\"))",
+            defaultSort = "downloads desc",
+            isAdultCategory = true
+        )
+    )
+
+    val animationGenreDefinitions = listOf(
+        GenreOption("Top 10 animiranih", "mediatype:movies AND (subject:animation OR subject:cartoon)", "downloads desc", isAnimationCategory = true),
+        GenreOption("Disney i Pixar klasici", "mediatype:movies AND (title:(disney OR pixar OR \"walt disney\" OR mickey))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Disney kratki crtići", "mediatype:movies AND title:(\"walt disney\" OR \"mickey mouse\" OR \"donald duck\" OR \"silly symphonies\" OR goofy)", "downloads desc", isAnimationCategory = true),
+        GenreOption("Animirani filmovi", "mediatype:movies AND (subject:animation OR collection:animationandcartoons)", "downloads desc", isAnimationCategory = true),
+        GenreOption("Klasični crtići", "mediatype:movies AND (title:(\"looney tunes\" OR \"tom and jerry\" OR popeye OR \"bugs bunny\" OR \"pink panther\"))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Ex-Yu crtići", "mediatype:(movies OR web) AND (subject:\"Zagreb Film\" OR creator:\"Zagreb Film\" OR title:(\"Profesor Baltazar\" OR \"Čudesna šuma\" OR \"Šegrt Hlapić\" OR \"Surogat\"))", "downloads desc", isAnimationCategory = true),
+        GenreOption("Animirane serije", "mediatype:movies AND (subject:animation OR subject:cartoon) AND subject:\"tv series\"", "downloads desc", isAnimationCategory = true, isSeriesCategory = true)
+    )
+
+    private val seriesBaseQuery = "mediatype:movies AND (collection:classic_tv_1990s OR collection:classic_tv_1980s OR collection:classic_tv_1970s OR subject:\"tv series\") AND -subject:news AND -subject:animation AND -subject:cartoon"
+
+    val seriesGenreDefinitions = listOf(
+        GenreOption("Top 10 serija danas", seriesBaseQuery, "downloads desc", isSeriesCategory = true),
+        GenreOption("Ex-Yu serije", "mediatype:movies AND language:(Croatian OR Serbian OR \"Serbo-Croatian\" OR Bosnian)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Krimi, detektivske i triler serije", "$seriesBaseQuery AND subject:(crime OR detective OR mystery OR thriller)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Sci-Fi i fantastika serije", "$seriesBaseQuery AND subject:(sci-fi OR \"science fiction\" OR fantasy)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Komedije i sitcomi", "$seriesBaseQuery AND subject:(comedy OR sitcom)", "downloads desc", isSeriesCategory = true),
+        GenreOption("Avanturističke serije", "$seriesBaseQuery AND subject:adventure", "downloads desc", isSeriesCategory = true),
+        GenreOption("Dramske i obiteljske serije", "$seriesBaseQuery AND subject:(drama OR family OR western)", "downloads desc", isSeriesCategory = true)
+    )
+
+    private val concertBaseQuery = "mediatype:movies AND collection:vhsconcerts_music"
+
+    val concertGenreDefinitions = listOf(
+        GenreOption("Top 10 Koncerti", concertBaseQuery, "downloads desc", isConcertCategory = true),
+        GenreOption("Rock i Metal", "$concertBaseQuery AND subject:(rock OR metal OR punk)", "downloads desc", isConcertCategory = true),
+        GenreOption("Pop glazba", "$concertBaseQuery AND subject:(pop OR \"pop music\")", "downloads desc", isConcertCategory = true),
+        GenreOption("Klasika i Jazz", "$concertBaseQuery AND subject:(classical OR jazz OR blues)", "downloads desc", isConcertCategory = true)
+    )
+
+    private val _selectedTab = MutableStateFlow(ContentTab.MOVIES)
+    val selectedTab: StateFlow<ContentTab> = _selectedTab
+
+    private val _movieCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val movieCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _movieCategories
+
+    private val _animationCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val animationCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _animationCategories
+
+    private val _seriesCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val seriesCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _seriesCategories
+
+    private val _concertCategories = MutableStateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>>(emptyList())
+    val concertCategories: StateFlow<List<Pair<GenreOption, List<ArchiveMovie>>>> = _concertCategories
+
+    private val _heroMovies = MutableStateFlow<List<Pair<ArchiveMovie, Boolean>>>(emptyList())
+    val heroMovies: StateFlow<List<Pair<ArchiveMovie, Boolean>>> = _heroMovies
+
+    private val _activeHeroIndex = MutableStateFlow(0)
+    val activeHeroIndex: StateFlow<Int> = _activeHeroIndex
+
+    private var carouselJob: Job? = null
+
+    private val _favoriteMovies = MutableStateFlow<List<ArchiveMovie>>(emptyList())
+    val favoriteMovies: StateFlow<List<ArchiveMovie>> = _favoriteMovies
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _globalSearchResults = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val globalSearchResults: StateFlow<List<RatedMovie>> = _globalSearchResults
+
+    private val _isSearchingGlobal = MutableStateFlow(false)
+    val isSearchingGlobal: StateFlow<Boolean> = _isSearchingGlobal
+
+    private val _currentSearchQuery = MutableStateFlow("")
+    val currentSearchQuery: StateFlow<String> = _currentSearchQuery
+
+    private var searchJob: Job? = null
+    private var genreJob: Job? = null
+
+    private val _selectedGenre = MutableStateFlow<GenreOption?>(null)
+    val selectedGenre: StateFlow<GenreOption?> = _selectedGenre
+
+    private val _genreMovies = MutableStateFlow<List<RatedMovie>>(emptyList())
+    val genreMovies: StateFlow<List<RatedMovie>> = _genreMovies
+
+    private val _isGenreLoading = MutableStateFlow(false)
+    val isGenreLoading: StateFlow<Boolean> = _isGenreLoading
+
+    private val _currentGenrePage = MutableStateFlow(1)
+    val currentGenrePage: StateFlow<Int> = _currentGenrePage
+
+    private val _totalGenrePages = MutableStateFlow(1)
+    val totalGenrePages: StateFlow<Int> = _totalGenrePages
+
+    private val _totalGenreMoviesCount = MutableStateFlow(0)
+    val totalGenreMoviesCount: StateFlow<Int> = _totalGenreMoviesCount
+
+    private val _lastFocusedMovieId = MutableStateFlow<String?>(null)
+    val lastFocusedMovieId: StateFlow<String?> = _lastFocusedMovieId
+
+    private val _lastFocusedRowTitle = MutableStateFlow<String?>(null)
+    val lastFocusedRowTitle: StateFlow<String?> = _lastFocusedRowTitle
+
+    var savedGenreScrollIndex: Int = 0
+    var savedGenreScrollOffset: Int = 0
+    var savedHomeScrollIndex: Int = 0
+    var savedHomeScrollOffset: Int = 0
+
+    fun rememberSelectedItem(movie: ArchiveMovie, rowTitle: String? = null) {
+        _lastFocusedMovieId.value = movie.identifier
+        if (rowTitle != null) {
+            _lastFocusedRowTitle.value = rowTitle
+        }
+    }
+
+    fun clearLastFocusedMovie() {
+        _lastFocusedMovieId.value = null
+    }
+
+    val pageSize = 36
+
+    private var isAdultCategoryUnlocked: Boolean
+        get() = AppUpdateManager.is18PlusEnabled(getApplication())
+        set(value) {
+            AppUpdateManager.set18PlusEnabled(getApplication(), value)
+        }
+
+    private var unlockedAdultMovies: List<ArchiveMovie> = emptyList()
+
+    fun setAdultCategoryUnlocked(unlocked: Boolean) {
+        isAdultCategoryUnlocked = unlocked
+        viewModelScope.launch {
+            if (unlocked && getOrBuildCatalogSnapshot().adultMovies.isEmpty() && unlockedAdultMovies.isEmpty()) {
+                val adultGenre = movieGenreDefinitions.firstOrNull { it.isAdultCategory }
+                if (adultGenre != null) {
+                    val fetched = fetchFromArchiveFallback(
+                        query = adultGenre.query,
+                        rows = 40,
+                        page = 1,
+                        excludeAdult = false,
+                        isAdultCategory = true
+                    )
+                    unlockedAdultMovies = fetched.map { it.movie }.take(20)
+                }
+            }
+            rebuildCategoriesFromSupabase()
+        }
+    }
+
+    @Volatile
+    private var cachedSnapshot: CatalogSnapshot? = null
+
+    @Volatile
+    private var cachedGenreKey: String? = null
+
+    @Volatile
+    private var cachedGenreFullRated: List<RatedMovie> = emptyList()
+
+    init {
+        loadFavorites()
+
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                SupabaseRepository.init(application)
+            }
+            if (SupabaseRepository.getCatalogItems().isNotEmpty()) {
+                rebuildCategoriesFromSupabase()
+                _isLoading.value = false
+            }
+            loadAllContent()
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(180_000L)
+                trimAppMemory()
+            }
+        }
+    }
+
+    fun trimAppMemory() {
+        try {
+            SupabaseRepository.trimMemoryCaches()
+            Coil.imageLoader(getApplication()).memoryCache?.clear()
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        trimAppMemory()
+    }
+
+    private fun loadFavorites() {
+        val json = prefs.getString("favorites", "[]")
+        if (json != null) {
+            try {
+                val list = favoritesAdapter.fromJson(json) ?: emptyList()
+                _favoriteMovies.value = list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun isFavorite(identifier: String): Boolean {
+        return _favoriteMovies.value.any { it.identifier == identifier }
+    }
+
+    fun toggleFavorite(movie: ArchiveMovie) {
+        val currentList = _favoriteMovies.value.toMutableList()
+        val exists = currentList.any { it.identifier == movie.identifier }
+
+        if (exists) {
+            currentList.removeAll { it.identifier == movie.identifier }
+        } else {
+            currentList.add(movie)
+        }
+
+        _favoriteMovies.value = currentList
+        prefs.edit().putString("favorites", favoritesAdapter.toJson(currentList)).apply()
+        val snap = cachedSnapshot
+        if (snap != null) {
+            refreshHeroItems(snap, currentList, _movieCategories.value, _seriesCategories.value, _concertCategories.value)
+        }
+    }
+
+    fun selectTab(tab: ContentTab) {
+        savedHomeScrollIndex = 0
+        savedHomeScrollOffset = 0
+        _lastFocusedMovieId.value = null
+        _lastFocusedRowTitle.value = null
+        _selectedTab.value = tab
+    }
+
+    fun setActiveHeroIndex(index: Int) {
+        if (index in _heroMovies.value.indices) {
+            _activeHeroIndex.value = index
+            startHeroCarousel()
+        }
+    }
+
+    private fun isBlockedRegionalOrArabic(textBlob: String): Boolean {
+        if (blockedUnicodeScriptRegex.containsMatchIn(textBlob)) {
+            return true
+        }
+        val lower = textBlob.lowercase()
+        return blockedRegionalWordRegex.containsMatchIn(lower)
+    }
+
+    private fun isBlockedSpecificAdult(item: SupabaseCatalogItem): Boolean {
+        val blob = "${item.title} ${item.archiveId} ${item.genres.joinToString(" ")}".lowercase()
+        return blockedSpecificAdultKeywords.any { blob.contains(it) } || isBlockedRegionalOrArabic(blob)
+    }
+
+    private fun isAdultOrEroticItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { g ->
+                val gl = g.lowercase()
+                gl.contains("18+") || gl.contains("erotsk") || gl.contains("erotic")
+            }
+        ) {
+            return true
+        }
+        val titleAndId = "${item.title} ${item.archiveId}".lowercase()
+        return adultLongKeywords.any { titleAndId.contains(it) } ||
+            adultShortRegexes.any { it.containsMatchIn(titleAndId) }
+    }
+
+    private fun isAnimatedItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { it.lowercase() in animGenresSet }) return true
+        val blob = "${item.title} ${item.archiveId}".lowercase()
+        return animationKeywords.any { blob.contains(it) }
+    }
+
+    private fun isDisneyOrPixarItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any {
+                it.equals("Disney i Pixar klasici", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
+        ) {
+            return true
+        }
+        val blob = "${item.title} ${item.archiveId}".lowercase()
+        return disneyPixarKeywords.any { blob.contains(it) }
+    }
+
+    private fun isExYuItem(item: SupabaseCatalogItem): Boolean {
+        if (item.genres.any { it.lowercase() in exYuGenreNames }) return true
+        val blob = "${item.title} ${item.archiveId}".lowercase()
+        return exYuKeywords.any { blob.contains(it) }
+    }
+
+    private fun computeQualityTier(item: SupabaseCatalogItem): Int {
+        val blob = "${item.archiveId} ${item.streamUrl} ${item.title}".lowercase()
+        return when {
+            hdWidescreenQualityRegex.containsMatchIn(blob) -> 2
+            lowVhsQualityRegex.containsMatchIn(blob) -> 0
+            else -> 1
+        }
+    }
+
+    private fun deduplicateCatalogItems(items: List<SupabaseCatalogItem>): List<SupabaseCatalogItem> {
+        val seenTitleYears = HashSet<String>(items.size)
+        val seenTmdbTokens = HashSet<String>(items.size / 2)
+        return items
+            .sortedWith(
+                compareByDescending<SupabaseCatalogItem> { computeQualityTier(it) }
+                    .thenBy { it.archiveId.contains(",tmdb-") }
+                    .thenByDescending { it.popularityScore }
+            )
+            .filter { item ->
+                val tmdbPart = item.archiveId.substringAfter(",tmdb-", "").trim()
+                if (tmdbPart.isNotEmpty() && !seenTmdbTokens.add(tmdbPart)) {
+                    return@filter false
+                }
+                val cleanTitle = yearParenRegex.replace(item.title.lowercase(), "")
+                    .replace(nonAlnumTitleRegex, "")
+                val titleKey = "${item.mediaType}:${cleanTitle}_${item.releaseYear}"
+                seenTitleYears.add(titleKey)
+            }
+    }
+
+    private fun getOrBuildCatalogSnapshot(): CatalogSnapshot {
+        val rawItems = SupabaseRepository.getCatalogItems()
+        val existing = cachedSnapshot
+        if (existing != null && existing.sourceItemsRef === rawItems) {
+            return existing
+        }
+
+        val deduplicated = deduplicateCatalogItems(rawItems.filter { !isBlockedSpecificAdult(it) })
+        val adultList = ArrayList<SupabaseCatalogItem>()
+        val liveMovies = ArrayList<SupabaseCatalogItem>()
+        val animMovies = ArrayList<SupabaseCatalogItem>()
+        val liveSeries = ArrayList<SupabaseCatalogItem>()
+        val animSeries = ArrayList<SupabaseCatalogItem>()
+        val concertList = ArrayList<SupabaseCatalogItem>()
+
+        for (item in deduplicated) {
+            when (item.mediaType) {
+                "concert" -> concertList.add(item)
+                "series" -> {
+                    if (isAnimatedItem(item)) animSeries.add(item)
+                    else if (!isAdultOrEroticItem(item)) liveSeries.add(item)
+                }
+                else -> {
+                    if (isAdultOrEroticItem(item)) adultList.add(item)
+                    else if (isAnimatedItem(item)) animMovies.add(item)
+                    else liveMovies.add(item)
+                }
+            }
+        }
+
+        val snapshot = CatalogSnapshot(
+            sourceItemsRef = rawItems,
+            deduplicatedAll = deduplicated,
+            adultMovies = adultList,
+            liveActionMovies = liveMovies,
+            animatedMoviesAndShorts = animMovies,
+            liveActionSeries = liveSeries,
+            animatedSeries = animSeries,
+            concerts = concertList
+        )
+        cachedSnapshot = snapshot
+        cachedGenreKey = null
+        cachedGenreFullRated = emptyList()
+        return snapshot
+    }
+
+    private suspend fun loadAllContent() {
+        if (_movieCategories.value.isEmpty()) {
+            _isLoading.value = true
+        }
+        try {
+            SupabaseRepository.syncFromSupabase()
+            rebuildCategoriesFromSupabase()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
+    private suspend fun rebuildCategoriesFromSupabase() = withContext(Dispatchers.Default) {
+        val snap = getOrBuildCatalogSnapshot()
+        val sbAuthors = SupabaseRepository.getAuthors()
+
+        val mergedAuthorPhotos = fallbackAuthorImages.toMutableMap()
+        for (a in sbAuthors) {
+            if (a.photoUrl.isNotBlank()) {
+                mergedAuthorPhotos[a.name] = a.photoUrl
+            }
+        }
+        staticAuthorImages = mergedAuthorPhotos
+
+        val supabaseAdultMovies = snap.adultMovies
+        val liveActionMovies = snap.liveActionMovies
+        val animatedMoviesAndShorts = snap.animatedMoviesAndShorts
+        val liveActionSeries = snap.liveActionSeries
+        val animatedSeries = snap.animatedSeries
+        val concerts = snap.concerts
+
+        val authorList = if (sbAuthors.isNotEmpty()) {
+            sbAuthors.map { ArchiveMovie(identifier = "AUTHOR|${it.name}", title = it.name) }
+        } else {
+            exactAuthorOrder.map { ArchiveMovie(identifier = "AUTHOR|$it", title = it) }
+        }
+
+        if (_selectedGenre.value?.isAuthorCollection == true) {
+            _genreMovies.value = authorList.map { RatedMovie(it, "", 0.0) }
+            _totalGenreMoviesCount.value = authorList.size
+            _totalGenrePages.value = 1
+        }
+
+        val builtMovieCategories = movieGenreDefinitions.mapNotNull { genre ->
+            when {
+                genre.isAuthorCollection -> genre to authorList
+                genre.isAdultCategory -> {
+                    if (isAdultCategoryUnlocked) {
+                        val combinedAdult = (supabaseAdultMovies.map { it.toArchiveMovie() } + unlockedAdultMovies)
+                            .distinctBy { it.identifier }
+                        if (combinedAdult.isNotEmpty()) {
+                            genre to combinedAdult
+                        } else {
+                            viewModelScope.launch { setAdultCategoryUnlocked(true) }
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                }
+                genre.title == "Top 10 danas" -> {
+                    val top10 = liveActionMovies.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    if (top10.isNotEmpty()) genre to top10 else null
+                }
+                genre.title == "Klasici i Najgledanije" -> {
+                    val classics = liveActionMovies.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (classics.isNotEmpty()) genre to classics else null
+                }
+                genre.title == "Ex-Yu klasici" -> {
+                    val exYuMovies = liveActionMovies.filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuMovies.isNotEmpty()) genre to exYuMovies else null
+                }
+                else -> {
+                    val matching = liveActionMovies.filter { item ->
+                        item.genres.any { it.equals(genre.title, ignoreCase = true) }
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (matching.isNotEmpty()) genre to matching else null
+                }
+            }
+        }
+
+        val shortCartoons = animatedMoviesAndShorts.filter { item ->
+            item.genres.any {
+                it.equals("Klasični crtići", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
+        }
+        val featureAnimations = animatedMoviesAndShorts.filter { item ->
+            item.genres.none {
+                it.equals("Klasični crtići", ignoreCase = true) ||
+                    it.equals("Disney kratki crtići", ignoreCase = true)
+            }
+        }
+
+        val builtAnimationCategories = animationGenreDefinitions.mapNotNull { genre ->
+            when (genre.title) {
+                "Top 10 animiranih" -> {
+                    val top10 = featureAnimations.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    if (top10.isNotEmpty()) genre to top10 else null
+                }
+                "Disney i Pixar klasici" -> {
+                    val disney = featureAnimations.filter { isDisneyOrPixarItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (disney.isNotEmpty()) genre to disney else null
+                }
+                "Disney kratki crtići" -> {
+                    val disneyShorts = shortCartoons.filter { item ->
+                        item.genres.any { it.equals("Disney kratki crtići", ignoreCase = true) } || isDisneyOrPixarItem(item)
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (disneyShorts.isNotEmpty()) genre to disneyShorts else null
+                }
+                "Animirani filmovi" -> {
+                    val otherAnim = featureAnimations.filter { !isDisneyOrPixarItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (otherAnim.isNotEmpty()) genre to otherAnim else null
+                }
+                "Klasični crtići" -> {
+                    val shorts = shortCartoons.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (shorts.isNotEmpty()) genre to shorts else null
+                }
+                "Ex-Yu crtići" -> {
+                    val exYuAnim = (animatedMoviesAndShorts + animatedSeries).filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuAnim.isNotEmpty()) genre to exYuAnim else null
+                }
+                "Animirane serije" -> {
+                    val animSer = animatedSeries.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (animSer.isNotEmpty()) genre to animSer else null
+                }
+                else -> null
+            }
+        }
+
+        val builtSeriesCategories = seriesGenreDefinitions.mapNotNull { genre ->
+            when {
+                genre.title.startsWith("Top 10") -> {
+                    val top10 = liveActionSeries.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    if (top10.isNotEmpty()) genre to top10 else null
+                }
+                genre.title == "Ex-Yu serije" -> {
+                    val exYuSer = liveActionSeries.filter { isExYuItem(it) }
+                        .sortedWith(
+                            compareByDescending<SupabaseCatalogItem> { it.rating }
+                                .thenByDescending { it.popularityScore }
+                        ).take(20).map { it.toArchiveMovie() }
+                    if (exYuSer.isNotEmpty()) genre to exYuSer else null
+                }
+                else -> {
+                    val matching = liveActionSeries.filter { item ->
+                        item.genres.any { it.equals(genre.title, ignoreCase = true) }
+                    }.sortedWith(
+                        compareByDescending<SupabaseCatalogItem> { it.rating }
+                            .thenByDescending { it.popularityScore }
+                    ).take(20).map { it.toArchiveMovie() }
+                    if (matching.isNotEmpty()) genre to matching else null
+                }
+            }
+        }
+
+        val builtConcertCategories = concertGenreDefinitions.mapNotNull { genre ->
+            if (genre.title.startsWith("Top 10")) {
+                val top10 = concerts.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                if (top10.isNotEmpty()) genre to top10 else null
+            } else {
+                val matching = concerts.filter { item ->
+                    item.genres.any { it.equals(genre.title, ignoreCase = true) }
+                }.sortedByDescending { it.popularityScore }.take(20).map { it.toArchiveMovie() }
+                if (matching.isNotEmpty()) genre to matching else null
+            }
+        }
+
+        if (builtMovieCategories.isNotEmpty()) _movieCategories.value = builtMovieCategories
+        _animationCategories.value = builtAnimationCategories
+        if (builtSeriesCategories.isNotEmpty()) _seriesCategories.value = builtSeriesCategories
+        if (builtConcertCategories.isNotEmpty()) _concertCategories.value = builtConcertCategories
+
+        refreshHeroItems(snap, _favoriteMovies.value, builtMovieCategories, builtSeriesCategories, builtConcertCategories)
+    }
+
+    private fun refreshHeroItems(
+        snap: CatalogSnapshot,
+        favs: List<ArchiveMovie>,
+        movies: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        series: List<Pair<GenreOption, List<ArchiveMovie>>>,
+        concerts: List<Pair<GenreOption, List<ArchiveMovie>>>
+    ) {
+        val featuredFromDb = (snap.liveActionMovies + snap.liveActionSeries)
+            .filter { it.isFeatured && it.posterUrl.isNotBlank() }
+            .sortedByDescending { it.popularityScore }
+            .take(5)
+            .map { it.toArchiveMovie() to (it.mediaType == "series") }
+
+        val topFavs = favs.take(3).map {
+            val isDbSeries = SupabaseRepository.getCatalogItem(it.identifier)?.mediaType == "series"
+            it to (isDbSeries || it.title.lowercase().contains("season") || it.title.lowercase().contains("episode"))
+        }
+        val topM = (movies.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(3) ?: emptyList()).map { it to false }
+        val topS = (series.firstOrNull { it.first.title.contains("Top 10") }?.second?.take(2) ?: emptyList()).map { it to true }
+        val topC = (concerts.firstOrNull()?.second?.take(1) ?: emptyList()).map { it to false }
+
+        val combined = (topFavs + featuredFromDb + topM + topS + topC)
+            .distinctBy { it.first.identifier }
+            .take(8)
+
+        _heroMovies.value = combined
+        startHeroCarousel()
+    }
+
+    private fun startHeroCarousel() {
+        carouselJob?.cancel()
+        _activeHeroIndex.value = 0
+        carouselJob = viewModelScope.launch {
+            while (isActive && _heroMovies.value.isNotEmpty()) {
+                delay(8000)
+                _activeHeroIndex.value = (_activeHeroIndex.value + 1) % _heroMovies.value.size
+            }
+        }
+    }
+
+    fun updateSearchQuery(query: String) {
+        performGlobalSearch(query)
+    }
+
+    private fun computeSearchRelevance(
+        title: String,
+        identifier: String,
+        description: String,
+        rawQuery: String,
+        isFromSupabase: Boolean,
+        baseQualityScore: Double
+    ): Double {
+        val qClean = rawQuery.lowercase().replace(nonSearchCharRegex, " ").replace(multiSpaceRegex, " ").trim()
+        val tClean = yearParenRegex.replace(title.lowercase(), "")
+            .replace(nonSearchCharRegex, " ")
+            .replace(multiSpaceRegex, " ")
+            .trim()
+        val idClean = identifier.lowercase().replace("_", " ").replace("-", " ")
+
+        var score = baseQualityScore
+        if (isFromSupabase) score += 3500.0
+
+        when {
+            tClean == qClean -> score += 20000.0
+            tClean.startsWith("$qClean ") || tClean.startsWith("$qClean:") -> score += 15000.0
+            tClean.startsWith(qClean) -> score += 13000.0
+            tClean.contains(" $qClean ") || tClean.endsWith(" $qClean") || tClean.contains(qClean) -> score += 10500.0
+            else -> {
+                val words = qClean.split(" ").filter { it.length >= 2 }
+                if (words.isNotEmpty() && words.all { tClean.contains(it) }) {
+                    score += 6500.0
+                } else if (idClean.contains(qClean)) {
+                    score += 3000.0
+                } else if (description.lowercase().contains(qClean)) {
+                    score += 1000.0
+                }
+            }
+        }
+
+        val noisePenaltyTerms = listOf("holiday special", "making of", "behind the scenes", "interview", "review", "parody")
+        if (noisePenaltyTerms.any { tClean.contains(it) }) {
+            score -= 6000.0
+        }
+
+        return score
+    }
+
+    fun performGlobalSearch(query: String) {
+        searchJob?.cancel()
+        _currentSearchQuery.value = query
+        val trimmed = query.trim()
+
+        if (trimmed.length < 2) {
+            _globalSearchResults.value = emptyList()
+            _isSearchingGlobal.value = false
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(250L)
+            _isSearchingGlobal.value = true
+            try {
+                val qLower = trimmed.lowercase()
+                val words = qLower.split(multiSpaceRegex).filter { it.isNotEmpty() }
+
+                val sbMatches = withContext(Dispatchers.Default) {
+                    val snap = getOrBuildCatalogSnapshot()
+                    val pool = if (isAdultCategoryUnlocked) {
+                        snap.deduplicatedAll
+                    } else {
+                        snap.deduplicatedAll.filter { !isAdultOrEroticItem(it) }
+                    }
+                    pool
+                        .filter { item ->
+                            val tLower = item.title.lowercase()
+                            tLower.contains(qLower) ||
+                                item.archiveId.lowercase().contains(qLower) ||
+                                (words.size > 1 && words.all { w -> tLower.contains(w) })
+                        }
+                        .map { item ->
+                            val qualityBonus = when (computeQualityTier(item)) {
+                                2 -> 800.0
+                                0 -> -800.0
+                                else -> 0.0
+                            }
+                            val rel = computeSearchRelevance(
+                                title = item.title,
+                                identifier = item.archiveId,
+                                description = "",
+                                rawQuery = trimmed,
+                                isFromSupabase = true,
+                                baseQualityScore = item.popularityScore.coerceAtMost(3000.0) + qualityBonus
+                            )
+                            RatedMovie(
+                                movie = item.toArchiveMovie(),
+                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                relevanceScore = rel
+                            )
+                        }
+                }
+
+                val archiveMatches = if (sbMatches.size < 16 && trimmed.length >= 3) {
+                    val safePhrase = trimmed.replace("\"", "").trim()
+                    val exclusions = "-subject:trailer -subject:teaser -subject:promo -subject:commercial -subject:gameplay -collection:movie_trailers -collection:trailers"
+                    val archiveQuery = if (words.size > 1) {
+                        "mediatype:movies AND title:\"$safePhrase\" AND $exclusions"
+                    } else {
+                        "mediatype:movies AND title:$safePhrase* AND $exclusions"
+                    }
+                    fetchFromArchiveFallback(
+                        query = archiveQuery,
+                        rows = 50,
+                        page = 1,
+                        excludeAdult = !isAdultCategoryUnlocked,
+                        searchQueryHint = trimmed,
+                        enforceFullLength = true
+                    )
+                } else {
+                    emptyList()
+                }
+
+                _globalSearchResults.value = (sbMatches + archiveMatches)
+                    .sortedByDescending { it.relevanceScore }
+                    .distinctBy { it.movie.identifier }
+                    .distinctBy { yearParenRegex.replace(it.movie.title.lowercase(), "").trim() }
+                    .take(40)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isSearchingGlobal.value = false
+            }
+        }
+    }
+
+    fun openGenre(genre: GenreOption) {
+        _selectedGenre.value = genre
+        if (genre.isAdultCategory) {
+            isAdultCategoryUnlocked = true
+        }
+        savedGenreScrollIndex = 0
+        savedGenreScrollOffset = 0
+        _lastFocusedMovieId.value = null
+        cachedGenreKey = null
+        cachedGenreFullRated = emptyList()
+        _genreMovies.value = emptyList()
+        loadGenrePage(1)
+    }
+
+    fun loadGenrePage(page: Int) {
+        val genre = _selectedGenre.value ?: return
+        if (page < 1) return
+
+        genreJob?.cancel()
+        genreJob = viewModelScope.launch {
+            _currentGenrePage.value = page
+
+            try {
+                if (genre.isAuthorCollection) {
+                    val sbAuthors = SupabaseRepository.getAuthors()
+                    val list = if (sbAuthors.isNotEmpty()) {
+                        sbAuthors.map { RatedMovie(ArchiveMovie("AUTHOR|${it.name}", it.name), "", 0.0) }
+                    } else {
+                        exactAuthorOrder.map { RatedMovie(ArchiveMovie("AUTHOR|$it", it), "", 0.0) }
+                    }
+                    _genreMovies.value = list
+                    _totalGenreMoviesCount.value = list.size
+                    _totalGenrePages.value = 1
+                    _isGenreLoading.value = false
+                    return@launch
+                }
+
+                if (genre.isAdultCategory) {
+                    if (_genreMovies.value.isEmpty()) {
+                        _isGenreLoading.value = true
+                    }
+                    val sbAdultRated = withContext(Dispatchers.Default) {
+                        getOrBuildCatalogSnapshot().adultMovies
+                            .sortedWith(
+                                compareByDescending<SupabaseCatalogItem> { it.rating }
+                                    .thenByDescending { it.popularityScore }
+                            )
+                            .map { item ->
+                                RatedMovie(
+                                    movie = item.toArchiveMovie(),
+                                    rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                    relevanceScore = item.popularityScore + 2000.0
+                                )
+                            }
+                    }
+
+                    val archiveAdult = fetchFromArchiveFallback(
+                        query = genre.query,
+                        rows = 80,
+                        page = page,
+                        excludeAdult = false,
+                        isAdultCategory = true
+                    )
+
+                    val combinedAdult = (if (page == 1) sbAdultRated + archiveAdult else archiveAdult)
+                        .distinctBy { it.movie.identifier }
+                        .distinctBy { yearParenRegex.replace(it.movie.title.lowercase(), "").trim() }
+
+                    _genreMovies.value = combinedAdult.take(pageSize)
+                    _totalGenreMoviesCount.value = combinedAdult.size
+                    _totalGenrePages.value = if (archiveAdult.size >= pageSize) page + 1 else page
+
+                    if (combinedAdult.isNotEmpty()) {
+                        unlockedAdultMovies = combinedAdult.map { it.movie }.take(20)
+                        val currentWithoutAdult = _movieCategories.value.filterNot { it.first.isAdultCategory }
+                        _movieCategories.value = currentWithoutAdult + (genre to unlockedAdultMovies)
+                    }
+                    return@launch
+                }
+
+                val targetKey = "${genre.title}_${genre.isSeriesCategory}_${genre.isAnimationCategory}_${genre.isConcertCategory}"
+                val allRated = if (cachedGenreKey == targetKey && cachedGenreFullRated.isNotEmpty()) {
+                    cachedGenreFullRated
+                } else {
+                    if (_genreMovies.value.isEmpty()) {
+                        _isGenreLoading.value = true
+                    }
+                    withContext(Dispatchers.Default) {
+                        val matches = findSupabaseItemsForGenre(genre)
+                        val mapped = matches.map { item ->
+                            RatedMovie(
+                                movie = item.toArchiveMovie(),
+                                rating = if (item.rating > 0.0) String.format("%.1f", item.rating) else "",
+                                relevanceScore = item.popularityScore
+                            )
+                        }
+                        if (mapped.isNotEmpty()) {
+                            cachedGenreKey = targetKey
+                            cachedGenreFullRated = mapped
+                        }
+                        mapped
+                    }
+                }
+
+                if (allRated.isNotEmpty()) {
+                    val isTop10 = genre.title.startsWith("Top 10")
+                    if (isTop10) {
+                        _genreMovies.value = allRated.take(10)
+                        _totalGenreMoviesCount.value = 10
+                        _totalGenrePages.value = 1
+                    } else {
+                        val total = allRated.size
+                        val pages = ceil(total.toDouble() / pageSize.toDouble()).toInt().coerceAtLeast(1)
+                        val safePage = page.coerceIn(1, pages)
+                        val fromIdx = ((safePage - 1) * pageSize).coerceAtMost(total)
+                        val toIdx = (fromIdx + pageSize).coerceAtMost(total)
+
+                        _currentGenrePage.value = safePage
+                        _genreMovies.value = allRated.subList(fromIdx, toIdx)
+                        _totalGenreMoviesCount.value = total
+                        _totalGenrePages.value = pages
+                    }
+                } else {
+                    _isGenreLoading.value = true
+                    val results = fetchFromArchiveFallback(
+                        query = genre.query,
+                        rows = 80,
+                        page = page,
+                        excludeAdult = true,
+                        isAdultCategory = false
+                    )
+                    _genreMovies.value = results.take(pageSize)
+                    _totalGenreMoviesCount.value = results.size
+                    _totalGenrePages.value = if (results.size >= pageSize) page + 1 else page
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                _isGenreLoading.value = false
+            }
+        }
+    }
+
+    private fun findSupabaseItemsForGenre(genre: GenreOption): List<SupabaseCatalogItem> {
+        val snap = getOrBuildCatalogSnapshot()
+
+        if (genre.isAnimationCategory) {
+            val animMovies = snap.animatedMoviesAndShorts
+            val shortCartoons = animMovies.filter { item ->
+                item.genres.any { g ->
+                    g.equals("Klasični crtići", ignoreCase = true) ||
+                        g.equals("Disney kratki crtići", ignoreCase = true)
+                }
+            }
+            val featureAnim = animMovies.filter { item ->
+                item.genres.none { g ->
+                    g.equals("Klasični crtići", ignoreCase = true) ||
+                        g.equals("Disney kratki crtići", ignoreCase = true)
+                }
+            }
+            val animSeries = snap.animatedSeries
+
+            return when (genre.title) {
+                "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
+                "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Disney kratki crtići" -> shortCartoons.filter { item ->
+                    item.genres.any { g -> g.equals("Disney kratki crtići", ignoreCase = true) } || isDisneyOrPixarItem(item)
+                }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Animirani filmovi" -> featureAnim.filter { !isDisneyOrPixarItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Klasični crtići" -> shortCartoons.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Ex-Yu crtići" -> (animMovies + animSeries).filter { isExYuItem(it) }.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                "Animirane serije" -> animSeries.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+                else -> animMovies.sortedWith(
+                    compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+                )
+            }
+        }
+
+        val typedItems = when {
+            genre.isConcertCategory -> snap.concerts
+            genre.isSeriesCategory -> snap.liveActionSeries
+            else -> snap.liveActionMovies
+        }
+
+        return when {
+            genre.title.startsWith("Top 10") -> typedItems.sortedByDescending { it.popularityScore }
+            genre.title == "Klasici i Najgledanije" -> typedItems.sortedWith(
+                compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+            )
+            genre.title == "Ex-Yu klasici" || genre.title == "Ex-Yu serije" -> typedItems.filter { isExYuItem(it) }.sortedWith(
+                compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
+            )
+            else -> typedItems.filter { item ->
+                item.genres.any { it.equals(genre.title, ignoreCase = true) }
+            }.sortedWith(
+                compareByDescending<SupabaseCatalogItem> { it.rating }
+                    .thenByDescending { it.popularityScore }
+            )
+        }
+    }
+
+    private fun flattenArchiveField(value: Any?): String {
+        return when (value) {
+            is String -> value.trim()
+            is List<*> -> value.joinToString(" ") { it?.toString()?.trim() ?: "" }.trim()
+            else -> value?.toString()?.trim() ?: ""
+        }
+    }
+
+    private suspend fun fetchFromArchiveFallback(
+        query: String,
+        rows: Int,
+        page: Int,
+        excludeAdult: Boolean,
+        isAdultCategory: Boolean = false,
+        searchQueryHint: String = "",
+        enforceFullLength: Boolean = false
+    ): List<RatedMovie> {
+        return try {
+            val docs = api.searchMovies(query = query, rows = rows, page = page).response?.docs ?: emptyList()
+            docs.mapNotNull { doc ->
+                val id = doc.identifier?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val title = when (val t = doc.title) {
+                    is String -> t.trim()
+                    is List<*> -> t.firstOrNull()?.toString()?.trim() ?: id
+                    else -> id
+                }
+                val desc = flattenArchiveField(doc.description)
+                val subjectStr = flattenArchiveField(doc.subject)
+                val collectionStr = flattenArchiveField(doc.collection)
+                val combined = "${id.lowercase()} ${title.lowercase()} ${desc.lowercase()} ${subjectStr.lowercase()} ${collectionStr.lowercase()}"
+
+                if (blockedSpecificAdultKeywords.any { combined.contains(it) }) return@mapNotNull null
+                if (isBlockedRegionalOrArabic(combined)) return@mapNotNull null
+                if (excludeAdult && (
+                        adultLongKeywords.any { combined.contains(it) } ||
+                            adultShortRegexes.any { it.containsMatchIn(combined) }
+                        )
+                ) return@mapNotNull null
+                if (isAdultCategory && title.lowercase().contains("adult swim")) return@mapNotNull null
+                if (!isAdultCategory && blockedSearchNoiseKeywords.any { combined.contains(it) }) return@mapNotNull null
+
+                val runtimeSeconds = parseRuntimeSeconds(doc.runtime)
+                val itemSizeBytes = parseItemSizeBytes(doc.itemSize)
+
+                if (isAdultCategory && runtimeSeconds in 1..600) return@mapNotNull null
+
+                if (enforceFullLength) {
+                    val looksLikeSeries = seriesIndicatorRegex.containsMatchIn(combined)
+                    val minSeconds = if (looksLikeSeries) 18 * 60 else 50 * 60
+
+                    if (runtimeSeconds >= 0) {
+                        if (runtimeSeconds < minSeconds) return@mapNotNull null
+                    } else {
+                        val minSizeBytes = if (looksLikeSeries) 90_000_000L else 250_000_000L
+                        if (itemSizeBytes in 1L until minSizeBytes) return@mapNotNull null
+                    }
+                }
+
+                val ratingVal = when (val r = doc.avgRating) {
+                    is Number -> r.toDouble()
+                    is String -> r.toDoubleOrNull() ?: 0.0
+                    else -> 0.0
+                }
+                val ratingStr = if (ratingVal > 0.0) String.format("%.1f", ratingVal) else ""
+
+                val score = if (searchQueryHint.isNotBlank()) {
+                    computeSearchRelevance(
+                        title = title,
+                        identifier = id,
+                        description = desc,
+                        rawQuery = searchQueryHint,
+                        isFromSupabase = false,
+                        baseQualityScore = ratingVal * 100.0
+                    )
+                } else {
+                    ratingVal * 100.0
+                }
+
+                RatedMovie(
+                    movie = ArchiveMovie(identifier = id, title = title),
+                    rating = ratingStr,
+                    relevanceScore = score
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parseRuntimeSeconds(runtimeValue: Any?): Int {
+        val raw = when (runtimeValue) {
+            is String -> runtimeValue.trim()
+            is List<*> -> runtimeValue.firstOrNull()?.toString()?.trim() ?: ""
+            is Number -> runtimeValue.toString()
+            else -> ""
+        }
+        if (raw.isEmpty()) return -1
+        if (raw.contains(":")) {
+            val parts = raw.split(":").mapNotNull { it.trim().toDoubleOrNull()?.toInt() }
+            return when (parts.size) {
+                3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+                2 -> parts[0] * 60 + parts[1]
+                else -> -1
+            }
+        }
+        val numeric = numericCleanRegex.replace(raw, "").toDoubleOrNull() ?: return -1
+        return if (numeric <= 300.0) (numeric * 60.0).toInt() else numeric.toInt()
+    }
+
+    private fun parseItemSizeBytes(sizeValue: Any?): Long {
+        return when (sizeValue) {
+            is Number -> sizeValue.toLong()
+            is String -> sizeValue.trim().toLongOrNull() ?: 0L
+            is List<*> -> sizeValue.firstOrNull()?.toString()?.trim()?.toLongOrNull() ?: 0L
+            else -> 0L
+        }
+    }
+
+    private fun SupabaseCatalogItem.toArchiveMovie(): ArchiveMovie {
+        return ArchiveMovie(
+            identifier = archiveId,
+            title = title,
+            year = if (releaseYear > 0) releaseYear.toString() else null,
+            description = descriptionHr.takeIf { it.isNotBlank() }
+        )
+    }
+}
