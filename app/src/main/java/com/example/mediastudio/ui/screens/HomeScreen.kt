@@ -857,13 +857,13 @@ private fun HeroButton(
 
     val bgColor = if (isFocused) Color.White else if (isPrimary) Color.White else Color(0xFF2A2A2A).copy(alpha = 0.8f)
     val contentColor = if (isFocused) Color.Black else if (isPrimary) Color.Black else Color.White
-    val borderColor = if (isFocused) Color.Red else Color.Transparent
+    val borderColor = if (isFocused) Color(0xFFE50914).copy(alpha = 0.9f) else Color.Transparent
 
     Row(
         modifier = modifier
             .height(36.dp)
             .background(color = bgColor, shape = RoundedCornerShape(18.dp))
-            .border(width = if (isFocused) 2.5.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(18.dp))
+            .border(width = if (isFocused) 1.8.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(18.dp))
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -904,8 +904,8 @@ private fun DialogFocusableButton(
                 shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.DarkGray,
+                width = if (isFocused) 1.8.dp else 0.8.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.25f),
                 shape = RoundedCornerShape(7.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -938,8 +938,8 @@ private fun HomeTvHighlightIconButton(
                 shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
+                width = if (isFocused) 1.8.dp else 0.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
@@ -968,8 +968,8 @@ private fun DrawerFocusableItem(
                 shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 0.dp,
-                color = if (isFocused) Color.White else Color.Transparent,
+                width = if (isFocused) 1.8.dp else 0.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.Transparent,
                 shape = RoundedCornerShape(7.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -1000,8 +1000,8 @@ private fun SearchTriggerBar(
                 shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.DarkGray,
+                width = if (isFocused) 1.8.dp else 0.8.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.22f),
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -1042,8 +1042,8 @@ private fun TabButton(
                 shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
-                color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
+                width = if (isFocused) 1.8.dp else 0.8.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else if (isSelected) Color.Red else Color.White.copy(alpha = 0.20f),
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -1108,8 +1108,8 @@ fun MovieCategoryRow(
                     shape = RoundedCornerShape(7.dp)
                 )
                 .border(
-                    width = if (isHeaderFocused) 2.dp else 0.dp,
-                    color = if (isHeaderFocused) Color.White else Color.Transparent,
+                    width = if (isHeaderFocused) 1.8.dp else 0.dp,
+                    color = if (isHeaderFocused) Color.White.copy(alpha = 0.88f) else Color.Transparent,
                     shape = RoundedCornerShape(7.dp)
                 )
                 .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
@@ -1198,9 +1198,23 @@ fun NetflixTop10Card(
     val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scaleVal = if (isFocused) 1.05f else 1f
-    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 2.5.dp else 1.dp
+    val scaleVal = if (isFocused) 1.035f else 1f
+    val borderWidth = if (isFocused) 1.8.dp else 0.8.dp
+    val borderBrush = if (isFocused) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.92f),
+                Color.White.copy(alpha = 0.50f)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.22f),
+                Color.White.copy(alpha = 0.10f)
+            )
+        )
+    }
     val internalFocusRequester = remember { FocusRequester() }
     val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
@@ -1255,8 +1269,9 @@ fun NetflixTop10Card(
                     .width(96.dp)
                     .height(142.dp)
                     .align(Alignment.CenterEnd)
-                    .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
-                shape = RoundedCornerShape(9.dp)
+                    .border(borderWidth, borderBrush, RoundedCornerShape(9.dp)),
+                shape = RoundedCornerShape(9.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isFocused) 8.dp else 0.dp)
             ) {
                 val activeUrl = posterUrl.ifBlank { fallbackUrl }
                 val imageRequest = remember(activeUrl) {
@@ -1362,9 +1377,23 @@ fun MovieCard(
     val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scaleVal = if (isFocused) 1.05f else 1f
-    val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 2.5.dp else 1.dp
+    val scaleVal = if (isFocused) 1.035f else 1f
+    val borderWidth = if (isFocused) 1.8.dp else 0.8.dp
+    val borderBrush = if (isFocused) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.92f),
+                Color.White.copy(alpha = 0.50f)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.22f),
+                Color.White.copy(alpha = 0.10f)
+            )
+        )
+    }
     val internalFocusRequester = remember { FocusRequester() }
     val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
@@ -1437,8 +1466,9 @@ fun MovieCard(
             modifier = Modifier
                 .width(100.dp)
                 .height(146.dp)
-                .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
+                .border(borderWidth, borderBrush, RoundedCornerShape(9.dp)),
             shape = RoundedCornerShape(9.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = if (isFocused) 8.dp else 0.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
         ) {
             if (posterUrl.isNotEmpty()) {
