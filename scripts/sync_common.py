@@ -63,7 +63,8 @@ BLOCKED_REGIONAL_AND_ARABIC_KEYWORDS = [
     "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
     "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh",
     "hindi dubbed", "dual audio hindi", "urdu dubbed",
-    "indonesian", "malay", "tagalog", "bahasa", "sinetron"
+    "indonesian", "indonesia", "malay", "malaysia", "tagalog", "bahasa", "sinetron",
+    "dengan", "cinta", "jakarta", "yogyakarta", "bandung", "surabaya"
 ]
 
 ARABIC_OR_INDIC_SCRIPT_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u0900-\u0D7F]")
