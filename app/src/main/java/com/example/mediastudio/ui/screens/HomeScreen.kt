@@ -130,7 +130,8 @@ fun HomeScreen(
     var isAnyElementFocused by remember { mutableStateOf(false) }
 
     val currentHeroMovie = heroMovies.getOrNull(activeHeroIndex)
-    var currentHeroPosterUrl by remember { mutableStateOf("") }
+    var currentHeroImageUrl by remember { mutableStateOf("") }
+    var isHeroImagePortraitPoster by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentHeroMovie) {
         currentHeroMovie?.let { (movie, isSeries) ->
@@ -138,11 +139,17 @@ fun HomeScreen(
             val sbItem = SupabaseRepository.getCatalogItem(movie.identifier)
             val sbBackdrop = sbItem?.backdropUrl.orEmpty()
             val sbPoster = sbItem?.posterUrl.orEmpty()
-            currentHeroPosterUrl = sbBackdrop.ifBlank {
-                sbPoster.ifBlank {
-                    PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
-                        .ifBlank { "https://archive.org/services/img/$firstId" }
-                }
+
+            if (sbBackdrop.isNotBlank()) {
+                currentHeroImageUrl = sbBackdrop
+                isHeroImagePortraitPoster = false
+            } else if (sbPoster.isNotBlank()) {
+                currentHeroImageUrl = sbPoster
+                isHeroImagePortraitPoster = true
+            } else {
+                val fetched = PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                currentHeroImageUrl = fetched.ifBlank { "https://archive.org/services/img/$firstId" }
+                isHeroImagePortraitPoster = true
             }
         }
     }
@@ -629,19 +636,26 @@ fun HomeScreen(
                                     .height(156.dp)
                                     .background(Color(0xFF0A0A0A))
                             ) {
-                                // Naglašeni sadržaj prikazan samo u desnom dijelu hero ekrana uz fade-to-black prijelaz prema lijevo
-                                if (currentHeroPosterUrl.isNotEmpty()) {
+                                if (currentHeroImageUrl.isNotEmpty()) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxHeight()
-                                            .fillMaxWidth(0.58f)
+                                            .then(
+                                                if (isHeroImagePortraitPoster) {
+                                                    Modifier
+                                                        .padding(end = 28.dp, top = 4.dp, bottom = 4.dp)
+                                                        .aspectRatio(0.68f)
+                                                } else {
+                                                    Modifier.fillMaxWidth(0.46f)
+                                                }
+                                            )
                                             .align(Alignment.CenterEnd)
                                     ) {
-                                        val heroBgRequest = remember(currentHeroPosterUrl) {
+                                        val heroBgRequest = remember(currentHeroImageUrl) {
                                             ImageRequest.Builder(context)
-                                                .data(currentHeroPosterUrl)
+                                                .data(currentHeroImageUrl)
                                                 .size(480, 270)
-                                                .scale(Scale.FILL)
+                                                .scale(Scale.FIT)
                                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                                 .allowHardware(true)
                                                 .build()
@@ -649,36 +663,36 @@ fun HomeScreen(
                                         Image(
                                             painter = rememberAsyncImagePainter(heroBgRequest),
                                             contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            alignment = Alignment.TopCenter,
+                                            contentScale = if (isHeroImagePortraitPoster) ContentScale.Fit else ContentScale.Crop,
+                                            alignment = Alignment.Center,
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .alpha(0.78f)
+                                                .alpha(0.88f)
                                         )
 
-                                        // Horizontalni fade-to-black prijelaz od sredine ekrana prema lijevo
+                                        // Horizontalni fade-to-black prijelaz na lijevom rubu slike
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .background(
                                                     Brush.horizontalGradient(
                                                         0.0f to Color(0xFF0A0A0A),
-                                                        0.38f to Color(0xFF0A0A0A).copy(alpha = 0.72f),
-                                                        0.75f to Color(0xFF0A0A0A).copy(alpha = 0.18f),
+                                                        0.28f to Color(0xFF0A0A0A).copy(alpha = 0.55f),
+                                                        0.55f to Color.Transparent,
                                                         1.0f to Color.Transparent
                                                     )
                                                 )
                                         )
 
-                                        // Blago stapanje donjeg i gornjeg ruba s crnom pozadinom
+                                        // Blago stapanje donjeg ruba s pozadinom
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
                                                 .background(
                                                     Brush.verticalGradient(
-                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.45f),
-                                                        0.25f to Color.Transparent,
-                                                        0.78f to Color.Transparent,
+                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.25f),
+                                                        0.20f to Color.Transparent,
+                                                        0.82f to Color.Transparent,
                                                         1.0f to Color(0xFF0A0A0A)
                                                     )
                                                 )
@@ -701,7 +715,7 @@ fun HomeScreen(
                                             maxLines = 1,
                                             lineHeight = 24.sp,
                                             overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.fillMaxWidth(0.56f)
+                                            modifier = Modifier.fillMaxWidth(0.54f)
                                         )
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
