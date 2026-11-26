@@ -34,7 +34,8 @@ import com.example.mediastudio.data.update.AppUpdateManager
 @Composable
 fun SettingsScreen(
     onBackClick: () -> Unit,
-    onUpdateFound: (AppReleaseInfo) -> Unit
+    onUpdateFound: (AppReleaseInfo) -> Unit,
+    on18PlusChanged: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -59,7 +60,8 @@ fun SettingsScreen(
                     Text(
                         text = "Postavke",
                         color = Color.White,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
                     )
                 },
                 navigationIcon = {
@@ -67,21 +69,26 @@ fun SettingsScreen(
                     val isBackFocused by backInteraction.collectIsFocusedAsState()
                     Box(
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(36.dp)
                             .focusProperties { left = FocusRequester.Cancel }
                             .background(
                                 color = if (isBackFocused) Color.Red else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(8.dp)
                             )
                             .border(
-                                width = if (isBackFocused) 2.5.dp else 0.dp,
-                                color = if (isBackFocused) Color.White else Color.Transparent,
-                                shape = RoundedCornerShape(10.dp)
+                                width = if (isBackFocused) 1.8.dp else 0.dp,
+                                color = if (isBackFocused) Color.White.copy(alpha = 0.88f) else Color.Transparent,
+                                shape = RoundedCornerShape(8.dp)
                             )
                             .clickable(interactionSource = backInteraction, indication = null) { onBackClick() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = "Povratak",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0A0A0A))
@@ -94,10 +101,9 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 18+ kvačica vidljivosti
             val adultInteraction = remember { MutableInteractionSource() }
             val isAdultFocused by adultInteraction.collectIsFocusedAsState()
 
@@ -107,19 +113,20 @@ fun SettingsScreen(
                     .focusRequester(adultFocusRequester)
                     .background(
                         color = if (isAdultFocused) Color(0xFF262626) else Color(0xFF161616),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp)
                     )
                     .border(
-                        width = if (isAdultFocused) 3.dp else 1.dp,
-                        color = if (isAdultFocused) Color.White else Color(0xFF2D2D2D),
-                        shape = RoundedCornerShape(12.dp)
+                        width = if (isAdultFocused) 1.8.dp else 0.8.dp,
+                        color = if (isAdultFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.22f),
+                        shape = RoundedCornerShape(10.dp)
                     )
                     .clickable(interactionSource = adultInteraction, indication = null) {
                         val nextState = !show18Plus
                         show18Plus = nextState
                         AppUpdateManager.set18PlusEnabled(context, nextState)
+                        on18PlusChanged(nextState)
                     }
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 13.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -127,10 +134,10 @@ fun SettingsScreen(
                     Text(
                         text = "18+ sadržaj (vidljivost)",
                         color = Color.White,
-                        fontSize = 17.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = if (show18Plus) {
                             "Omogućen prikaz 18+ kategorija i sadržaja."
@@ -138,7 +145,7 @@ fun SettingsScreen(
                             "Sakrivene 18+ kategorije i sadržaji."
                         },
                         color = Color.Gray,
-                        fontSize = 14.sp
+                        fontSize = 12.sp
                     )
                 }
 
@@ -146,7 +153,7 @@ fun SettingsScreen(
                     imageVector = if (show18Plus) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
                     contentDescription = null,
                     tint = if (show18Plus) Color(0xFFFF5252) else Color.LightGray,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(26.dp)
                 )
             }
         }
