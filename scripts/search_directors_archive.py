@@ -28,25 +28,30 @@ TARGET_SHEET_NAME = "traži"
 USE_LOCAL_TABLE_IF_EXISTS = False
 
 NEW_DIRECTORS = [
-    {"#": 1, "Redatelj": "Tim Burton", "Država": "SAD", "Ključni filmovi (od 1970.)": "Edward Škaroruki, Batman, Bubimir"},
-    {"#": 2, "Redatelj": "Wes Anderson", "Država": "SAD", "Ključni filmovi (od 1970.)": "Hotel Grand Budapest, Obitelj čudaka, Kraljevstvo izlazećeg mjeseca"},
-    {"#": 3, "Redatelj": "Spike Lee", "Država": "SAD", "Ključni filmovi (od 1970.)": "Učini pravu stvar, Malcolm X, Crni član Ku Klux Klana"},
-    {"#": 4, "Redatelj": "David Fincher", "Država": "SAD", "Ključni filmovi (od 1970.)": "Klub boraca, Sedam, Društvena mreža"},
-    {"#": 5, "Redatelj": "Guillermo del Toro", "Država": "Meksiko", "Ključni filmovi (od 1970.)": "Panov labirint, Oblik vode, Hellboy"},
-    {"#": 6, "Redatelj": "Jerry Bruckheimer", "Država": "SAD", "Ključni filmovi (od 1970.)": "Top Gun, Pirati s Kariba, Policajac s Beverly Hillsa"},
-    {"#": 7, "Redatelj": "Peter Jackson", "Država": "Novi Zeland", "Ključni filmovi (od 1970.)": "Gospodar prstenova, King Kong, Nebeska stvorenja"},
-    {"#": 8, "Redatelj": "Robert Zemeckis", "Država": "SAD", "Ključni filmovi (od 1970.)": "Povratak u budućnost, Forrest Gump, Brodolom života"},
-    {"#": 9, "Redatelj": "Russo braća (Anthony i Joe Russo)", "Država": "SAD", "Ključni filmovi (od 1970.)": "Osvetnici: Završnica, Osvetnici: Rat beskonačnosti, Kapetan Amerika: Ratnik zime"},
+    {
+        "#": 1,
+        "Redatelj": "Lana i Lilly Wachowski",
+        "Država": "SAD",
+        "Ključni filmovi (od 1970.)": "Matrix, Matrix Reloaded, Cloud Atlas, V za osvetu"
+    },
+    {
+        "#": 2,
+        "Redatelj": "George Lucas",
+        "Država": "SAD",
+        "Ključni filmovi (od 1970.)": "Ratovi zvijezda: Nova nada, Američki grafiti, THX 1138"
+    },
 ]
 
 DIRECTOR_ALIASES = {
+    "lana i lilly wachowski": ["Lana Wachowski", "Lilly Wachowski"],
+    "sestre wachowski": ["Lana Wachowski", "Lilly Wachowski"],
+    "wachowski": ["Lana Wachowski", "Lilly Wachowski"],
     "russo braća (anthony i joe russo)": ["Anthony Russo", "Joe Russo"],
     "russo braca (anthony i joe russo)": ["Anthony Russo", "Joe Russo"],
     "braća russo": ["Anthony Russo", "Joe Russo"],
     "braca russo": ["Anthony Russo", "Joe Russo"],
 }
 
-# Autori koji su primarno producenti (na TMDB-u su njihovi filmovi pod job == "Producer")
 PRODUCER_ONLY_AUTHORS = {
     "jerry bruckheimer",
 }
