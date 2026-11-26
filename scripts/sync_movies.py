@@ -50,12 +50,10 @@ _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 if hasattr(sc, "session"):
     sc.session = _HTTP_SESSION
 
-# Ukupni ciljani okvir: ~35 min (daleko ispod 4h limita)
 MAX_MOVIES_SYNC_SECONDS = 38 * 60
-PHASE1_AUDIT_MAX_SECONDS = 5 * 60
-PHASE2_DIRECT_MOVIES_MAX_SECONDS = 18 * 60
+PHASE1_AUDIT_MAX_SECONDS = 6 * 60
+PHASE2_DIRECT_MOVIES_MAX_SECONDS = 17 * 60
 PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 7 * 60
-# Preostali budžet (~8 min) ide u korak 4/4 (ugniježđeni multi-file paketi)
 
 BATCH_SIZE_CANDIDATES = 50
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 90
@@ -66,7 +64,6 @@ MAX_DYNAMIC_BUNDLES_PER_RUN = 25
 MAX_VIDEOS_PER_BUNDLE = 75
 TMDB_SEED_SAMPLE_PER_RUN = 90
 
-# Skupni međuspremnik za odbačene zapise (šalje 200 odjednom umjesto 1 po 1 HTTP poziva)
 _REJECTED_BATCH_BUFFER = []
 _REJECTED_BUFFER_SIZE = 200
 
@@ -113,44 +110,41 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
         flush_rejected_buffer(force=False)
 
 
-# ==============================================================================
-# ODOBRENE FILMSKE GRANE IZ archive_movies_layers.md
-# ==============================================================================
 APPROVED_MOVIE_BRANCHES = [
-    ("opensource_movies", 3),          # Community Video
-    ("moviesandfilms", 3),             # Movies
-    ("feature_films", 3),              # Feature Films
-    ("vhsvault", 3),                   # The VHS Vault
-    ("dvdtray", 3),                    # The DVD Tray
-    ("dvdtray_inbox", 3),              # The DVD Tray Inbox
-    ("animationandcartoons", 3),       # Animation & Cartoons
-    ("classic_cartoons", 2),           # Film Chest Vintage Cartoons
-    ("vintage_cartoons", 2),           # Vintage Cartoons
-    ("saturdaymorningcartoons", 2),    # Saturday Morning Cartoons
-    ("laserdiscs", 2),                 # Laserdisc Archive
-    ("televisionmovies", 2),           # Television Movies
-    ("foreignlanguagevideos", 2),      # Non-English Videos
-    ("popcornproject", 2),             # Popcorn Project
-    ("afmh-project", 2),               # Adult Film & Media History Project
-    ("subtitled_movies", 2),           # Subtitled Movies
-    ("KINOfilm", 2),                   # Kino French Films
-    ("collectie_filmcollectief", 2),   # Collectie Filmcollectief
-    ("cinemocracy", 2),                # Cinemocracy
-    ("thecosmonaut", 2),               # The Cosmonaut / Riot Cinema Collective
-    ("globiansfilmfestival", 2),       # Globians Film Festival
-    ("cliffhangers", 2),               # Cliffhanger Serials
-    ("misfits-of-film-3am-films", 2),  # Misfits of Film, 3am Films Collection
-    ("SciFi_Films", 2),                # Sci-Fi Films
-    ("film_noir", 2),                  # Film Noir
-    ("comedy_films", 2),               # Comedy Films
-    ("westerns", 2),                   # Westerns
-    ("war_films", 2),                  # War Films
-    ("horror_films", 2),               # Horror Films
-    ("romance_films", 2),              # Romance Films
-    ("thriller_films", 2),             # Thriller Films
-    ("action_adventure_films", 2),     # Action & Adventure Films
-    ("drama_films", 2),                # Drama Films
-    ("mystery_films", 2),              # Mystery Films
+    ("opensource_movies", 3),
+    ("moviesandfilms", 3),
+    ("feature_films", 3),
+    ("vhsvault", 3),
+    ("dvdtray", 3),
+    ("dvdtray_inbox", 3),
+    ("animationandcartoons", 3),
+    ("classic_cartoons", 2),
+    ("vintage_cartoons", 2),
+    ("saturdaymorningcartoons", 2),
+    ("laserdiscs", 2),
+    ("televisionmovies", 2),
+    ("foreignlanguagevideos", 2),
+    ("popcornproject", 2),
+    ("afmh-project", 2),
+    ("subtitled_movies", 2),
+    ("KINOfilm", 2),
+    ("collectie_filmcollectief", 2),
+    ("cinemocracy", 2),
+    ("thecosmonaut", 2),
+    ("globiansfilmfestival", 2),
+    ("cliffhangers", 2),
+    ("misfits-of-film-3am-films", 2),
+    ("SciFi_Films", 2),
+    ("film_noir", 2),
+    ("comedy_films", 2),
+    ("westerns", 2),
+    ("war_films", 2),
+    ("horror_films", 2),
+    ("romance_films", 2),
+    ("thriller_films", 2),
+    ("action_adventure_films", 2),
+    ("drama_films", 2),
+    ("mystery_films", 2),
     ("colorized-and-upscaled-movies", 2),
     ("popcornmaker", 3),
 ]
@@ -207,7 +201,16 @@ BAD_BUNDLE_PREFIXES = (
 BAD_TITLE_MARKER_RE = re.compile(
     r"(?i)(?:dts\s*blu-ray|music\s*demo\s*disc|demo\s*disc\s*\d+|screen\s*snapshots|"
     r"observational\s*series|persian\s*series|barney'?s?\s+|my\s*little\s*pony\s*live|"
-    r"bear\s*in\s*the\s*big\s*blue\s*house\s*live|asian\s*beauties|krotoplaxx|^untitled\b)"
+    r"bear\s*in\s*the\s*big\s*blue\s*house\s*live|asian\s*beauties|krotoplaxx|^untitled\b|"
+    r"mickey\s*mouse\s*club|hardy\s*boys|broncos\s*vs|seahawk)"
+)
+
+# Stroga detekcija serija (1x02, S01E01, Ep. 3) i sportskih prijenosa (20260404 ... vs ...)
+SERIES_EPISODE_MARKER_RE = re.compile(
+    r"(?i)(?:\b\d{1,2}x\d{2,3}\b|\bs\d{1,2}[\s._-]*e\d{1,3}\b|\bepisode[\s._-]*\d+\b|\bseason[\s._-]*\d+\b)"
+)
+SPORTS_OR_BROADCAST_DATE_RE = re.compile(
+    r"(?i)(?:^\s*20\d{6}\b|\bvs\.?\b|\bbroncos\b|\bseahawks?\b|\bnfl\b|\bnba\b|\bmlb\b|\bnhl\b|\bufc\b|\bwwe\b)"
 )
 
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
@@ -299,7 +302,7 @@ EX_YU_DETECTION_KEYWORDS = (
     "čarobnjakov šešir", "carobnjakov sesir", "surogat"
 )
 
-_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia", "xvid", "divx", "1cd", "2cd"}
+_STOP_WORDS = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "part", "ii", "iii", "iv", "i", "s", "full", "movie", "512kb", "1080p", "720p", "480p", "mp4", "mkv", "ia", "xvid", "divx", "1cd", "2cd", "unknown", "bluray", "bdrip", "webrip", "dvdrip"}
 _SHORT_NUM_TOKENS = {"8", "9", "12"}
 
 
@@ -325,14 +328,22 @@ def is_explicit_junk_item(ident, raw_title, extra_text=""):
     blob = f"{ident} {raw_title} {extra_text}"
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
+    if SERIES_EPISODE_MARKER_RE.search(blob) or SPORTS_OR_BROADCAST_DATE_RE.search(str(raw_title or "")) or SPORTS_OR_BROADCAST_DATE_RE.search(str(extra_text or "")):
+        return True
     return bool(EXPLICIT_JUNK_RE.search(blob))
 
 
-def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
+def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False, size_mb=0):
     t_mins = int(tmdb_mins or 0)
     a_mins = int(arch_mins or 0)
+    s_mb = float(size_mb or 0)
+
     if a_mins <= 0:
+        # Kad Archive.org ne prijavi trajanje, dugometražni film ne smije imati sitnu datoteku (npr. 2-min trailer od 231 MB)
+        if not is_short_allowed and t_mins >= 75 and 0 < s_mb < 350:
+            return True
         return False
+
     if t_mins >= 65:
         min_ok = int(t_mins * 0.72)
         max_ok = int(t_mins * 1.30)
@@ -342,10 +353,22 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False):
     return False
 
 
-def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0):
+def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_titles, rel_year=0, details=None):
     arch_title = str((arch_md or {}).get("title") or "")
     arch_creator = str((arch_md or {}).get("creator") or "")
-    arch_year = str((arch_md or {}).get("year") or (arch_md or {}).get("date") or "")
+    arch_desc = str((arch_md or {}).get("description") or "")
+    arch_year_blob = f"{(arch_md or {}).get('year') or ''} {(arch_md or {}).get('date') or ''} {arch_title} {chosen_filename or ''}"
+
+    # 1. Zaključavanje godine: ako datoteka ili metapodaci na Archive.org-u nose godinu (npr. 1985),
+    # TMDB film mora biti iz te godine (+/- 1) — sprječava spajanje 'The Protector (1985)' na 'Protector (2026)'
+    if rel_year > 0:
+        years_found = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", unquote(arch_year_blob))]
+        if years_found and not any(abs(y - rel_year) <= 1 for y in years_found):
+            return False
+
+    # 2. Provjera je li zapis zapravo serija s epizodama (npr. 1x02, S01E01)
+    if SERIES_EPISODE_MARKER_RE.search(f"{arch_title} {chosen_filename or ''}"):
+        return False
 
     expected_words = set()
     for t in expected_titles:
@@ -355,9 +378,9 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
     arch_meta_words = _tokenize_words(f"{arch_title} {ident}")
     arch_meta_prefixes = _word_prefixes(arch_meta_words)
     if expected_prefixes and arch_meta_prefixes and not (expected_prefixes & arch_meta_prefixes):
-        desc_words = _tokenize_words(f"{(arch_md or {}).get('description') or ''} {arch_creator}")
+        desc_words = _tokenize_words(f"{arch_desc} {arch_creator}")
         desc_prefixes = _word_prefixes(desc_words)
-        year_ok = (rel_year > 0 and str(rel_year) in arch_year)
+        year_ok = (rel_year > 0 and str(rel_year) in arch_year_blob)
         if not (year_ok and (expected_prefixes & desc_prefixes)):
             return False
 
@@ -371,6 +394,20 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
         if not expected_prefixes or not (expected_prefixes & arch_meta_prefixes):
             return False
         return True
+
+    # 3. Zabrana zamke jednorječnog podskupa (npr. TMDB='Mouse'/'Runner'/'Madden' vs Archive='The Mickey Mouse Club - Hardy Boys')
+    shortest_expected = min((_tokenize_words(t) for t in expected_titles if _tokenize_words(t)), key=len, default=set())
+    if len(shortest_expected) == 1 and len(stem_tokens) >= 4:
+        credit_blob = f"{arch_desc} {arch_creator}".lower()
+        credits_ok = False
+        if details:
+            for person in (details.get("directors") or []) + (details.get("cast") or [])[:4]:
+                surname = str(person).strip().split()[-1].lower() if str(person).strip() else ""
+                if len(surname) >= 4 and surname in credit_blob:
+                    credits_ok = True
+                    break
+        if not credits_ok:
+            return False
 
     ref_words = expected_words | _tokenize_words(f"{ident} {arch_title}")
     ref_prefixes = _word_prefixes(ref_words)
@@ -815,6 +852,24 @@ def sync_curated_movie_exceptions(
     seen_tmdb_ids.update(curated_tmdb_to_mark)
 
 
+def is_episodic_or_multi_movie_container(videos):
+    """Vraća True ako zapis sadrži epizode serije (1x02, S01E01) ili više različitih filmova (> 4 videa)."""
+    if not videos:
+        return False
+    ep_hits = 0
+    distinct_stems = set()
+    for v in videos:
+        fn = v.get("filename") or ""
+        if SERIES_EPISODE_MARKER_RE.search(fn):
+            ep_hits += 1
+        stem = re.sub(r"(?i)\.ia$", "", os.path.splitext(os.path.basename(fn))[0]).lower()
+        if stem:
+            distinct_stems.add(stem)
+    if ep_hits >= 2 or len(distinct_stems) > 4:
+        return True
+    return False
+
+
 def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, min_aspect_tier=0):
     if deadline_ts is not None and time.monotonic() > deadline_ts:
         return None
@@ -882,7 +937,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
             continue
 
         videos, arch_md = get_archive_item_details(ident, min_size_mb=min_mb, allow_mkv=True)
-        if not videos:
+        if not videos or is_episodic_or_multi_movie_container(videos):
             continue
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
@@ -898,10 +953,10 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_doc_title, best["filename"]):
             continue
 
-        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
+        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=best["size_mb"]):
             continue
 
-        if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_title_list, year):
+        if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_title_list, year, details=details):
             continue
 
         ok, _ = validate_movie_match(
@@ -976,8 +1031,23 @@ def audit_and_repair_existing_movies(
         is_author_promoted = ",tmdb-" in ident
         base_ident = ident.split(",tmdb-")[0].strip()
 
-        if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešno mapirani zapis iz paketa: {title} ({ident})")
+        if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title) or BAD_TITLE_MARKER_RE.search(stream_url):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešno mapirani zapis: {title} ({ident})")
+            return
+
+        # Provjera zaključa li se godina iz streama s godinom filma u bazi (npr. The Protector (1985) pod Protector (2026))
+        if rel_year > 0 and stream_url:
+            url_years = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", unquote(stream_url))]
+            if url_years and not any(abs(y - rel_year) <= 1 for y in url_years):
+                mark_row_invalid(
+                    row,
+                    tmdb_id,
+                    f"  ✕ Uklonjen zapis zbog pogrešne godine datoteke ({url_years[0]} vs {rel_year}): {title} ({ident})"
+                )
+                return
+
+        if SERIES_EPISODE_MARKER_RE.search(stream_url) or SPORTS_OR_BROADCAST_DATE_RE.search(unquote(os.path.basename(stream_url))):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena serija/sportski zapis iz filmova: {title} ({ident})")
             return
 
         is_cartoon_row = any(
@@ -1019,6 +1089,11 @@ def audit_and_repair_existing_movies(
 
         if is_mismatched_modern_dune(tmdb_id, base_ident, stream_url, title):
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
+            return
+
+        # Provjeri nedostupne / zaključane streamove (401/403/404 na Archive.org-u)
+        if stream_url and not verify_stream_url_playable(stream_url):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen nedostupan/zaključan video zapis: {title} ({ident})")
             return
 
         has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
@@ -1158,7 +1233,8 @@ def audit_and_repair_existing_movies(
                 existing_archive_ids,
                 tmdb_version_counts,
                 tmdb_best_tier,
-                all_movie_rows=all_movie_rows
+                all_movie_rows=all_movie_rows,
+                size_mb=new_file.get("size_mb", 0)
             ):
                 with state_lock:
                     hd_upgraded_count[0] += 1
@@ -1187,7 +1263,8 @@ def save_verified_movie_row(
     tmdb_version_counts,
     tmdb_best_tier,
     hint_genre=None,
-    all_movie_rows=None
+    all_movie_rows=None,
+    size_mb=0
 ):
     mid = int(details["tmdb_id"])
     if is_mismatched_modern_dune(mid, arch_id, stream_url, details["hr_title"]):
@@ -1195,7 +1272,7 @@ def save_verified_movie_row(
     if is_explicit_junk_item(arch_id, details["hr_title"], stream_url):
         return False
     is_doc = 99 in (details.get("genre_ids") or [])
-    if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
+    if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=size_mb):
         return False
 
     norm_t = normalize_for_exact_title_compare(details["hr_title"])
@@ -1306,7 +1383,6 @@ def mine_direct_movies_from_branches(
             tasks.append((base_q, "downloads desc", p, 120))
         tasks.append((base_q, "addeddate desc", 1, 120))
 
-    # Nasumično odaberi 3 desetljeća po pokretanju za svaku veliku granu (brzo i pokriva cijelu arhivu kroz cikluse)
     sampled_decades = random.sample(DECADE_RANGES, k=3)
     for flat_col in LARGE_FLAT_BRANCHES:
         for y_from, y_to in sampled_decades:
@@ -1483,7 +1559,7 @@ def mine_direct_movies_from_branches(
             is_doc = 99 in (details.get("genre_ids") or [])
             is_anim = 16 in (details.get("genre_ids") or [])
             videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
-            if not videos:
+            if not videos or is_episodic_or_multi_movie_container(videos):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_video_file")
                 return
@@ -1500,14 +1576,14 @@ def mine_direct_movies_from_branches(
                 inc_stat("junk_recorded")
                 return
 
-            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
+            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=best["size_mb"]):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
 
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
             expected_titles = [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates
-            if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year):
+            if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year, details=details):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("validation_rejected")
                 return
@@ -1541,7 +1617,8 @@ def mine_direct_movies_from_branches(
             if save_verified_movie_row(
                 ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
                 seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                tmdb_version_counts, tmdb_best_tier, all_movie_rows=all_movie_rows
+                tmdb_version_counts, tmdb_best_tier, all_movie_rows=all_movie_rows,
+                size_mb=best["size_mb"]
             ):
                 with state_lock:
                     batch_added[0] += 1
@@ -1713,13 +1790,13 @@ def sync_ex_yu_and_cult_movies(
 
         is_anim = 16 in (details.get("genre_ids") or [])
         videos, arch_md = get_archive_item_details(ident, min_size_mb=(70 if is_anim else 130), allow_mkv=True)
-        if not videos:
+        if not videos or is_episodic_or_multi_movie_container(videos):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
         best = pick_best_video_file(videos)
         arch_mins = best["duration_mins"]
 
-        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_anim):
+        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_anim, size_mb=best["size_mb"]):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
 
@@ -1746,7 +1823,8 @@ def sync_ex_yu_and_cult_movies(
         if save_verified_movie_row(
             ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
             seen_tmdb_ids, seen_title_years, existing_archive_ids,
-            tmdb_version_counts, tmdb_best_tier, hint_genre=hint, all_movie_rows=all_movie_rows
+            tmdb_version_counts, tmdb_best_tier, hint_genre=hint, all_movie_rows=all_movie_rows,
+            size_mb=best["size_mb"]
         ):
             with state_lock:
                 added_ex_yu[0] += 1
@@ -1758,7 +1836,6 @@ def sync_ex_yu_and_cult_movies(
         )
         flush_rejected_buffer(force=True)
 
-    # Uzorak od 90 naslova iz seed liste + 1 stranica TMDB discovera po pokretanju (traje ~90 sekundi umjesto 15 min)
     all_seeds = EX_YU_MOVIE_SEEDS + CULT_AND_ANIMATION_SEEDS
     sampled_seeds = random.sample(all_seeds, k=min(TMDB_SEED_SAMPLE_PER_RUN, len(all_seeds)))
     candidates = {}
@@ -1829,7 +1906,8 @@ def sync_ex_yu_and_cult_movies(
             if save_verified_movie_row(
                 best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
                 seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                tmdb_version_counts, tmdb_best_tier, hint_genre, all_movie_rows=all_movie_rows
+                tmdb_version_counts, tmdb_best_tier, hint_genre, all_movie_rows=all_movie_rows,
+                size_mb=best_file.get("size_mb", 0)
             ):
                 with state_lock:
                     added_tmdb[0] += 1
@@ -1925,7 +2003,6 @@ def sync_multi_file_movie_bundles(
                 record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
-        # Preskoči divovske dumpove (npr. 500–2000 datoteka) prije bilo kakve obrade
         if not is_pinned and len(videos) > MAX_VIDEOS_PER_BUNDLE * 2:
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
@@ -2060,7 +2137,7 @@ def sync_multi_file_movie_bundles(
             is_doc = 99 in (details.get("genre_ids") or [])
             if is_doc and explicit_mid <= 0:
                 return
-            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=False):
+            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=False, size_mb=v.get("size_mb", 0)):
                 return
 
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
@@ -2081,7 +2158,8 @@ def sync_multi_file_movie_bundles(
                 tmdb_version_counts,
                 tmdb_best_tier,
                 hint_genre=None,
-                all_movie_rows=all_movie_rows
+                all_movie_rows=all_movie_rows,
+                size_mb=v.get("size_mb", 0)
             ):
                 with state_lock:
                     bundle_added[0] += 1
@@ -2106,7 +2184,6 @@ def run_movies_sync():
     tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
 
-    # 1/4: Provjera baze, čišćenje uljeza i zamjena VHS ripova
     phase1_deadline = min(deadline_ts, time.monotonic() + PHASE1_AUDIT_MAX_SECONDS)
     audit_and_repair_existing_movies(
         all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
@@ -2117,7 +2194,6 @@ def run_movies_sync():
         tmdb_version_counts, tmdb_best_tier
     )
 
-    # Mapiranje dubljih podgrana unutar 36 odobrenih filmskih grana
     sub_layers = map_approved_movie_subtrees(deadline_ts)
     sl1, sl2 = sub_layers
     print(
@@ -2125,21 +2201,18 @@ def run_movies_sync():
         flush=True
     )
 
-    # 2/4: Odmah povuci očite pojedinačne filmove (kroz desetljeća, preuzimanja i najnovije objave)
     phase2_deadline = min(deadline_ts, time.monotonic() + PHASE2_DIRECT_MOVIES_MAX_SECONDS)
     mine_direct_movies_from_branches(
         sub_layers, existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, phase2_deadline, all_movie_rows=all_movie_rows
     )
 
-    # 3/4: Brzi uzorak Ex-Yu filmova, kultnih klasika i TMDB žanrova
     phase3_deadline = min(deadline_ts, time.monotonic() + PHASE3_CURATED_AND_EXYU_MAX_SECONDS)
     sync_ex_yu_and_cult_movies(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, phase3_deadline, all_movie_rows=all_movie_rows
     )
 
-    # 4/4: Na kraju, u preostalom vremenu, izvuci preostale filmove iz multi-file ISO/DVD paketa (<= 75 videa)
     sync_multi_file_movie_bundles(
         sub_layers, existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
