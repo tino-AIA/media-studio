@@ -357,7 +357,9 @@ fun DetailsScreen(
                 title = {
                     Text(
                         text = if (isAuthorMode || showCollectionList) "Kolekcija autora" else "Detalji",
-                        color = Color.White
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 },
                 navigationIcon = {
@@ -373,7 +375,12 @@ fun DetailsScreen(
                                 }
                             }
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = "Povratak",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0A0A0A).copy(alpha = 0.96f))
@@ -387,23 +394,23 @@ fun DetailsScreen(
                 .padding(paddingValues)
                 .clipToBounds()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 10.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = headerTitleWithYear,
                 color = Color.White,
-                fontSize = 26.sp,
+                fontSize = 21.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 14.dp)
+                    .padding(bottom = 10.dp)
             )
 
             if (isLoading) {
-                Spacer(modifier = Modifier.height(24.dp))
-                CircularProgressIndicator(color = Color.Red)
+                Spacer(modifier = Modifier.height(20.dp))
+                CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(36.dp))
             } else {
                 val sheet = detailSheet
                 val currentInfo = movieInfo
@@ -411,13 +418,13 @@ fun DetailsScreen(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     if (imageUrl.isNotEmpty()) {
                         val detailImageRequest = remember(imageUrl) {
                             ImageRequest.Builder(context)
                                 .data(imageUrl)
-                                .size(340, 490)
+                                .size(240, 350)
                                 .scale(Scale.FILL)
                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                 .allowHardware(true)
@@ -427,10 +434,10 @@ fun DetailsScreen(
                             painter = rememberAsyncImagePainter(detailImageRequest),
                             contentDescription = movie.title,
                             modifier = Modifier
-                                .width(175.dp)
-                                .height(255.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .border(2.dp, Color.Gray, RoundedCornerShape(14.dp)),
+                                .width(146.dp)
+                                .height(214.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .border(1.5.dp, Color.Gray, RoundedCornerShape(11.dp)),
                             contentScale = ContentScale.Crop,
                             alignment = if (isAuthorMode) Alignment.TopCenter else Alignment.Center
                         )
@@ -452,14 +459,14 @@ fun DetailsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 if (currentInfo != null && showCollectionList) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
-                            .height(50.dp)
-                            .padding(bottom = 20.dp)
+                            .height(42.dp)
+                            .padding(bottom = 14.dp)
                             .focusRequester(favButtonFocusRequester)
                             .focusProperties {
                                 left = FocusRequester.Cancel
@@ -470,12 +477,12 @@ fun DetailsScreen(
                             }
                             .background(
                                 color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(10.dp)
                             )
                             .border(
-                                width = if (isFavFocused) 3.5.dp else 1.dp,
+                                width = if (isFavFocused) 2.5.dp else 1.dp,
                                 color = if (isFavFocused) Color.White else Color.DarkGray,
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(10.dp)
                             )
                             .clickable(interactionSource = favInteractionSource, indication = null) {
                                 viewModel.toggleFavorite(movie)
@@ -487,12 +494,12 @@ fun DetailsScreen(
                                 imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                                 contentDescription = null,
                                 tint = if (isFavorite) Color.Red else Color.White,
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(20.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                fontSize = 14.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
@@ -552,7 +559,7 @@ fun DetailsScreen(
                         Box(
                             modifier = focusMod
                                 .fillMaxWidth()
-                                .padding(vertical = 6.dp)
+                                .padding(vertical = 4.dp)
                                 .focusProperties {
                                     left = FocusRequester.Cancel
                                     right = FocusRequester.Cancel
@@ -562,12 +569,12 @@ fun DetailsScreen(
                                 }
                                 .background(
                                     color = if (isEpFocused) Color(0xFF2E2E2E) else Color(0xFF1A1A1A),
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = RoundedCornerShape(8.dp)
                                 )
                                 .border(
-                                    width = if (isEpFocused) 3.dp else 1.dp,
+                                    width = if (isEpFocused) 2.5.dp else 1.dp,
                                     color = if (isEpFocused) Color.White else Color.DarkGray,
-                                    shape = RoundedCornerShape(10.dp)
+                                    shape = RoundedCornerShape(8.dp)
                                 )
                                 .clickable(interactionSource = epInteractionSource, indication = null) {
                                     lastSelectedAuthorItemUrl = directDownloadUrl
@@ -580,38 +587,43 @@ fun DetailsScreen(
                                         )
                                     }
                                 }
-                                .padding(16.dp)
+                                .padding(12.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = "${index + 1}.",
                                     color = Color.Red,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    modifier = Modifier.width(36.dp)
+                                    fontSize = 14.sp,
+                                    modifier = Modifier.width(30.dp)
                                 )
-                                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                                     Text(
                                         text = finalFormattedTitle,
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
+                                        fontSize = 14.sp
                                     )
                                 }
-                                Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Otvori detalje", tint = Color.White)
+                                Icon(
+                                    Icons.Default.KeyboardArrowRight,
+                                    contentDescription = "Otvori detalje",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
                 } else if (currentInfo != null || isDirectLinkMode) {
                     Row(
                         modifier = Modifier.fillMaxWidth(0.95f),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(44.dp)
                                 .focusRequester(playButtonFocusRequester)
                                 .focusProperties {
                                     left = FocusRequester.Cancel
@@ -621,12 +633,12 @@ fun DetailsScreen(
                                 }
                                 .background(
                                     color = if (isPlayFocused) Color(0xFFFF1E27) else Color(0xFFE50914),
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .border(
-                                    width = if (isPlayFocused) 3.5.dp else 1.dp,
+                                    width = if (isPlayFocused) 2.5.dp else 1.dp,
                                     color = if (isPlayFocused) Color.White else Color.Transparent,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = playInteractionSource, indication = null) {
                                     if (resolvedStreamUrl.isNotEmpty()) {
@@ -644,12 +656,12 @@ fun DetailsScreen(
                                     imageVector = Icons.Default.PlayArrow,
                                     contentDescription = null,
                                     tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "POKRENI",
-                                    fontSize = 16.sp,
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
@@ -659,7 +671,7 @@ fun DetailsScreen(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(54.dp)
+                                .height(44.dp)
                                 .focusRequester(favButtonFocusRequester)
                                 .focusProperties {
                                     right = FocusRequester.Cancel
@@ -669,12 +681,12 @@ fun DetailsScreen(
                                 }
                                 .background(
                                     color = if (isFavFocused) Color(0xFF333333) else Color(0xFF1A1A1A),
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .border(
-                                    width = if (isFavFocused) 3.5.dp else 1.dp,
+                                    width = if (isFavFocused) 2.5.dp else 1.dp,
                                     color = if (isFavFocused) Color.White else Color.DarkGray,
-                                    shape = RoundedCornerShape(12.dp)
+                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable(interactionSource = favInteractionSource, indication = null) {
                                     viewModel.toggleFavorite(movie)
@@ -686,12 +698,12 @@ fun DetailsScreen(
                                     imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                                     contentDescription = null,
                                     tint = if (isFavorite) Color.Red else Color.White,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (isFavorite) "U FAVORITIMA" else "DODAJ U FAVORITE",
-                                    fontSize = 14.sp,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
@@ -702,10 +714,11 @@ fun DetailsScreen(
                     Text(
                         text = "Nažalost, nismo uspjeli pronaći filmove za ovog autora u arhivi.",
                         color = Color.Gray,
-                        modifier = Modifier.padding(top = 20.dp)
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 16.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(64.dp))
+                Spacer(modifier = Modifier.height(48.dp))
             }
         }
     }
@@ -723,15 +736,15 @@ private fun StructuredInfoCard(
 
     Column(
         modifier = modifier
-            .heightIn(min = 255.dp, max = 330.dp)
+            .heightIn(min = 214.dp, max = 275.dp)
             .background(
                 color = if (isFocused) Color(0xFF1B1B1B) else Color(0xFF141414),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(10.dp)
             )
             .border(
-                width = if (isFocused) 3.dp else 1.dp,
+                width = if (isFocused) 2.5.dp else 1.dp,
                 color = if (isFocused) Color.White else Color(0xFF2B2B2B),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(10.dp)
             )
             .onPreviewKeyEvent { event ->
                 if (event.type == KeyEventType.KeyDown) {
@@ -740,7 +753,7 @@ private fun StructuredInfoCard(
                             if (cardScrollState.value < cardScrollState.maxValue) {
                                 coroutineScope.launch {
                                     cardScrollState.animateScrollTo(
-                                        (cardScrollState.value + 140).coerceAtMost(cardScrollState.maxValue)
+                                        (cardScrollState.value + 120).coerceAtMost(cardScrollState.maxValue)
                                     )
                                 }
                                 true
@@ -752,7 +765,7 @@ private fun StructuredInfoCard(
                             if (cardScrollState.value > 0) {
                                 coroutineScope.launch {
                                     cardScrollState.animateScrollTo(
-                                        (cardScrollState.value - 140).coerceAtLeast(0)
+                                        (cardScrollState.value - 120).coerceAtLeast(0)
                                     )
                                 }
                                 true
@@ -768,8 +781,8 @@ private fun StructuredInfoCard(
             }
             .focusable(interactionSource = interactionSource)
             .verticalScroll(cardScrollState)
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         when (sheet.kind) {
             DetailKind.SHORT_CARTOON -> {
@@ -786,7 +799,7 @@ private fun StructuredInfoCard(
                     Text(
                         text = "Podaci o koncertu",
                         color = Color(0xFFFF5252),
-                        fontSize = 14.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                     DetailMetaLine(label = "Godina", value = sheet.year)
@@ -795,12 +808,12 @@ private fun StructuredInfoCard(
 
                 if (hasBandSection) {
                     if (hasConcertSection) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(3.dp))
                     }
                     Text(
                         text = "Podaci o bendu",
                         color = Color(0xFFFF5252),
-                        fontSize = 14.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                     DetailMetaLine(label = "Žanr", value = sheet.genre)
@@ -823,20 +836,20 @@ private fun StructuredInfoCard(
         }
 
         if (sheet.synopsis.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             Divider(color = Color(0xFF262626))
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             Text(
                 text = if (sheet.kind == DetailKind.AUTHOR_COLLECTION) "Biografija" else "Kratki sadržaj",
                 color = Color(0xFFFF5252),
-                fontSize = 14.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = sheet.synopsis,
                 color = Color(0xFFDDDDDD),
-                fontSize = 14.sp,
-                lineHeight = 21.sp
+                fontSize = 12.5.sp,
+                lineHeight = 18.sp
             )
         }
     }
@@ -852,14 +865,14 @@ private fun DetailMetaLine(label: String, value: String) {
         Text(
             text = "$label: ",
             color = Color(0xFF9E9E9E),
-            fontSize = 14.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold
         )
         Text(
             text = value,
             color = Color.White,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
             modifier = Modifier.weight(1f)
         )
     }
@@ -1150,7 +1163,6 @@ private suspend fun buildStructuredSheet(
         else -> DetailKind.MOVIE_OR_FEATURE_ANIM
     }
 
-    // 1. TMDB podaci na hrvatskom jeziku (prvi prioritet za igrane i animirane filmove)
     val tmdbDetails = if (!isConcert) {
         fetchTmdbMovieFullDetailsHr(sbItem?.tmdbId ?: 0, title, yearHr)
     } else {
@@ -1160,7 +1172,6 @@ private suspend fun buildStructuredSheet(
         yearHr = tmdbDetails.releaseYear
     }
 
-    // 2. Hrvatska Wikipedija (pretraga po hrvatskom i izvornom naslovu), zatim EN Wikipedia + prijevod
     val wikiTitlesToTry = listOf(tmdbDetails.hrTitle, title, tmdbDetails.origTitle)
         .map { it.replace(Regex("\\(\\d{4}\\)"), "").trim() }
         .filter { it.isNotBlank() }
@@ -1176,7 +1187,6 @@ private suspend fun buildStructuredSheet(
     val dbDescHr = cleanWikiMarkupHr(ensureHrText(dbDescription))
     val archiveDescHr = cleanWikiMarkupHr(ensureHrText(archiveFallbackDesc))
 
-    // Strogi poredak sažetka: TMDB (hr-HR) -> Hrvatska Wikipedija -> Baza (prevedeno) -> Archive (prevedeno)
     var synopsisHr = tmdbDetails.overviewHr
         .ifBlank { wikiHr }
         .ifBlank { dbDescHr }
@@ -1314,13 +1324,11 @@ private suspend fun fetchMoviePlotHr(titlesToTry: List<String>, year: Int): Stri
         }
     }.distinct()
 
-    // 1. Hrvatska Wikipedija - izravni pogodak
     for (q in candidates) {
         val extract = queryWikipediaExtract("hr", q, introOnly = true)
         if (extract.isNotEmpty()) return@withContext extract.take(1000)
     }
 
-    // 2. Hrvatska Wikipedija - pretraga članka ako naslov ima drugačiji prijevod
     for (raw in titlesToTry.take(2)) {
         val clean = raw.replace(Regex("\\(\\d{4}\\)"), "").trim()
         if (clean.length < 3) continue
@@ -1332,7 +1340,6 @@ private suspend fun fetchMoviePlotHr(titlesToTry: List<String>, year: Int): Stri
         }
     }
 
-    // 3. Engleska Wikipedija + prijevod na hrvatski
     for (q in candidates) {
         val extract = queryWikipediaExtract("en", q, introOnly = true)
         if (extract.isNotEmpty()) return@withContext translateToCroatian(extract.take(1000))
@@ -1420,15 +1427,15 @@ private fun TvHighlightIconButton(
 
     Box(
         modifier = modifier
-            .size(44.dp)
+            .size(36.dp)
             .background(
                 color = if (isFocused) Color.Red else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
+                width = if (isFocused) 2.dp else 0.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
         contentAlignment = Alignment.Center
