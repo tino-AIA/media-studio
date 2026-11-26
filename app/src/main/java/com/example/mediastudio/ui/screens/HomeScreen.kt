@@ -135,10 +135,14 @@ fun HomeScreen(
     LaunchedEffect(currentHeroMovie) {
         currentHeroMovie?.let { (movie, isSeries) ->
             val firstId = movie.identifier.split(",").first()
-            val sbPoster = SupabaseRepository.getCatalogItem(movie.identifier)?.posterUrl.orEmpty()
-            currentHeroPosterUrl = sbPoster.ifBlank {
-                PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
-                    .ifBlank { "https://archive.org/services/img/$firstId" }
+            val sbItem = SupabaseRepository.getCatalogItem(movie.identifier)
+            val sbBackdrop = sbItem?.backdropUrl.orEmpty()
+            val sbPoster = sbItem?.posterUrl.orEmpty()
+            currentHeroPosterUrl = sbBackdrop.ifBlank {
+                sbPoster.ifBlank {
+                    PosterFetcher.fetchPoster(movie.title, isSeries, movie.identifier)
+                        .ifBlank { "https://archive.org/services/img/$firstId" }
+                }
             }
         }
     }
@@ -369,61 +373,21 @@ fun HomeScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Color(0xFF0A0A0A))
                 .onFocusChanged { isAnyElementFocused = it.hasFocus }
         ) {
-            if (currentHeroPosterUrl.isNotEmpty()) {
-                val heroBgRequest = remember(currentHeroPosterUrl) {
-                    ImageRequest.Builder(context)
-                        .data(currentHeroPosterUrl)
-                        .size(320, 180)
-                        .scale(Scale.FILL)
-                        .bitmapConfig(Bitmap.Config.RGB_565)
-                        .allowHardware(true)
-                        .build()
-                }
-                Image(
-                    painter = rememberAsyncImagePainter(heroBgRequest),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().alpha(0.32f)
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(Color(0xFF0F0F0F), Color(0xFF0F0F0F).copy(alpha = 0.72f), Color.Transparent),
-                            startX = 0f,
-                            endX = 1100f
-                        )
-                    )
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color(0xFF0A0A0A)),
-                            startY = 160f
-                        )
-                    )
-            )
-
             Scaffold(
                 topBar = {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0D0D0D).copy(alpha = 0.96f))
+                            .background(Color(0xFF0D0D0D))
                             .padding(top = 3.dp, bottom = 3.dp)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 4.dp)
+                                .padding(horizontal = 14.dp, vertical = 3.dp)
                                 .focusGroup(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -473,7 +437,7 @@ fun HomeScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 4.dp)
+                                .padding(horizontal = 14.dp, vertical = 3.dp)
                                 .focusGroup(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -652,7 +616,7 @@ fun HomeScreen(
 
                     LazyColumn(
                         state = homeListState,
-                        contentPadding = PaddingValues(top = 4.dp, bottom = 56.dp),
+                        contentPadding = PaddingValues(top = 0.dp, bottom = 52.dp),
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(paddingValues)
@@ -662,46 +626,107 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(215.dp)
-                                    .padding(start = 20.dp, bottom = 8.dp, end = 20.dp)
+                                    .height(156.dp)
+                                    .background(Color(0xFF0A0A0A))
                             ) {
+                                // Naglašeni sadržaj prikazan samo u desnom dijelu hero ekrana uz fade-to-black prijelaz prema lijevo
+                                if (currentHeroPosterUrl.isNotEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(0.58f)
+                                            .align(Alignment.CenterEnd)
+                                    ) {
+                                        val heroBgRequest = remember(currentHeroPosterUrl) {
+                                            ImageRequest.Builder(context)
+                                                .data(currentHeroPosterUrl)
+                                                .size(480, 270)
+                                                .scale(Scale.FILL)
+                                                .bitmapConfig(Bitmap.Config.RGB_565)
+                                                .allowHardware(true)
+                                                .build()
+                                        }
+                                        Image(
+                                            painter = rememberAsyncImagePainter(heroBgRequest),
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            alignment = Alignment.TopCenter,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .alpha(0.78f)
+                                        )
+
+                                        // Horizontalni fade-to-black prijelaz od sredine ekrana prema lijevo
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(
+                                                    Brush.horizontalGradient(
+                                                        0.0f to Color(0xFF0A0A0A),
+                                                        0.38f to Color(0xFF0A0A0A).copy(alpha = 0.72f),
+                                                        0.75f to Color(0xFF0A0A0A).copy(alpha = 0.18f),
+                                                        1.0f to Color.Transparent
+                                                    )
+                                                )
+                                        )
+
+                                        // Blago stapanje donjeg i gornjeg ruba s crnom pozadinom
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(
+                                                    Brush.verticalGradient(
+                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.45f),
+                                                        0.25f to Color.Transparent,
+                                                        0.78f to Color.Transparent,
+                                                        1.0f to Color(0xFF0A0A0A)
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+
                                 currentHeroMovie?.let { (movie, isSeries) ->
                                     Column(
-                                        modifier = Modifier.align(Alignment.BottomStart),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .padding(start = 20.dp, end = 16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 25.sp,
+                                            fontSize = 21.sp,
                                             fontWeight = FontWeight.ExtraBold,
-                                            maxLines = 2,
-                                            lineHeight = 29.sp,
+                                            maxLines = 1,
+                                            lineHeight = 24.sp,
                                             overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.width(560.dp)
+                                            modifier = Modifier.fillMaxWidth(0.56f)
                                         )
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
                                                 text = if (isSeries) "SERIJA" else "FILM",
                                                 color = Color.LightGray,
-                                                fontSize = 11.sp,
+                                                fontSize = 10.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 modifier = Modifier
-                                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                    .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 5.dp, vertical = 1.5.dp)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = "Istaknuto na Media Studiju",
                                                 color = Color.Gray,
-                                                fontSize = 12.sp,
+                                                fontSize = 11.5.sp,
                                                 fontWeight = FontWeight.Medium
                                             )
                                         }
 
                                         Row(
-                                            modifier = Modifier.focusGroup(),
+                                            modifier = Modifier
+                                                .padding(top = 2.dp)
+                                                .focusGroup(),
                                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
                                             HeroButton(
@@ -756,13 +781,13 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
-                                            .offset(y = 8.dp),
+                                            .padding(bottom = 4.dp),
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         heroMovies.forEachIndexed { index, _ ->
                                             Box(
                                                 modifier = Modifier
-                                                    .size(if (index == activeHeroIndex) 7.dp else 5.dp)
+                                                    .size(if (index == activeHeroIndex) 6.dp else 4.5.dp)
                                                     .background(
                                                         color = if (index == activeHeroIndex) Color.White else Color.Gray.copy(alpha = 0.5f),
                                                         shape = CircleShape
@@ -855,31 +880,31 @@ private fun HeroButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val bgColor = if (isFocused) Color.White else if (isPrimary) Color.White else Color(0xFF2A2A2A).copy(alpha = 0.8f)
+    val bgColor = if (isFocused) Color.White else if (isPrimary) Color.White else Color(0xFF2A2A2A).copy(alpha = 0.85f)
     val contentColor = if (isFocused) Color.Black else if (isPrimary) Color.Black else Color.White
     val borderColor = if (isFocused) Color(0xFFE50914).copy(alpha = 0.9f) else Color.Transparent
 
     Row(
         modifier = modifier
-            .height(36.dp)
-            .background(color = bgColor, shape = RoundedCornerShape(18.dp))
-            .border(width = if (isFocused) 1.8.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(18.dp))
+            .height(32.dp)
+            .background(color = bgColor, shape = RoundedCornerShape(16.dp))
+            .border(width = if (isFocused) 1.8.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(16.dp))
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = contentColor,
-            modifier = Modifier.size(17.dp)
+            modifier = Modifier.size(16.dp)
         )
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(5.dp))
         Text(
             text = text,
             color = contentColor,
             fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
+            fontSize = 12.5.sp
         )
     }
 }
@@ -1098,10 +1123,10 @@ fun MovieCategoryRow(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 2.dp)
+                .padding(horizontal = 14.dp, vertical = 1.dp)
                 .focusProperties { left = FocusRequester.Cancel }
                 .background(
                     color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
@@ -1113,13 +1138,13 @@ fun MovieCategoryRow(
                     shape = RoundedCornerShape(7.dp)
                 )
                 .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = displayTitle,
                 color = Color.White,
-                fontSize = 16.sp,
+                fontSize = 15.5.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.width(6.dp))
@@ -1139,7 +1164,7 @@ fun MovieCategoryRow(
 
         LazyRow(
             state = rowListState,
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 3.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 12.dp else 10.dp),
             modifier = Modifier.focusGroup()
         ) {
@@ -1256,18 +1281,18 @@ fun NetflixTop10Card(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
-            .padding(bottom = 3.dp),
+            .padding(bottom = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .width(136.dp)
-                .height(146.dp)
+                .height(142.dp)
         ) {
             Card(
                 modifier = Modifier
                     .width(96.dp)
-                    .height(142.dp)
+                    .height(138.dp)
                     .align(Alignment.CenterEnd)
                     .border(borderWidth, borderBrush, RoundedCornerShape(9.dp)),
                 shape = RoundedCornerShape(9.dp),
@@ -1315,7 +1340,7 @@ fun NetflixTop10Card(
                 }
             }
 
-            val numberFontSize = if (rankNumber == 10) 70.sp else 78.sp
+            val numberFontSize = if (rankNumber == 10) 68.sp else 76.sp
             val numberLetterSpacing = if (rankNumber == 10) (-6).sp else 0.sp
 
             Box(
@@ -1348,7 +1373,7 @@ fun NetflixTop10Card(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(5.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
@@ -1459,13 +1484,13 @@ fun MovieCard(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
-            .padding(bottom = 3.dp),
+            .padding(bottom = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Card(
             modifier = Modifier
                 .width(100.dp)
-                .height(146.dp)
+                .height(142.dp)
                 .border(borderWidth, borderBrush, RoundedCornerShape(9.dp)),
             shape = RoundedCornerShape(9.dp),
             elevation = CardDefaults.cardElevation(defaultElevation = if (isFocused) 8.dp else 0.dp),
@@ -1544,7 +1569,7 @@ fun MovieCard(
                 Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray))
             }
         }
-        Spacer(modifier = Modifier.height(5.dp))
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
