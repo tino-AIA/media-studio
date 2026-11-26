@@ -216,26 +216,27 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val exactAuthorOrder = listOf(
         "Martin Scorsese", "Steven Spielberg", "Quentin Tarantino", "Stanley Kubrick",
         "Christopher Nolan", "Ridley Scott", "James Cameron", "Peter Jackson",
-        "Tim Burton", "David Fincher", "Robert Zemeckis", "Guillermo del Toro",
-        "Wes Anderson", "Spike Lee", "Jerry Bruckheimer", "Russo braća",
-        "Alfred Hitchcock", "Francis Ford Coppola", "Woody Allen", "Brian De Palma",
-        "Sergio Leone", "David Lynch", "Braća Coen", "Pedro Almodóvar",
-        "Paul Thomas Anderson", "Denis Villeneuve", "Michael Haneke", "Lars von Trier",
-        "Paul Verhoeven", "Roman Polanski", "Werner Herzog", "Jean-Luc Godard",
-        "David Cronenberg", "Robert Altman", "John Cassavetes", "Mira Nair",
-        "Takeshi Kitano", "Freddie Francis", "Elvis Presley", "David Lean",
-        "Ingmar Bergman", "Roger Corman", "David DeCoteau", "François Truffaut",
-        "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders", "Nicholas Roeg",
-        "John Ford", "Mario Bava", "Akira Kurosawa", "Jacques Rivette",
-        "Costa-Gavras", "Louis Malle", "Federico Fellini", "George A. Romero",
-        "Otto Preminger", "Herschell Gordon Lewis", "Harmony Korine", "Orson Welles",
-        "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci", "Ken Russell",
-        "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato", "Andy Milligan",
-        "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer", "Greydon Clark",
-        "Bill Zebub", "Sean Baker", "Andy Warhol", "Leos Carax",
-        "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore", "Bo Widerberg",
-        "Jackie Collins", "Rick Sloane", "Errol Morris", "Gordon Hessler",
-        "Russ Meyer", "Gaspar Noé", "Sion Sono", "Peter Greenaway", "Alan Clarke"
+        "George Lucas", "Tim Burton", "David Fincher", "Robert Zemeckis",
+        "Guillermo del Toro", "Wes Anderson", "Spike Lee", "Jerry Bruckheimer",
+        "Russo braća", "Alfred Hitchcock", "Francis Ford Coppola", "Woody Allen",
+        "Brian De Palma", "Sergio Leone", "David Lynch", "Braća Coen",
+        "Pedro Almodóvar", "Paul Thomas Anderson", "Denis Villeneuve", "Michael Haneke",
+        "Lars von Trier", "Paul Verhoeven", "Roman Polanski", "Werner Herzog",
+        "Jean-Luc Godard", "David Cronenberg", "Robert Altman", "John Cassavetes",
+        "Mira Nair", "Takeshi Kitano", "Freddie Francis", "Elvis Presley",
+        "David Lean", "Ingmar Bergman", "Roger Corman", "David DeCoteau",
+        "François Truffaut", "Pier Paolo Pasolini", "Budd Boetticher", "Wim Wenders",
+        "Nicholas Roeg", "John Ford", "Mario Bava", "Akira Kurosawa",
+        "Jacques Rivette", "Costa-Gavras", "Louis Malle", "Federico Fellini",
+        "George A. Romero", "Otto Preminger", "Herschell Gordon Lewis", "Harmony Korine",
+        "Orson Welles", "Norman Jewison", "Curtis Harrington", "Bernardo Bertolucci",
+        "Ken Russell", "Krzysztof Kieślowski", "Alejandro Jodorowsky", "Ruggero Deodato",
+        "Andy Milligan", "Ted V. Mikels", "Lina Wertmüller", "Carl Theodor Dreyer",
+        "Greydon Clark", "Bill Zebub", "Sean Baker", "Andy Warhol",
+        "Leos Carax", "Volker Schlöndorff", "Albert Pyun", "Giuseppe Tornatore",
+        "Bo Widerberg", "Jackie Collins", "Rick Sloane", "Errol Morris",
+        "Gordon Hessler", "Russ Meyer", "Gaspar Noé", "Sion Sono",
+        "Peter Greenaway", "Alan Clarke"
     )
 
     private val authorArchiveIds = mapOf(
@@ -251,6 +252,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Denis Villeneuve" to "incendies.-2010.1080p",
         "James Cameron" to "the-terminator-1984_202606",
         "Michael Haneke" to "funny-games_202511",
+        "George Lucas" to "american-graffiti-35mm-hd-upscale-lighter",
         "Tim Burton" to "edward-scissorhands_202607",
         "Wes Anderson" to "bottle.-rocket.-1996",
         "Spike Lee" to "Clockers",
@@ -350,6 +352,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         "Denis Villeneuve" to "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Denis_Villeneuve_Cannes_2018.jpg/400px-Denis_Villeneuve_Cannes_2018.jpg",
         "James Cameron" to "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fe/James_Cameron_by_Gage_Skidmore.jpg/400px-James_Cameron_by_Gage_Skidmore.jpg",
         "Michael Haneke" to "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Michael_Haneke_2009.jpg/400px-Michael_Haneke_2009.jpg",
+        "George Lucas" to "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/George_Lucas_cropped_2009.jpg/400px-George_Lucas_cropped_2009.jpg",
         "Tim Burton" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/64/Tim_Burton_by_Gage_Skidmore_2.jpg/400px-Tim_Burton_by_Gage_Skidmore_2.jpg",
         "Wes Anderson" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Wes_Anderson_at_Berlinale_2018_%28cropped%29.jpg/400px-Wes_Anderson_at_Berlinale_2018_%28cropped%29.jpg",
         "Spike Lee" to "https://upload.wikimedia.org/wikipedia/commons/thumb/6/65/Spike_Lee_Cannes_2018.jpg/400px-Spike_Lee_Cannes_2018.jpg",
@@ -539,16 +542,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val pageSize = 36
 
-    private var isAdultCategoryUnlocked: Boolean
+    private val isAdultCategoryUnlocked: Boolean
         get() = AppUpdateManager.is18PlusEnabled(getApplication())
-        set(value) {
-            AppUpdateManager.set18PlusEnabled(getApplication(), value)
-        }
 
     private var unlockedAdultMovies: List<ArchiveMovie> = emptyList()
 
     fun setAdultCategoryUnlocked(unlocked: Boolean) {
-        isAdultCategoryUnlocked = unlocked
+        AppUpdateManager.set18PlusEnabled(getApplication(), unlocked)
         viewModelScope.launch {
             if (unlocked && getOrBuildCatalogSnapshot().adultMovies.isEmpty() && unlockedAdultMovies.isEmpty()) {
                 val adultGenre = movieGenreDefinitions.firstOrNull { it.isAdultCategory }
@@ -1172,7 +1172,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun openGenre(genre: GenreOption) {
         _selectedGenre.value = genre
         if (genre.isAdultCategory) {
-            isAdultCategoryUnlocked = true
+            AppUpdateManager.set18PlusEnabled(getApplication(), true)
         }
         savedGenreScrollIndex = 0
         savedGenreScrollOffset = 0
