@@ -351,8 +351,8 @@ private fun NetflixKeyButton(
                 shape = RoundedCornerShape(5.dp)
             )
             .border(
-                width = if (isFocused) 2.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.DarkGray,
+                width = if (isFocused) 1.8.dp else 0.8.dp,
+                color = if (isFocused) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.22f),
                 shape = RoundedCornerShape(5.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
