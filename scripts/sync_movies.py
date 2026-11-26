@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sync_common as sc
@@ -39,40 +41,98 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Siguran vremenski okvir (50 min) s prioritetom na očite pojedinačne filmove (korak 2/4)
-MAX_MOVIES_SYNC_SECONDS = 50 * 60
-PHASE1_AUDIT_MAX_SECONDS = 7 * 60
-PHASE2_DIRECT_MOVIES_MAX_SECONDS = 21 * 60
-PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 12 * 60
-# Preostali budžet (~10 min) ide u korak 4/4 (ugniježđeni multi-file paketi)
+# Ubrzanje mrežnih poziva: recikliranje HTTP/TLS konekcija (Keep-Alive)
+_HTTP_SESSION = requests.Session()
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+_HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
+_HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 
-BATCH_SIZE_CANDIDATES = 40
-MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 2 * 60
+if hasattr(sc, "session"):
+    sc.session = _HTTP_SESSION
+
+# Ukupni ciljani okvir: ~35 min (daleko ispod 4h limita)
+MAX_MOVIES_SYNC_SECONDS = 38 * 60
+PHASE1_AUDIT_MAX_SECONDS = 5 * 60
+PHASE2_DIRECT_MOVIES_MAX_SECONDS = 18 * 60
+PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 7 * 60
+# Preostali budžet (~8 min) ide u korak 4/4 (ugniježđeni multi-file paketi)
+
+BATCH_SIZE_CANDIDATES = 50
+MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 90
 
 MAX_VERSIONS_PER_MOVIE = 2
-MAX_VHS_UPGRADE_CHECKS_PER_RUN = 20
-MAX_DYNAMIC_BUNDLES_PER_RUN = 35
+MAX_VHS_UPGRADE_CHECKS_PER_RUN = 15
+MAX_DYNAMIC_BUNDLES_PER_RUN = 25
+MAX_VIDEOS_PER_BUNDLE = 75
+TMDB_SEED_SAMPLE_PER_RUN = 90
+
+# Skupni međuspremnik za odbačene zapise (šalje 200 odjednom umjesto 1 po 1 HTTP poziva)
+_REJECTED_BATCH_BUFFER = []
+_REJECTED_BUFFER_SIZE = 200
+
+
+def flush_rejected_buffer(force=False):
+    to_send = []
+    with state_lock:
+        if len(_REJECTED_BATCH_BUFFER) >= _REJECTED_BUFFER_SIZE or (force and _REJECTED_BATCH_BUFFER):
+            to_send = list(_REJECTED_BATCH_BUFFER)
+            _REJECTED_BATCH_BUFFER.clear()
+    if to_send:
+        supabase_upsert("catalog_items", to_send, "archive_id")
+
+
+def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
+    if not ident or ident.startswith("http"):
+        return
+    should_queue = False
+    with state_lock:
+        if ident not in existing_archive_ids:
+            existing_archive_ids.add(ident)
+            should_queue = True
+    if should_queue:
+        row = {
+            "archive_id": ident,
+            "tmdb_id": 0,
+            "title": str(title or ident)[:180],
+            "media_type": "movie",
+            "genres": [],
+            "release_year": int(rel_year or 0),
+            "rating": 0.0,
+            "popularity_score": -1000.0,
+            "description_hr": "",
+            "poster_url": "",
+            "backdrop_url": "",
+            "stream_url": "",
+            "is_featured": False,
+            "is_valid": False,
+            "tmdb_runtime": 0,
+            "archive_runtime": 0,
+        }
+        with state_lock:
+            _REJECTED_BATCH_BUFFER.append(row)
+        flush_rejected_buffer(force=False)
+
 
 # ==============================================================================
 # ODOBRENE FILMSKE GRANE IZ archive_movies_layers.md
 # ==============================================================================
 APPROVED_MOVIE_BRANCHES = [
-    ("opensource_movies", 4),          # Community Video
-    ("moviesandfilms", 4),             # Movies
-    ("feature_films", 4),              # Feature Films
-    ("vhsvault", 4),                   # The VHS Vault
-    ("dvdtray", 4),                    # The DVD Tray
-    ("dvdtray_inbox", 4),              # The DVD Tray Inbox
-    ("animationandcartoons", 4),       # Animation & Cartoons
-    ("classic_cartoons", 3),           # Film Chest Vintage Cartoons
-    ("vintage_cartoons", 3),           # Vintage Cartoons
-    ("saturdaymorningcartoons", 3),    # Saturday Morning Cartoons
-    ("laserdiscs", 3),                 # Laserdisc Archive
-    ("televisionmovies", 3),           # Television Movies
-    ("foreignlanguagevideos", 3),      # Non-English Videos
-    ("popcornproject", 3),             # Popcorn Project
+    ("opensource_movies", 3),          # Community Video
+    ("moviesandfilms", 3),             # Movies
+    ("feature_films", 3),              # Feature Films
+    ("vhsvault", 3),                   # The VHS Vault
+    ("dvdtray", 3),                    # The DVD Tray
+    ("dvdtray_inbox", 3),              # The DVD Tray Inbox
+    ("animationandcartoons", 3),       # Animation & Cartoons
+    ("classic_cartoons", 2),           # Film Chest Vintage Cartoons
+    ("vintage_cartoons", 2),           # Vintage Cartoons
+    ("saturdaymorningcartoons", 2),    # Saturday Morning Cartoons
+    ("laserdiscs", 2),                 # Laserdisc Archive
+    ("televisionmovies", 2),           # Television Movies
+    ("foreignlanguagevideos", 2),      # Non-English Videos
+    ("popcornproject", 2),             # Popcorn Project
     ("afmh-project", 2),               # Adult Film & Media History Project
-    ("subtitled_movies", 3),           # Subtitled Movies
+    ("subtitled_movies", 2),           # Subtitled Movies
     ("KINOfilm", 2),                   # Kino French Films
     ("collectie_filmcollectief", 2),   # Collectie Filmcollectief
     ("cinemocracy", 2),                # Cinemocracy
@@ -80,24 +140,23 @@ APPROVED_MOVIE_BRANCHES = [
     ("globiansfilmfestival", 2),       # Globians Film Festival
     ("cliffhangers", 2),               # Cliffhanger Serials
     ("misfits-of-film-3am-films", 2),  # Misfits of Film, 3am Films Collection
-    ("SciFi_Films", 3),                # Sci-Fi Films
-    ("film_noir", 3),                  # Film Noir
-    ("comedy_films", 3),               # Comedy Films
-    ("westerns", 3),                   # Westerns
-    ("war_films", 3),                   # War Films
-    ("horror_films", 3),               # Horror Films
-    ("romance_films", 3),              # Romance Films
-    ("thriller_films", 3),             # Thriller Films
-    ("action_adventure_films", 3),     # Action & Adventure Films
-    ("drama_films", 3),                # Drama Films
-    ("mystery_films", 3),              # Mystery Films
-    ("colorized-and-upscaled-movies", 3),
-    ("popcornmaker", 4),
+    ("SciFi_Films", 2),                # Sci-Fi Films
+    ("film_noir", 2),                  # Film Noir
+    ("comedy_films", 2),               # Comedy Films
+    ("westerns", 2),                   # Westerns
+    ("war_films", 2),                  # War Films
+    ("horror_films", 2),               # Horror Films
+    ("romance_films", 2),              # Romance Films
+    ("thriller_films", 2),             # Thriller Films
+    ("action_adventure_films", 2),     # Action & Adventure Films
+    ("drama_films", 2),                # Drama Films
+    ("mystery_films", 2),              # Mystery Films
+    ("colorized-and-upscaled-movies", 2),
+    ("popcornmaker", 3),
 ]
 
 APPROVED_BRANCH_IDS = [b for b, _ in APPROVED_MOVIE_BRANCHES]
 
-# Velike ravne grane koje se dodatno pretražuju po desetljećima kako se ne bi stalno vrtio isti vrh
 LARGE_FLAT_BRANCHES = [
     "opensource_movies",
     "moviesandfilms",
@@ -152,26 +211,24 @@ BAD_TITLE_MARKER_RE = re.compile(
 )
 
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
-    # james-bond-collection (svih 18 filmova)
-    ("james-bond-collection", "james bond 1-33.mp4"): 646,     # Dr. No (1962)
-    ("james-bond-collection", "james bond 1-3.mp4"): 657,      # From Russia with Love (1963)
-    ("james-bond-collection", "james bond 1-31.mp4"): 658,     # Goldfinger (1964)
-    ("james-bond-collection", "james bond 4-61.mp4"): 660,     # Thunderball (1965)
-    ("james-bond-collection", "james bond 4-62.mp4"): 667,     # You Only Live Twice (1967)
-    ("james-bond-collection", "james bond 4-6.mp4"): 668,      # On Her Majesty's Secret Service (1969)
-    ("james-bond-collection", "james bond 7-91.mp4"): 681,     # Diamonds Are Forever (1971)
-    ("james-bond-collection", "james bond 7-92.mp4"): 253,     # Live and Let Die (1973)
-    ("james-bond-collection", "james bond 7-9.mp4"): 682,      # The Man with the Golden Gun (1974)
-    ("james-bond-collection", "james bond 10-121.mp4"): 691,   # The Spy Who Loved Me (1977)
-    ("james-bond-collection", "james bond 10-122.mp4"): 698,   # Moonraker (1979)
-    ("james-bond-collection", "james bond 10-12.mp4"): 699,    # For Your Eyes Only (1981)
-    ("james-bond-collection", "james bond 16-18.mp4"): 709,    # Licence to Kill (1989)
-    ("james-bond-collection", "james bond 16-182.mp4"): 710,   # GoldenEye (1995)
-    ("james-bond-collection", "james bond 16-183.mp4"): 714,   # Tomorrow Never Dies (1997)
-    ("james-bond-collection", "james bond 19-211.mp4"): 36643, # The World Is Not Enough (1999)
-    ("james-bond-collection", "james bond 19-212.mp4"): 36669, # Die Another Day (2002)
-    ("james-bond-collection", "james bond 19-21.mp4"): 36557,  # Casino Royale (2006)
-    # dvdisocollection_202605
+    ("james-bond-collection", "james bond 1-33.mp4"): 646,
+    ("james-bond-collection", "james bond 1-3.mp4"): 657,
+    ("james-bond-collection", "james bond 1-31.mp4"): 658,
+    ("james-bond-collection", "james bond 4-61.mp4"): 660,
+    ("james-bond-collection", "james bond 4-62.mp4"): 667,
+    ("james-bond-collection", "james bond 4-6.mp4"): 668,
+    ("james-bond-collection", "james bond 7-91.mp4"): 681,
+    ("james-bond-collection", "james bond 7-92.mp4"): 253,
+    ("james-bond-collection", "james bond 7-9.mp4"): 682,
+    ("james-bond-collection", "james bond 10-121.mp4"): 691,
+    ("james-bond-collection", "james bond 10-122.mp4"): 698,
+    ("james-bond-collection", "james bond 10-12.mp4"): 699,
+    ("james-bond-collection", "james bond 16-18.mp4"): 709,
+    ("james-bond-collection", "james bond 16-182.mp4"): 710,
+    ("james-bond-collection", "james bond 16-183.mp4"): 714,
+    ("james-bond-collection", "james bond 19-211.mp4"): 36643,
+    ("james-bond-collection", "james bond 19-212.mp4"): 36669,
+    ("james-bond-collection", "james bond 19-21.mp4"): 36557,
     ("dvdisocollection_202605", "austinpowers/austinpowers.mp4"): 816,
     ("dvdisocollection_202605", "austinpowers2/austinpowers2.mp4"): 817,
     ("dvdisocollection_202605", "goldmember/goldmember28.mp4"): 818,
@@ -184,7 +241,6 @@ EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     ("dvdisocollection_202605", "priscilla_qotd_p4/priscilla_qotd_p4.mp4"): 2759,
     ("dvdisocollection_202605", "star_wars_episode_v/star_wars_episode_v.mp4"): 1891,
     ("dvdisocollection_202605", "the_exorcist_2000/the_exorcist_2000.mp4"): 9552,
-    # ISOanimationMoviesDVD
     ("isoanimationmoviesdvd", "aladindisco1.mp4"): 812,
     ("isoanimationmoviesdvd", "et.mp4"): 601,
     ("isoanimationmoviesdvd", "las locuras del emperador.mp4"): 11688,
@@ -410,36 +466,6 @@ def retire_vhs_rows_for_tmdb(mid, new_arch_id, rel_year, all_movie_rows, tmdb_ve
     return len(rows_to_retire)
 
 
-def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
-    if not ident or ident.startswith("http"):
-        return
-    should_write = False
-    with state_lock:
-        if ident not in existing_archive_ids:
-            existing_archive_ids.add(ident)
-            should_write = True
-    if should_write:
-        row = {
-            "archive_id": ident,
-            "tmdb_id": 0,
-            "title": str(title or ident)[:180],
-            "media_type": "movie",
-            "genres": [],
-            "release_year": int(rel_year or 0),
-            "rating": 0.0,
-            "popularity_score": -1000.0,
-            "description_hr": "",
-            "poster_url": "",
-            "backdrop_url": "",
-            "stream_url": "",
-            "is_featured": False,
-            "is_valid": False,
-            "tmdb_runtime": 0,
-            "archive_runtime": 0,
-        }
-        supabase_upsert("catalog_items", [row], "archive_id")
-
-
 def check_ex_yu(*texts, orig_lang=""):
     if orig_lang and orig_lang.lower() in EX_YU_LANGS:
         return True
@@ -480,8 +506,7 @@ def resolve_movie_genres(details, final_title, hint_genre=None):
     return genres[:3]
 
 
-def fetch_child_collections(parent_col_id, rows=120):
-    """Dohvaća podgrane (mediatype:collection) unutar odobrene filmske grane."""
+def fetch_child_collections(parent_col_id, rows=100):
     data = safe_get(
         "https://archive.org/advancedsearch.php",
         params={
@@ -492,6 +517,7 @@ def fetch_child_collections(parent_col_id, rows=120):
             "page": 1,
             "output": "json",
         },
+        timeout=10,
     )
     children = []
     for doc in (data or {}).get("response", {}).get("docs", []):
@@ -506,18 +532,14 @@ def fetch_child_collections(parent_col_id, rows=120):
 
 
 def map_approved_movie_subtrees(deadline_ts):
-    """
-    Rekurzivno mapira dublje podgrane (razina +1, razina +2) isključivo unutar
-    svih 36 odobrenih grana iz APPROVED_MOVIE_BRANCHES.
-    """
     if time.monotonic() > deadline_ts:
         return [], []
 
     seen = {b.lower() for b in APPROVED_BRANCH_IDS}
     sub_layer1 = []
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=100), APPROVED_BRANCH_IDS):
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=80), APPROVED_BRANCH_IDS):
             for ident, title in children:
                 low = ident.lower()
                 if low in seen:
@@ -529,9 +551,9 @@ def map_approved_movie_subtrees(deadline_ts):
 
     sub_layer2 = []
     if time.monotonic() < deadline_ts and sub_layer1:
-        to_expand = [ident for ident, _ in sub_layer1[:45]]
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            for children in pool.map(lambda cid: fetch_child_collections(cid, rows=60), to_expand):
+        to_expand = [ident for ident, _ in sub_layer1[:35]]
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            for children in pool.map(lambda cid: fetch_child_collections(cid, rows=50), to_expand):
                 for ident, title in children:
                     low = ident.lower()
                     if low in seen:
@@ -547,7 +569,6 @@ def map_approved_movie_subtrees(deadline_ts):
 EX_YU_ARCHIVE_QUERIES = [
     'mediatype:(movies OR web) AND language:(Croatian OR Serbian OR "Serbo-Croatian" OR Bosnian OR Slovenian OR Macedonian OR hrv OR srp OR scr OR bos OR slv OR mac) AND -subject:news AND -subject:trailer',
     'mediatype:(movies OR web) AND (subject:(Yugoslavia OR Yugoslav OR "Yugoslav cinema" OR "Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Triglav Film" OR "Croatia Film" OR "ex-yu" OR "domaci film" OR "domaći film") OR creator:("Zagreb Film" OR "Jadran Film" OR "Avala Film" OR "Centar Film" OR "Sutjeska Film" OR "Bosna Film" OR "Vardar Film" OR "Triglav Film" OR "Croatia Film")) AND -subject:news AND -subject:trailer',
-    'mediatype:(movies OR web) AND title:("domaci film" OR "domaći film" OR "jugoslavenski film" OR "jugoslovenski film" OR "hrvatski film" OR "srpski film" OR "zagreb film") AND -subject:news AND -subject:trailer',
 ]
 
 EX_YU_MOVIE_SEEDS = [
@@ -665,8 +686,7 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
-def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=10, batch_size=40):
-    """Izvršava zadatke u malim paketima tako da istek vremenskog budžeta odmah prekida daljnje čekanje."""
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=14, batch_size=50):
     item_list = list(items)
     for start_idx in range(0, len(item_list), batch_size):
         if time.monotonic() > deadline_ts:
@@ -715,7 +735,6 @@ def sync_curated_movie_exceptions(
     tmdb_version_counts,
     tmdb_best_tier
 ):
-    print("  Provjera ručno odobrenih izdanja filmova...", flush=True)
     valid_archive_ids = {
         r.get("archive_id") for r in all_movie_rows
         if r.get("is_valid", True) and r.get("archive_id")
@@ -838,7 +857,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
                 "q": query,
                 "fl[]": ["identifier", "title", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 6,
+                "rows": 5,
                 "output": "json"
             }
         )
@@ -1078,7 +1097,7 @@ def audit_and_repair_existing_movies(
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    run_batched_with_deadline(valid_rows, inspect_movie_row, phase_deadline_ts, max_workers=12, batch_size=100)
+    run_batched_with_deadline(valid_rows, inspect_movie_row, phase_deadline_ts, max_workers=14, batch_size=120)
 
     for row in valid_rows:
         if not row.get("is_valid", True):
@@ -1144,7 +1163,7 @@ def audit_and_repair_existing_movies(
                 with state_lock:
                     hd_upgraded_count[0] += 1
 
-        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=6, batch_size=10)
+        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=8, batch_size=10)
 
     print(
         f"  Provjera završena: {replaced_count[0]} zamijenjeno originalom, "
@@ -1243,11 +1262,7 @@ def mine_direct_movies_from_branches(
     deadline_ts,
     all_movie_rows=None
 ):
-    """
-    2/4 PRIORITET: Odmah povlači očite pojedinačne filmove iz svih odobrenih grana i podgrana,
-    kombinirajući najpopularnije, najnovije (addeddate) i pretragu po desetljećima.
-    """
-    print("2/4 Prioritetno rudarenje očitih pojedinačnih filmova iz odobrenih grana i podgrana (paketi po 40)...", flush=True)
+    print("2/4 Prioritetno rudarenje očitih pojedinačnih filmova iz odobrenih grana i podgrana (paketi po 50)...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
@@ -1258,10 +1273,9 @@ def mine_direct_movies_from_branches(
     for ident, _ in (sub_layer1 + sub_layer2):
         if ident not in known_cols:
             known_cols.add(ident)
-            extra_sub_cols.append((ident, 3))
+            extra_sub_cols.append((ident, 2))
 
     collections_to_scan = list(APPROVED_MOVIE_BRANCHES) + extra_sub_cols
-
     archive_docs = {}
 
     def fetch_query_docs(task_item):
@@ -1277,12 +1291,12 @@ def mine_direct_movies_from_branches(
                 "rows": rows_cnt,
                 "page": page,
                 "output": "json"
-            }
+            },
+            timeout=10,
         )
         return (data or {}).get("response", {}).get("docs", [])
 
     tasks = []
-    # A) Glavne odobrene grane i njihove podgrane (top preuzimanja + najnovije dodano)
     for col, max_p in collections_to_scan:
         if col == "popcornmaker":
             base_q = 'mediatype:(movies OR web) AND collection:popcornmaker AND title:(19* OR 20*) AND -subject:trailer AND -subject:news AND -subject:"video games"'
@@ -1291,21 +1305,20 @@ def mine_direct_movies_from_branches(
         for p in range(1, max_p + 1):
             tasks.append((base_q, "downloads desc", p, 120))
         tasks.append((base_q, "addeddate desc", 1, 120))
-        tasks.append((base_q, "addeddate desc", 2, 120))
 
-    # B) Dubinski ulaz po desetljećima u velike ravne grane (opensource_movies, moviesandfilms, vhsvault...)
+    # Nasumično odaberi 3 desetljeća po pokretanju za svaku veliku granu (brzo i pokriva cijelu arhivu kroz cikluse)
+    sampled_decades = random.sample(DECADE_RANGES, k=3)
     for flat_col in LARGE_FLAT_BRANCHES:
-        for y_from, y_to in DECADE_RANGES:
+        for y_from, y_to in sampled_decades:
             dec_q = (
                 f'mediatype:movies AND collection:{flat_col} AND year:[{y_from} TO {y_to}] '
                 f'AND -subject:trailer AND -subject:news AND -subject:"video games"'
             )
             tasks.append((dec_q, "downloads desc", 1, 100))
-            tasks.append((dec_q, "downloads desc", 2, 100))
 
     random.shuffle(tasks)
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=14) as pool:
         for docs in pool.map(fetch_query_docs, tasks):
             for doc in docs:
                 ident = doc.get("identifier")
@@ -1344,7 +1357,8 @@ def mine_direct_movies_from_branches(
                 continue
         remaining_pool.append((doc, title_candidates, parsed_y))
 
-    # Prioritiziraj kandidate koji u naslovu/godini imaju jasnu godinu i više preuzimanja
+    flush_rejected_buffer(force=True)
+
     remaining_pool.sort(
         key=lambda e: (0 if e[2] > 0 else 1, -float(e[0].get("downloads") or 0))
     )
@@ -1533,7 +1547,7 @@ def mine_direct_movies_from_branches(
                     batch_added[0] += 1
                     total_added[0] += 1
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with ThreadPoolExecutor(max_workers=14) as pool:
             futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
             for fut in as_completed(futures):
                 try:
@@ -1541,6 +1555,7 @@ def mine_direct_movies_from_branches(
                 except Exception:
                     pass
 
+        flush_rejected_buffer(force=True)
         print(
             f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {batch_added[0]} filmova (ukupno dodano: {total_added[0]}).",
             flush=True
@@ -1574,7 +1589,6 @@ def sync_ex_yu_and_cult_movies(
     phase_deadline_ts,
     all_movie_rows=None
 ):
-    """3/4 Dopuna Ex-Yu filmova, kultnih klasika i TMDB žanrovskih favorita."""
     print("3/4 Sinkronizacija Ex-Yu filmova, kultnih klasika i TMDB žanrova...", flush=True)
     if time.monotonic() > phase_deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
@@ -1584,24 +1598,21 @@ def sync_ex_yu_and_cult_movies(
     for base_q in EX_YU_ARCHIVE_QUERIES:
         if time.monotonic() > phase_deadline_ts:
             break
-        for page in [1, 2]:
-            if time.monotonic() > phase_deadline_ts:
-                break
-            data = safe_get(
-                "https://archive.org/advancedsearch.php",
-                params={
-                    "q": base_q,
-                    "fl[]": ["identifier", "title", "year", "downloads"],
-                    "sort[]": "downloads desc",
-                    "rows": 150,
-                    "page": page,
-                    "output": "json"
-                }
-            )
-            for doc in (data or {}).get("response", {}).get("docs", []):
-                ident = doc.get("identifier")
-                if ident and ident not in existing_archive_ids and ident not in ex_yu_docs:
-                    ex_yu_docs[ident] = doc
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": base_q,
+                "fl[]": ["identifier", "title", "year", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 120,
+                "page": 1,
+                "output": "json"
+            }
+        )
+        for doc in (data or {}).get("response", {}).get("docs", []):
+            ident = doc.get("identifier")
+            if ident and ident not in existing_archive_ids and ident not in ex_yu_docs:
+                ex_yu_docs[ident] = doc
 
     added_ex_yu = [0]
 
@@ -1741,12 +1752,15 @@ def sync_ex_yu_and_cult_movies(
                 added_ex_yu[0] += 1
 
     if ex_yu_docs:
-        print(f"  Provjera {len(ex_yu_docs)} novih Ex-Yu Archive kandidata...", flush=True)
+        print(f"  Provjera {len(ex_yu_docs)} Ex-Yu Archive kandidata...", flush=True)
         run_batched_with_deadline(
-            ex_yu_docs.values(), process_ex_yu_doc, phase_deadline_ts, max_workers=10, batch_size=35
+            ex_yu_docs.values(), process_ex_yu_doc, phase_deadline_ts, max_workers=14, batch_size=50
         )
+        flush_rejected_buffer(force=True)
 
-    # Kultni klasici, animirani filmovi i TMDB žanrovi
+    # Uzorak od 90 naslova iz seed liste + 1 stranica TMDB discovera po pokretanju (traje ~90 sekundi umjesto 15 min)
+    all_seeds = EX_YU_MOVIE_SEEDS + CULT_AND_ANIMATION_SEEDS
+    sampled_seeds = random.sample(all_seeds, k=min(TMDB_SEED_SAMPLE_PER_RUN, len(all_seeds)))
     candidates = {}
 
     def fetch_seed(seed_title):
@@ -1755,37 +1769,37 @@ def sync_ex_yu_and_cult_movies(
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        for res_list in pool.map(fetch_seed, EX_YU_MOVIE_SEEDS + CULT_AND_ANIMATION_SEEDS):
+    with ThreadPoolExecutor(max_workers=14) as pool:
+        for res_list in pool.map(fetch_seed, sampled_seeds):
             for m in res_list:
                 mid = int(m["id"])
                 if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in candidates and not is_future_release(m.get("release_date") or ""):
                     candidates[mid] = (m, None)
 
-    for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
+    discover_page = random.randint(1, 5)
+    for tmdb_genre_id, hr_genre_label, min_votes in random.sample(TMDB_DISCOVER_GENRE_SEEDS, k=6):
         if time.monotonic() > phase_deadline_ts:
             break
-        for page in range(1, 3):
-            data = safe_get(
-                f"{TMDB_BASE}/discover/movie",
-                {
-                    "api_key": TMDB_API_KEY,
-                    "language": "hr-HR",
-                    "with_genres": tmdb_genre_id,
-                    "without_genres": "16,99",
-                    "include_adult": "false",
-                    "vote_count.gte": min_votes,
-                    "sort_by": "vote_count.desc",
-                    "page": page
-                }
-            )
-            for m in (data or {}).get("results", []):
-                mid = int(m["id"])
-                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in candidates and not is_future_release(m.get("release_date") or ""):
-                    if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
-                        candidates[mid] = (m, hr_genre_label)
+        data = safe_get(
+            f"{TMDB_BASE}/discover/movie",
+            {
+                "api_key": TMDB_API_KEY,
+                "language": "hr-HR",
+                "with_genres": tmdb_genre_id,
+                "without_genres": "16,99",
+                "include_adult": "false",
+                "vote_count.gte": min_votes,
+                "sort_by": "vote_count.desc",
+                "page": discover_page
+            }
+        )
+        for m in (data or {}).get("results", []):
+            mid = int(m["id"])
+            if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in candidates and not is_future_release(m.get("release_date") or ""):
+                if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
+                    candidates[mid] = (m, hr_genre_label)
 
-    print(f"  Provjera {len(candidates)} TMDB kandidata na Archive.org...", flush=True)
+    print(f"  Brza provjera uzorka od {len(candidates)} TMDB kandidata na Archive.org...", flush=True)
     added_tmdb = [0]
 
     def process_tmdb_cand(item):
@@ -1821,17 +1835,13 @@ def sync_ex_yu_and_cult_movies(
                     added_tmdb[0] += 1
 
     run_batched_with_deadline(
-        candidates.values(), process_tmdb_cand, phase_deadline_ts, max_workers=10, batch_size=35
+        candidates.values(), process_tmdb_cand, phase_deadline_ts, max_workers=14, batch_size=50
     )
 
     print(f"  Dodano {added_ex_yu[0]} Ex-Yu i {added_tmdb[0]} kultnih/žanrovskih filmova.", flush=True)
 
 
 def discover_layered_multi_file_bundles(sub_layers, existing_archive_ids, deadline_ts):
-    """
-    Traži ugniježđene multi-file pakete (poput J. Bond / DVD ISO kolekcija)
-    isključivo unutar odobrenih filmskih grana i njihovih podgrana.
-    """
     sub_layer1, sub_layer2 = sub_layers
     ordered_collections = (
         APPROVED_BRANCH_IDS
@@ -1849,38 +1859,37 @@ def discover_layered_multi_file_bundles(sub_layers, existing_archive_ids, deadli
             break
         q = (
             f'mediatype:movies AND collection:{col_id} AND {bundle_kw_clause} '
-            f'AND item_size:[4500000000 TO 999999999999] '
+            f'AND item_size:[4500000000 TO 150000000000] '
             f'AND -subject:"tv series" AND -subject:television AND -subject:news AND -subject:sports AND -subject:music'
         )
-        for sort_order in ("downloads desc", "addeddate desc"):
-            if time.monotonic() > deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": q,
+                "fl[]": ["identifier", "title", "downloads"],
+                "sort[]": "downloads desc",
+                "rows": 30,
+                "page": 1,
+                "output": "json",
+            },
+            timeout=10,
+        )
+        for doc in (data or {}).get("response", {}).get("docs", []):
+            ident = (doc.get("identifier") or "").strip()
+            if not ident or ident in seen_ids or ident in existing_archive_ids or f"bundle_checked:{ident}" in existing_archive_ids:
+                continue
+            raw_t = doc.get("title") or ident
+            if isinstance(raw_t, list):
+                raw_t = raw_t[0]
+            if BUNDLE_NOISE_RE.search(f"{ident} {raw_t}") or is_explicit_junk_item(ident, raw_t) or contains_hentai_or_adult(ident, raw_t) or contains_blocked_regional_or_arabic(ident, raw_t):
+                record_rejected_archive_id(f"bundle_checked:{ident}", raw_t, 0, existing_archive_ids)
+                continue
+            seen_ids.add(ident)
+            discovered.append(ident)
+            if len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
                 break
-            data = safe_get(
-                "https://archive.org/advancedsearch.php",
-                params={
-                    "q": q,
-                    "fl[]": ["identifier", "title", "downloads"],
-                    "sort[]": sort_order,
-                    "rows": 35,
-                    "page": 1,
-                    "output": "json",
-                },
-            )
-            for doc in (data or {}).get("response", {}).get("docs", []):
-                ident = (doc.get("identifier") or "").strip()
-                if not ident or ident in seen_ids or ident in existing_archive_ids or f"bundle_checked:{ident}" in existing_archive_ids:
-                    continue
-                raw_t = doc.get("title") or ident
-                if isinstance(raw_t, list):
-                    raw_t = raw_t[0]
-                if BUNDLE_NOISE_RE.search(f"{ident} {raw_t}") or is_explicit_junk_item(ident, raw_t) or contains_hentai_or_adult(ident, raw_t) or contains_blocked_regional_or_arabic(ident, raw_t):
-                    record_rejected_archive_id(f"bundle_checked:{ident}", raw_t, 0, existing_archive_ids)
-                    continue
-                seen_ids.add(ident)
-                discovered.append(ident)
-                if len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
-                    break
 
+    flush_rejected_buffer(force=True)
     return discovered
 
 
@@ -1894,10 +1903,6 @@ def sync_multi_file_movie_bundles(
     deadline_ts,
     all_movie_rows=None
 ):
-    """
-    4/4 ZAVRŠNI KORAK: Tek nakon što su svi očiti pojedinačni filmovi već dodani,
-    izvlači ugniježđene filmove iz multi-file paketa kojih još nema u katalogu.
-    """
     print("4/4 Završno izvlačenje preostalih filmova iz ugniježđenih multi-file paketa...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
@@ -1918,6 +1923,11 @@ def sync_multi_file_movie_bundles(
         if not videos:
             if not is_pinned:
                 record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
+            continue
+
+        # Preskoči divovske dumpove (npr. 500–2000 datoteka) prije bilo kakve obrade
+        if not is_pinned and len(videos) > MAX_VIDEOS_PER_BUNDLE * 2:
+            record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
         raw_bundle_title = arch_md.get("title") or bundle_ident
@@ -1947,7 +1957,7 @@ def sync_multi_file_movie_bundles(
             if stem_key not in deduped_files or score > deduped_files[stem_key][0]:
                 deduped_files[stem_key] = (score, v, clean_t, year)
 
-        if not is_pinned and not (3 <= len(deduped_files) <= 80):
+        if not is_pinned and not (3 <= len(deduped_files) <= MAX_VIDEOS_PER_BUNDLE):
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
@@ -2078,19 +2088,20 @@ def sync_multi_file_movie_bundles(
                     added_total[0] += 1
 
         timed_out = run_batched_with_deadline(
-            sorted_entries, process_bundle_entry, deadline_ts, max_workers=10, batch_size=35
+            sorted_entries, process_bundle_entry, deadline_ts, max_workers=14, batch_size=50
         )
         print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
         if not is_pinned and not timed_out:
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
 
+    flush_rejected_buffer(force=True)
     print(f"  Ukupno dodano iz multi-file paketa: {added_total[0]} filmova.", flush=True)
 
 
 def run_movies_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_MOVIES_SYNC_SECONDS
-    print("=== [FILMOVI] Pokretanje sinkronizacije igranih, animiranih i Ex-Yu filmova (prioritet: pojedinačni filmovi -> paketi) ===", flush=True)
+    print("=== [FILMOVI] Pokretanje brze sinkronizacije igranih, animiranih i Ex-Yu filmova ===", flush=True)
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
@@ -2121,19 +2132,20 @@ def run_movies_sync():
         tmdb_version_counts, tmdb_best_tier, phase2_deadline, all_movie_rows=all_movie_rows
     )
 
-    # 3/4: Dopuna Ex-Yu filmova, kultnih klasika i TMDB žanrova
+    # 3/4: Brzi uzorak Ex-Yu filmova, kultnih klasika i TMDB žanrova
     phase3_deadline = min(deadline_ts, time.monotonic() + PHASE3_CURATED_AND_EXYU_MAX_SECONDS)
     sync_ex_yu_and_cult_movies(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, phase3_deadline, all_movie_rows=all_movie_rows
     )
 
-    # 4/4: Na kraju, u preostalom vremenu, izvuci preostale filmove iz multi-file ISO/DVD paketa
+    # 4/4: Na kraju, u preostalom vremenu, izvuci preostale filmove iz multi-file ISO/DVD paketa (<= 75 videa)
     sync_multi_file_movie_bundles(
         sub_layers, existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
     )
 
+    flush_rejected_buffer(force=True)
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
     print(f"=== [FILMOVI] Završeno za {elapsed_mins:.1f} min! Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ({sum(tmdb_version_counts.values())} verzija) ===", flush=True)
 
