@@ -320,6 +320,9 @@ class MainActivity : ComponentActivity() {
                             onUpdateFound = { release ->
                                 updateErrorMessage = ""
                                 pendingUpdate = release
+                            },
+                            on18PlusChanged = { enabled ->
+                                homeViewModel.setAdultCategoryUnlocked(enabled)
                             }
                         )
                     }
@@ -336,7 +339,7 @@ class MainActivity : ComponentActivity() {
                                 text = "Dostupna nova verzija (${release.versionName})",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
+                                fontSize = 18.sp
                             )
                         },
                         text = {
@@ -345,17 +348,17 @@ class MainActivity : ComponentActivity() {
                                     Text(
                                         text = release.changelog,
                                         color = Color.LightGray,
-                                        fontSize = 15.sp
+                                        fontSize = 13.sp
                                     )
-                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(8.dp))
                                 }
                                 if (isDownloadingUpdate) {
                                     Text(
                                         text = "Preuzimanje ažuriranja: $downloadProgress%",
                                         color = Color.White,
-                                        fontSize = 14.sp
+                                        fontSize = 12.sp
                                     )
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
                                     LinearProgressIndicator(
                                         progress = { downloadProgress / 100f },
                                         color = Color.Red,
@@ -363,11 +366,11 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 if (updateErrorMessage.isNotBlank()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = updateErrorMessage,
                                         color = Color(0xFFFF6B6B),
-                                        fontSize = 14.sp
+                                        fontSize = 12.sp
                                     )
                                 }
                             }
@@ -398,14 +401,15 @@ class MainActivity : ComponentActivity() {
                                 Text(
                                     text = if (isDownloadingUpdate) "Preuzimanje..." else "Ažuriraj",
                                     color = Color.Red,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
                                 )
                             }
                         },
                         dismissButton = {
                             if (!isDownloadingUpdate) {
                                 TextButton(onClick = { pendingUpdate = null }) {
-                                    Text("Kasnije", color = Color.LightGray)
+                                    Text("Kasnije", color = Color.LightGray, fontSize = 13.sp)
                                 }
                             }
                         }
