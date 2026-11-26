@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts)'
+        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search)'
         required: true
         default: 'all'
         type: choice
@@ -16,6 +16,7 @@ on:
           - movies
           - series_cartoons
           - concerts
+          - directors_search
 
 permissions:
   contents: write
@@ -101,9 +102,37 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/sync_concerts.py
 
+  search-directors-archive:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'directors_search'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl
+      - name: Search Directors Filmography on TMDB & Archive.org
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/search_directors_archive.py
+      - name: Upload Directors Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: directors-archive-rezultati
+          path: |
+            directors.xlsx
+            directors_traži_rezultati.csv
+            directors_pronađeni_filmovi.csv
+
   keep-repo-alive:
     if: always()
-    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts]
+    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
