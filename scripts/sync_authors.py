@@ -87,7 +87,7 @@ AUTHORS = [
     ("Greydon Clark", "filmography-greydon-clark"),
     ("Bill Zebub", "filmography-bill-zebub"),
     ("Sean Baker", "the.-florida.-project.-2017.2160p.-webrip.-3500-mb.-ddp-5.1.x-264-galaxy-rg"),
-    ("PTA Filmography", "boogie-nights-1997_202604"),
+    ("Paul Thomas Anderson", "boogie-nights-1997"),
     ("Andy Warhol", "andy-warhol-complete-films-collection"),
     ("Leos Carax", "filmography-leos-carax"),
     ("Volker Schlöndorff", "filmography-volker-schlondorff"),
@@ -105,7 +105,138 @@ AUTHORS = [
     ("Sion Sono", "filmography-sion-sono"),
     ("Peter Greenaway", "filmography-peter-greenaway"),
     ("Alan Clarke", "filmography-alan-clarke"),
+    # 12 novih redatelja iz pretrage
+    ("Martin Scorsese", "taxi-driver-1976-4-k-remastered-1080p.bluray.dts-hd.ma.x-264"),
+    ("Steven Spielberg", "jaws-35mm-1080p-avc-aac-2.0"),
+    ("Quentin Tarantino", "reservoir-dogs-1992_202605"),
+    ("Stanley Kubrick", "2001-a-space-odyssey-1968_202407"),
+    ("Christopher Nolan", "memento.-2000.1080p.-blu-ray.x-264.-yify_202510"),
+    ("Ridley Scott", "blade-runner-1982_202601"),
+    ("Braća Coen", "fargo-1996_202605"),
+    ("Pedro Almodóvar", "all-about-my-mother"),
+    ("Denis Villeneuve", "incendies.-2010.1080p"),
+    ("James Cameron", "the-terminator-1984_202606"),
+    ("Michael Haneke", "funny-games_202511"),
 ]
+
+# Provjereni pojedinačni Archive.org zapisi iz pretrage za svakog novog redatelja
+VERIFIED_AUTHOR_ARCHIVE_ITEMS = {
+    "Martin Scorsese": [
+        (33878, "boxcar-bertha-1972_202406"),
+        (103, "taxi-driver-1976-4-k-remastered-1080p.bluray.dts-hd.ma.x-264"),
+        (262, "the-king-of-comedy_202512"),
+        (10843, "after-hours-t-00"),
+        (11873, "pO65tJRUkNO4"),
+        (11051, "The-Last-Temptation-of-Christ_1988_AI_1080p.BluRay.10b.HEVC.DTS-HD.MA.5.1_BLUDUA"),
+        (1598, "cape.-fear.-1991.2160p.-4-k.-web.x-265.10bit.-aac-5.1-yts.-mx"),
+        (524, "casino_202610"),
+        (398978, "the-irishman-2019-720p-blu-ray"),
+    ],
+    "Steven Spielberg": [
+        (839, "duel.-1971.1080p.-blu-ray.x-265"),
+        (578, "jaws-35mm-1080p-avc-aac-2.0"),
+        (840, "close-encounter-of-the-third-kind-1977-the-special-edition-001"),
+        (601, "e.-t.-the-extra-terrestrial-1982-2002_202611"),
+        (10110, "empire.of.the.-sun.-1987.1080p.-blu-ray.x-264.-aac-etrg"),
+        (11352, "always-1989"),
+        (329, "jurassic.-park.-1993.1080p.-uhd.-blu-ray.x-265.-dd-5.1-pahe.in"),
+        (857, "saving-private-ryan_202607"),
+        (640, "catch-me-if-you-can-2002_20261013"),
+        (180, "minority-report_202511"),
+        (74, "war-of-the-worlds_202608"),
+        (17578, "the.-adventures.of.-tintin.-2011.1080p.-blu-ray.-h-264.-aac-rarbg"),
+    ],
+    "Quentin Tarantino": [
+        (500, "reservoir-dogs-1992_202605"),
+        (24, "kill-bill-vol.-1-2003"),
+        (393, "kill-bill-vol.-2-2004_202605"),
+        (1991, "death-proof-2007"),
+        (16869, "inglourious-basterds-2009_202605"),
+        (68718, "django-unchained-2012_202605"),
+        (273248, "the-hateful-eight-extended-netflix"),
+        (466272, "once-upon-a-time...-in-hollywood-d-1-t-00"),
+    ],
+    "Stanley Kubrick": [
+        (11474, "turner_video_15342"),
+        (247, "the.-killing.-1956"),
+        (975, "paths-of-glory_202204"),
+        (935, "dr.-fantastico"),
+        (62, "2001-a-space-odyssey-1968_202407"),
+        (185, "a-clockwork-orange-1971-2160p"),
+        (3175, "barry.-lyndon.-1975.-1080p.-BRRip.-x264.-YIFY"),
+        (694, "1980-stanley-kubrick-the-shining"),
+        (600, "1987-full-metal-jacket-stanley-kubrick"),
+        (345, "Eyes-Wide-Shut_1999_AI_1080p.BluRay.10b.HEVC.DTS-HD.MA.5.1_BLUDUAINE"),
+    ],
+    "Christopher Nolan": [
+        (77, "memento.-2000.1080p.-blu-ray.x-264.-yify_202510"),
+    ],
+    "Ridley Scott": [
+        (78, "blade-runner-1982_202601"),
+        (3167, "black-rain-1989-1080p-pvca"),
+        (1541, "vlc-record-2024-08-06-23h16m08s-dvd____D__-"),
+        (1492, "1492-conquest-of-paradise-1992"),
+        (855, "black.-hawk.-down.-2001.-extended.-1080p.-blu-ray.-ddp-5.1.x-265.10bit-galaxy-rg-265"),
+        (9740, "hannibal--2001--1920x1040"),
+        (1495, "kingdom-of-heaven_202404"),
+        (70981, "prometheus-2012_202606"),
+    ],
+    "Braća Coen": [
+        (11368, "8202084551199"),
+        (378, "raising-arizona-sub-esp"),
+        (275, "fargo-1996_202605"),
+        (115, "the.-big.-lebowski.-1998.-remastered.-1080p.-blu-ray.-h-264.-aac-rarbg_202610"),
+        (134, "2000-o-brother-where-art-thou"),
+        (44264, "true-grit-2010_202604"),
+        (591538, "the-tragedy-of-macbeth"),
+    ],
+    "Pedro Almodóvar": [
+        (36697, "pepi-luci-bom-y-otras-chicas-del-monton-1980-dvd-rip-high-code"),
+        (34554, "labyrinth.of.-passion.-1982.-spanish.-1080p.-webrip.x-265-vxt"),
+        (30315, "entre-tinieblas-1983-dark-habits-bdrip-1080p-high-code"),
+        (26569, "que-he-hecho-yo-para-merecer-esto"),
+        (24645, "matador.-1986.-spanish.-1080p.-blu-ray.x-265-vxt"),
+        (4274, "women-on-the-verge"),
+        (8217, "tacones-lejanos-1991-high-heels-1080p-high-code"),
+        (8226, "kika-1993"),
+        (11362, "la-flor-de-mi-secreto-1995-bdrip-1080p-high-code"),
+        (10388, "carne-tremula-1997"),
+        (99, "all-about-my-mother"),
+        (64, "hable-con-ella-2002"),
+        (72, "la-mala-educacion-2004"),
+        (219, "volver-2006-esp"),
+        (21028, "los-abrazos-rotos-2009-broken-embraces-bdrip-1080p-high-code"),
+        (63311, "the-skin-i-live-in-2011-esp"),
+        (139567, "los-amantes-pasajeros-2013"),
+    ],
+    "Paul Thomas Anderson": [
+        (4995, "boogie-nights-1997"),
+        (8052, "hfdrwez-ko-xxh"),
+        (334, "magnolia-1999"),
+        (8051, "punchdrunklove2002"),
+        (7345, "there-will-be-blood-2007-daniel-day-lewis-paul-dano-based-on-oil-by-upton-sinclair_202409"),
+    ],
+    "Denis Villeneuve": [
+        (46738, "incendies.-2010.1080p"),
+        (146233, "prisoners_202511"),
+    ],
+    "James Cameron": [
+        (218, "the-terminator-1984_202606"),
+        (679, "aliens-1986_202606"),
+        (2756, "the-abyss-1989-hd"),
+        (280, "terminator-2-judgment-day-1991-blu-ray-v-2-720p-fzmovies.net-4beb-52c-21b-25a-27018a-52684ae-967a-6d"),
+        (36955, "true-lies-1994_202610"),
+        (597, "titanic-1997-35mm-scan"),
+    ],
+    "Michael Haneke": [
+        (26444, "the-seventh-continent-1989-pvca"),
+        (42793, "71-fragmente-einer-chronologie-des-zufalls-michael-haneke-1994-trilogy-part-iii-"),
+        (10234, "funny-games_202511"),
+        (26564, "michael-haneke-1997-the-castle-vidomon"),
+        (1717, "the-piano-teacher-2001"),
+        (86837, "VILIBAZMIO-amour-2012"),
+    ],
+}
 
 CURATED_AUTHOR_EXTRAS = {
     "David Lynch": [
@@ -219,18 +350,29 @@ def extract_variant_label(filename):
     return ""
 
 
+def get_author_search_names(author_name):
+    if author_name == "PTA Filmography":
+        return ["Paul Thomas Anderson"]
+    if author_name in ("Braća Coen", "Braća Coen (Joel i Ethan)"):
+        return ["Joel Coen", "Ethan Coen"]
+    return [author_name]
+
+
 def author_matches_tmdb_credits(author_name, details):
     if not details:
         return False
-    search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
-    tokens = [t for t in re.sub(r"[^\w\s]", " ", search_person.lower()).split() if len(t) >= 4]
-    if not tokens:
+    search_names = get_author_search_names(author_name)
+    surnames = set()
+    for s_person in search_names:
+        tokens = [t for t in re.sub(r"[^\w\s]", " ", s_person.lower()).split() if len(t) >= 4]
+        if tokens:
+            surnames.add(tokens[-1])
+    if not surnames:
         return False
-    surname = tokens[-1]
     people = (details.get("directors") or []) + (details.get("all_crew") or []) + (details.get("cast") or [])
     for p in people:
         p_words = set(re.sub(r"[^\w\s]", " ", str(p).lower()).split())
-        if surname in p_words:
+        if surnames & p_words:
             return True
     return False
 
@@ -352,7 +494,9 @@ def tmdb_enrich_author_movie(title, year=0, author_name="", filmography_credits=
 
 
 def fetch_wiki_bio_and_photo(author_name):
-    search_name = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    search_name = "Coen brothers" if author_name in ("Braća Coen", "Braća Coen (Joel i Ethan)") else (
+        "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
+    )
     encoded = urllib.parse.quote(search_name.replace(" ", "_"))
     bio = ""
     photo = ""
@@ -391,62 +535,63 @@ def compute_credits_score(credits_list):
 
 def fetch_author_tmdb_profile(author_name, archive_id):
     """Dohvaća portret, biografiju, TMDB indeks poznatosti i popis filmova iz filmografije autora."""
-    search_person = "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
-    person_res = safe_get(
-        f"{TMDB_BASE}/search/person",
-        {"api_key": TMDB_API_KEY, "query": search_person, "language": "hr-HR"}
-    )
-    candidates = (person_res or {}).get("results") or []
-    person = None
-    if candidates:
-        if search_person not in {"Elvis Presley", "Jackie Collins"}:
-            directors_only = [p for p in candidates if p.get("known_for_department") == "Directing"]
-            pool_list = directors_only if directors_only else candidates
-        else:
-            pool_list = candidates
-        person = max(pool_list, key=lambda p: float(p.get("popularity") or 0.0))
-
+    search_names = get_author_search_names(author_name)
     photo_url = ""
     bio_hr = ""
     fame_score = 0.0
-    filmography_credits = []
+    dedup_credits = {}
 
-    if person:
-        if person.get("profile_path"):
-            photo_url = f"{TMDB_IMG_POSTER}{person['profile_path']}"
-        details = safe_get(
-            f"{TMDB_BASE}/person/{person['id']}",
-            {"api_key": TMDB_API_KEY, "language": "hr-HR", "append_to_response": "movie_credits"}
+    for search_person in search_names:
+        person_res = safe_get(
+            f"{TMDB_BASE}/search/person",
+            {"api_key": TMDB_API_KEY, "query": search_person, "language": "hr-HR"}
         )
-        bio_hr = ((details or {}).get("biography") or "").strip()
-        person_pop = float((details or {}).get("popularity") or person.get("popularity") or 0.0)
+        candidates = (person_res or {}).get("results") or []
+        person = None
+        if candidates:
+            if search_person not in {"Elvis Presley", "Jackie Collins"}:
+                directors_only = [p for p in candidates if p.get("known_for_department") == "Directing"]
+                pool_list = directors_only if directors_only else candidates
+            else:
+                pool_list = candidates
+            person = max(pool_list, key=lambda p: float(p.get("popularity") or 0.0))
 
-        credits = (details or {}).get("movie_credits") or {}
-        crew_list = credits.get("crew") or []
-        cast_list = credits.get("cast") or []
+        if person:
+            if not photo_url and person.get("profile_path"):
+                photo_url = f"{TMDB_IMG_POSTER}{person['profile_path']}"
+            details = safe_get(
+                f"{TMDB_BASE}/person/{person['id']}",
+                {"api_key": TMDB_API_KEY, "language": "hr-HR", "append_to_response": "movie_credits"}
+            )
+            if not bio_hr:
+                bio_hr = ((details or {}).get("biography") or "").strip()
+            person_pop = float((details or {}).get("popularity") or person.get("popularity") or 0.0)
 
-        directed = [c for c in crew_list if c.get("job") == "Director"]
-        directing_score = compute_credits_score(directed)
-        other_score = compute_credits_score(crew_list + cast_list) * 0.65
-        fame_score = (person_pop * 120.0) + max(directing_score, other_score)
+            credits = (details or {}).get("movie_credits") or {}
+            crew_list = credits.get("crew") or []
+            cast_list = credits.get("cast") or []
 
-        raw_pool = directed if (directed and search_person not in {"Elvis Presley", "Jackie Collins"}) else (directed + crew_list + cast_list)
-        dedup_credits = {}
-        for c in raw_pool:
-            mid = c.get("id")
-            if not mid or c.get("adult"):
-                continue
-            rel_d = c.get("release_date") or ""
-            if is_future_release(rel_d):
-                continue
-            vc = int(c.get("vote_count") or 0)
-            if mid not in dedup_credits or vc > int(dedup_credits[mid].get("vote_count") or 0):
-                dedup_credits[mid] = c
+            directed = [c for c in crew_list if c.get("job") == "Director"]
+            directing_score = compute_credits_score(directed)
+            other_score = compute_credits_score(crew_list + cast_list) * 0.65
+            fame_score = max(fame_score, (person_pop * 120.0) + max(directing_score, other_score))
 
-        filmography_credits = sorted(
-            dedup_credits.values(),
-            key=lambda x: (-int(x.get("vote_count") or 0), -float(x.get("popularity") or 0.0))
-        )[:35]
+            raw_pool = directed if (directed and search_person not in {"Elvis Presley", "Jackie Collins"}) else (directed + crew_list + cast_list)
+            for c in raw_pool:
+                mid = c.get("id")
+                if not mid or c.get("adult"):
+                    continue
+                rel_d = c.get("release_date") or ""
+                if is_future_release(rel_d):
+                    continue
+                vc = int(c.get("vote_count") or 0)
+                if mid not in dedup_credits or vc > int(dedup_credits[mid].get("vote_count") or 0):
+                    dedup_credits[mid] = c
+
+    filmography_credits = sorted(
+        dedup_credits.values(),
+        key=lambda x: (-int(x.get("vote_count") or 0), -float(x.get("popularity") or 0.0))
+    )[:35]
 
     if not bio_hr or not photo_url:
         wiki_bio, wiki_photo = fetch_wiki_bio_and_photo(author_name)
@@ -720,6 +865,44 @@ def run_authors_sync():
                         catalog_arch_id, mid, tmdb_det, final_year, item["stream_url"], file_rt, item["filename"]
                     ):
                         promoted_for_author += 1
+
+        # Korak B0: Provjereni Archive.org zapisi iz tablice pretrage redatelja
+        for verified_tmdb_id, verified_arch_id in VERIFIED_AUTHOR_ARCHIVE_ITEMS.get(author_name, []):
+            if verified_tmdb_id in found_tmdb_ids:
+                continue
+            tmdb_det = get_tmdb_movie_details(verified_tmdb_id)
+            if not tmdb_det or not tmdb_det["poster_path"]:
+                continue
+            final_year = extract_year_from_text(tmdb_det["release_date"])
+            title_hr = tmdb_det["hr_title"] or tmdb_det["orig_title"]
+            dedup_key = (title_hr.lower(), final_year)
+            if dedup_key in unique_movie_rows:
+                found_tmdb_ids.add(verified_tmdb_id)
+                continue
+
+            vids, v_md = get_archive_item_details(verified_arch_id, min_size_mb=120, allow_mkv=True)
+            if not vids:
+                continue
+            best_v = pick_best_video_file(vids)
+            if is_foreign_dub_without_english(v_md, verified_arch_id, best_v["filename"], tmdb_det["original_language"]):
+                continue
+            if not verify_stream_url_playable(best_v["stream_url"]):
+                continue
+
+            found_tmdb_ids.add(verified_tmdb_id)
+            unique_movie_rows[dedup_key] = {
+                "author_id": author_db_id,
+                "title": title_hr,
+                "release_year": final_year,
+                "stream_url": best_v["stream_url"],
+                "poster_url": f"{TMDB_IMG_POSTER}{tmdb_det['poster_path']}",
+                "description_hr": tmdb_det["overview_hr"]
+            }
+            extra_found_count += 1
+            if promote_movie_to_catalog(
+                verified_arch_id, verified_tmdb_id, tmdb_det, final_year, best_v["stream_url"], best_v["duration_mins"], best_v["filename"]
+            ):
+                promoted_for_author += 1
 
         # Korak B1: Ručno odobrena specijalna izdanja za autora (npr. sve 3 verzije Dine za Davida Lyncha)
         for query_str, extra_tmdb_id, custom_title, min_mins in CURATED_AUTHOR_EXTRAS.get(author_name, []):
