@@ -51,7 +51,7 @@ if hasattr(sc, "session"):
     sc.session = _HTTP_SESSION
 
 MAX_MOVIES_SYNC_SECONDS = 38 * 60
-PHASE1_AUDIT_MAX_SECONDS = 6 * 60
+PHASE1_AUDIT_MAX_SECONDS = 7 * 60
 PHASE2_DIRECT_MOVIES_MAX_SECONDS = 17 * 60
 PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 7 * 60
 
@@ -192,8 +192,6 @@ BAD_BUNDLE_PREFIXES = (
     "asian-beauties,tmdb-",
     "FFTGTG_Web_DVD,tmdb-",
     "oldhackerinfosecvideos,tmdb-",
-    "night_of_the_living_dead_dvd,tmdb-660982",
-    "The_Scar_1948,tmdb-565310",
     "Grundeinkommen,tmdb-",
     "Opti-Archive,tmdb-",
 )
@@ -202,15 +200,18 @@ BAD_TITLE_MARKER_RE = re.compile(
     r"(?i)(?:dts\s*blu-ray|music\s*demo\s*disc|demo\s*disc\s*\d+|screen\s*snapshots|"
     r"observational\s*series|persian\s*series|barney'?s?\s+|my\s*little\s*pony\s*live|"
     r"bear\s*in\s*the\s*big\s*blue\s*house\s*live|asian\s*beauties|krotoplaxx|^untitled\b|"
-    r"mickey\s*mouse\s*club|hardy\s*boys|broncos\s*vs|seahawk)"
+    r"mickey\s*mouse\s*club|hardy\s*boys|broncos\s*vs|seahawks?|soultrain|manlyphall)"
 )
 
-# Stroga detekcija serija (1x02, S01E01, Ep. 3) i sportskih prijenosa (20260404 ... vs ...)
-SERIES_EPISODE_MARKER_RE = re.compile(
-    r"(?i)(?:\b\d{1,2}x\d{2,3}\b|\bs\d{1,2}[\s._-]*e\d{1,3}\b|\bepisode[\s._-]*\d+\b|\bseason[\s._-]*\d+\b)"
+# Samo stvarne TV vijesti i sportski prijenosi (bez diranja 'Alien vs Predator', 'Freddy vs Jason', 'Police Academy' itd.)
+TV_NEWS_OR_SPORTS_ID_RE = re.compile(
+    r"(?i)(?:^(?:cspan|foxnews|msnbc|cnn|dw_|bbcnews|rt_|aljazeera)|"
+    r"\b(?:broncos|seahawks|nfl|nba|mlb|nhl|ufc|wwe)\b)"
 )
-SPORTS_OR_BROADCAST_DATE_RE = re.compile(
-    r"(?i)(?:^\s*20\d{6}\b|\bvs\.?\b|\bbroncos\b|\bseahawks?\b|\bnfl\b|\bnba\b|\bmlb\b|\bnhl\b|\bufc\b|\bwwe\b)"
+
+# Oznaka epizode serije (samo čisti formati poput 1x02 ili S01E01, bez hvatanja 'x-264' ili 'x-265'!)
+STRICT_EPISODE_RE = re.compile(
+    r"(?i)(?:\b\d{1,2}x\d{2,3}\b|\bs\d{1,2}e\d{1,3}\b)"
 )
 
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
@@ -324,11 +325,31 @@ def _word_prefixes(words):
     return {w[:4] for w in words if len(w) >= 4} | {w for w in words if len(w) < 4}
 
 
+def extract_clean_film_year_from_filename(text):
+    """
+    Izvlači pravu filmsku godinu iz naziva datoteke/identifikatora, ali IGNORIRA:
+      - sufikse datuma uploada na Archive.org-u (_202209, _20260822, 2026-02-04, 2023-07-10)
+      - oznake rezolucije (1080p, 720p) i kodeka (x264, x265)
+    """
+    if not text:
+        return 0
+    s = unquote(str(text))
+    # Ukloni pune datume YYYY-MM-DD, YYYYMMDD i Archive.org sufikse uploada _YYYYMM / _YYYYMMDD
+    s = re.sub(r"\b20\d{2}[-_]\d{2}(?:[-_]\d{2})?\b", " ", s)
+    s = re.sub(r"\b20\d{6}\b", " ", s)
+    s = re.sub(r"_20\d{4,6}\b", " ", s)
+    # Ukloni rezolucije i kodeke
+    s = re.sub(r"(?i)\b(?:1080p|720p|480p|2160p|x264|x265|h264|h265)\b", " ", s)
+    # Traži godinu u zagradama (1985) ili odvojenu točkom/crticom/razmakom
+    m = re.search(r"(?:^|[\s._(\[-])(19\d{2}|20\d{2})(?:$|[\s._)\]-])", s)
+    return int(m.group(1)) if m else 0
+
+
 def is_explicit_junk_item(ident, raw_title, extra_text=""):
     blob = f"{ident} {raw_title} {extra_text}"
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
-    if SERIES_EPISODE_MARKER_RE.search(blob) or SPORTS_OR_BROADCAST_DATE_RE.search(str(raw_title or "")) or SPORTS_OR_BROADCAST_DATE_RE.search(str(extra_text or "")):
+    if STRICT_EPISODE_RE.search(blob) or TV_NEWS_OR_SPORTS_ID_RE.search(str(ident or "")) or TV_NEWS_OR_SPORTS_ID_RE.search(str(raw_title or "")):
         return True
     return bool(EXPLICIT_JUNK_RE.search(blob))
 
@@ -339,7 +360,6 @@ def is_runtime_mismatch(tmdb_mins, arch_mins, is_short_allowed=False, size_mb=0)
     s_mb = float(size_mb or 0)
 
     if a_mins <= 0:
-        # Kad Archive.org ne prijavi trajanje, dugometražni film ne smije imati sitnu datoteku (npr. 2-min trailer od 231 MB)
         if not is_short_allowed and t_mins >= 75 and 0 < s_mb < 350:
             return True
         return False
@@ -357,17 +377,16 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
     arch_title = str((arch_md or {}).get("title") or "")
     arch_creator = str((arch_md or {}).get("creator") or "")
     arch_desc = str((arch_md or {}).get("description") or "")
-    arch_year_blob = f"{(arch_md or {}).get('year') or ''} {(arch_md or {}).get('date') or ''} {arch_title} {chosen_filename or ''}"
 
-    # 1. Zaključavanje godine: ako datoteka ili metapodaci na Archive.org-u nose godinu (npr. 1985),
-    # TMDB film mora biti iz te godine (+/- 1) — sprječava spajanje 'The Protector (1985)' na 'Protector (2026)'
+    # Provjera godine samo iz čistog naslova/datoteke (bez datuma uploada)
     if rel_year > 0:
-        years_found = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", unquote(arch_year_blob))]
-        if years_found and not any(abs(y - rel_year) <= 1 for y in years_found):
+        file_y = extract_clean_film_year_from_filename(chosen_filename or "")
+        title_y = extract_clean_film_year_from_filename(arch_title)
+        explicit_y = file_y or title_y
+        if explicit_y > 0 and abs(explicit_y - rel_year) > 1:
             return False
 
-    # 2. Provjera je li zapis zapravo serija s epizodama (npr. 1x02, S01E01)
-    if SERIES_EPISODE_MARKER_RE.search(f"{arch_title} {chosen_filename or ''}"):
+    if STRICT_EPISODE_RE.search(f"{arch_title} {chosen_filename or ''}"):
         return False
 
     expected_words = set()
@@ -380,7 +399,7 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
     if expected_prefixes and arch_meta_prefixes and not (expected_prefixes & arch_meta_prefixes):
         desc_words = _tokenize_words(f"{arch_desc} {arch_creator}")
         desc_prefixes = _word_prefixes(desc_words)
-        year_ok = (rel_year > 0 and str(rel_year) in arch_year_blob)
+        year_ok = (rel_year > 0 and str(rel_year) in f"{arch_title} {chosen_filename or ''}")
         if not (year_ok and (expected_prefixes & desc_prefixes)):
             return False
 
@@ -395,7 +414,7 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
             return False
         return True
 
-    # 3. Zabrana zamke jednorječnog podskupa (npr. TMDB='Mouse'/'Runner'/'Madden' vs Archive='The Mickey Mouse Club - Hardy Boys')
+    # Zabrana zamke jednorječnog podskupa (npr. TMDB='Mouse'/'Runner'/'Madden' vs Archive='The Mickey Mouse Club - Hardy Boys')
     shortest_expected = min((_tokenize_words(t) for t in expected_titles if _tokenize_words(t)), key=len, default=set())
     if len(shortest_expected) == 1 and len(stem_tokens) >= 4:
         credit_blob = f"{arch_desc} {arch_creator}".lower()
@@ -741,7 +760,7 @@ def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=14, bat
 
 def extract_archive_title_candidates(raw_title, ident):
     raw_str = str(raw_title or "").strip()
-    year_in_title = extract_year_from_text(raw_str) or extract_year_from_text(ident)
+    year_in_title = extract_clean_film_year_from_filename(raw_str) or extract_clean_film_year_from_filename(ident)
 
     trimmed_sep = re.split(r"\s+(?:-|–|—|\||/)\s+", raw_str, maxsplit=1)[0].strip()
     trimmed_credit = re.split(
@@ -860,7 +879,7 @@ def is_episodic_or_multi_movie_container(videos):
     distinct_stems = set()
     for v in videos:
         fn = v.get("filename") or ""
-        if SERIES_EPISODE_MARKER_RE.search(fn):
+        if STRICT_EPISODE_RE.search(fn):
             ep_hits += 1
         stem = re.sub(r"(?i)\.ia$", "", os.path.splitext(os.path.basename(fn))[0]).lower()
         if stem:
@@ -988,6 +1007,43 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
     return best_ident, best_file, best_mins
 
 
+def try_rematch_row_by_filename_and_year(row, expected_year):
+    """
+    Ako je postojeći video zapis zapravo pravi film, ali je bio spojen na krivu godinu/TMDB film
+    (npr. 'the-protector-1985' pod 'Protector (2026)' ili 'the-beast-bertrand-bonello-2023' pod 2026),
+    pronalazi pravi TMDB film za tu godinu i ažurira redak umjesto da ga briše!
+    """
+    ident = row.get("archive_id") or ""
+    stream_url = row.get("stream_url") or ""
+    raw_stem = unquote(os.path.splitext(os.path.basename(stream_url))[0]) if stream_url else ident
+    clean_q, parsed_y = clean_filename_to_title(raw_stem)
+    if not clean_q or len(clean_q) < 2:
+        clean_q, _ = clean_filename_to_title(ident.split(",tmdb-")[0])
+    target_y = expected_year or parsed_y
+    if not clean_q or target_y <= 0:
+        return None
+
+    for lang_code in ("hr-HR", "en-US"):
+        res = safe_get(
+            f"{TMDB_BASE}/search/movie",
+            params={
+                "api_key": TMDB_API_KEY,
+                "query": clean_q,
+                "year": target_y,
+                "language": lang_code,
+                "include_adult": "false",
+            },
+        )
+        hits = (res or {}).get("results", [])
+        for h in hits[:4]:
+            hy = extract_year_from_text(h.get("release_date") or "")
+            if hy > 0 and abs(hy - target_y) <= 1:
+                details = get_tmdb_movie_details(int(h["id"]))
+                if details and details.get("poster_path"):
+                    return details
+    return None
+
+
 def audit_and_repair_existing_movies(
     all_movie_rows,
     existing_archive_ids,
@@ -997,9 +1053,33 @@ def audit_and_repair_existing_movies(
     tmdb_best_tier,
     phase_deadline_ts
 ):
+    # 1. Odmah vrati is_valid=True za prave filmove koji su u prošlom runu lažno odbačeni (imaju tmdb_id > 0 i stream_url)
+    restored_count = 0
+    for r in all_movie_rows:
+        if r.get("is_valid", True):
+            continue
+        mid = int(r.get("tmdb_id") or 0)
+        s_url = r.get("stream_url") or ""
+        ident = r.get("archive_id") or ""
+        title = r.get("title") or ""
+        if mid > 0 and s_url.startswith("http"):
+            if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title) or BAD_TITLE_MARKER_RE.search(s_url):
+                continue
+            if TV_NEWS_OR_SPORTS_ID_RE.search(ident) or STRICT_EPISODE_RE.search(s_url):
+                continue
+            supabase_patch_row("catalog_items", r["id"], {"is_valid": True})
+            r["is_valid"] = True
+            seen_tmdb_ids.add(mid)
+            tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
+            restored_count += 1
+
+    if restored_count > 0:
+        print(f"  ♻ Vraćeno {restored_count} pravih filmova u katalog koji su ranije bili pogrešno skriveni.", flush=True)
+
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
     print(f"1/4 Brza provjera {len(valid_rows)} postojećih filmova u bazi...", flush=True)
     replaced_count = [0]
+    rematched_count = [0]
     removed_count = [0]
     translated_count = [0]
     ex_yu_tagged_count = [0]
@@ -1032,23 +1112,46 @@ def audit_and_repair_existing_movies(
         base_ident = ident.split(",tmdb-")[0].strip()
 
         if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title) or BAD_TITLE_MARKER_RE.search(stream_url):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešno mapirani zapis: {title} ({ident})")
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen ne-filmski zapis: {title} ({ident})")
             return
 
-        # Provjera zaključa li se godina iz streama s godinom filma u bazi (npr. The Protector (1985) pod Protector (2026))
+        if TV_NEWS_OR_SPORTS_ID_RE.search(base_ident) or STRICT_EPISODE_RE.search(stream_url):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena TV emisija/serija iz filmova: {title} ({ident})")
+            return
+
+        # Ako datoteka nosi jasnu godinu (npr. 1985 ili 2023) koja se razlikuje od godine u bazi (npr. 2026),
+        # NE brišemo zapis — nego ga prebacujemo na pravi samostalni film iz te godine!
         if rel_year > 0 and stream_url:
-            url_years = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", unquote(stream_url))]
-            if url_years and not any(abs(y - rel_year) <= 1 for y in url_years):
-                mark_row_invalid(
-                    row,
-                    tmdb_id,
-                    f"  ✕ Uklonjen zapis zbog pogrešne godine datoteke ({url_years[0]} vs {rel_year}): {title} ({ident})"
-                )
-                return
-
-        if SERIES_EPISODE_MARKER_RE.search(stream_url) or SPORTS_OR_BROADCAST_DATE_RE.search(unquote(os.path.basename(stream_url))):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena serija/sportski zapis iz filmova: {title} ({ident})")
-            return
+            clean_file_y = extract_clean_film_year_from_filename(os.path.basename(stream_url)) or extract_clean_film_year_from_filename(base_ident)
+            if clean_file_y > 0 and abs(clean_file_y - rel_year) > 1:
+                new_details = try_rematch_row_by_filename_and_year(row, clean_file_y)
+                if new_details:
+                    new_mid = int(new_details["tmdb_id"])
+                    new_year = extract_year_from_text(new_details["release_date"]) or clean_file_y
+                    new_genres = resolve_movie_genres(new_details, new_details["hr_title"])
+                    supabase_patch_row(
+                        "catalog_items",
+                        row_id,
+                        {
+                            "tmdb_id": new_mid,
+                            "title": new_details["hr_title"],
+                            "release_year": new_year,
+                            "genres": new_genres,
+                            "rating": round(new_details["vote_average"], 1),
+                            "description_hr": new_details["overview_hr"],
+                            "poster_url": f"{TMDB_IMG_POSTER}{new_details['poster_path']}",
+                            "backdrop_url": f"{TMDB_IMG_BACKDROP}{new_details['backdrop_path']}" if new_details["backdrop_path"] else "",
+                            "tmdb_runtime": new_details["runtime"],
+                        },
+                    )
+                    with state_lock:
+                        seen_tmdb_ids.add(new_mid)
+                        rematched_count[0] += 1
+                    print(
+                        f"  🔧 Ispravljen film na pravi naslov i godinu: {title} ({rel_year}) -> {new_details['hr_title']} ({new_year})",
+                        flush=True,
+                    )
+                    return
 
         is_cartoon_row = any(
             any(k in g.lower() for k in ("animiran", "crtić", "crtic", "cartoon", "disney", "looney"))
@@ -1072,7 +1175,7 @@ def audit_and_repair_existing_movies(
         is_doc_row = any("dokumentar" in g.lower() for g in existing_genres)
 
         if tmdb_id <= 0 and not is_ex_yu_row and not is_curated:
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen nepoznat/kolekcijski zapis bez TMDB-a: {title} ({base_ident})")
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen nepoznat zapis bez TMDB-a: {title} ({base_ident})")
             return
 
         if not is_curated:
@@ -1089,11 +1192,6 @@ def audit_and_repair_existing_movies(
 
         if is_mismatched_modern_dune(tmdb_id, base_ident, stream_url, title):
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {title} ({base_ident})")
-            return
-
-        # Provjeri nedostupne / zaključane streamove (401/403/404 na Archive.org-u)
-        if stream_url and not verify_stream_url_playable(stream_url):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen nedostupan/zaključan video zapis: {title} ({ident})")
             return
 
         has_non_latin_title = bool(NON_LATIN_TITLE_RE.search(title))
@@ -1242,7 +1340,8 @@ def audit_and_repair_existing_movies(
         run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=8, batch_size=10)
 
     print(
-        f"  Provjera završena: {replaced_count[0]} zamijenjeno originalom, "
+        f"  Provjera završena: {rematched_count[0]} ispravljeno na pravi film, "
+        f"{replaced_count[0]} zamijenjeno originalom, "
         f"{hd_upgraded_count[0]} zamijenjeno boljom kopijom umjesto VHS-a, "
         f"{removed_count[0]} uklonjeno, {translated_count[0]} prevedeno, "
         f"{ex_yu_tagged_count[0]} označeno kao Ex-Yu.",
@@ -2014,7 +2113,7 @@ def sync_multi_file_movie_bundles(
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", raw_bundle_title, 0, existing_archive_ids)
             continue
 
-        bundle_year = extract_year_from_text(str(arch_md.get("year") or arch_md.get("date") or raw_bundle_title or bundle_ident))
+        bundle_year = extract_clean_film_year_from_filename(str(arch_md.get("year") or arch_md.get("date") or raw_bundle_title or bundle_ident))
 
         deduped_files = {}
         for v in videos:
