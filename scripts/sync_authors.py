@@ -105,7 +105,7 @@ AUTHORS = [
     ("Sion Sono", "filmography-sion-sono"),
     ("Peter Greenaway", "filmography-peter-greenaway"),
     ("Alan Clarke", "filmography-alan-clarke"),
-    # 12 novih redatelja iz pretrage
+    # Prethodni val (12 redatelja)
     ("Martin Scorsese", "taxi-driver-1976-4-k-remastered-1080p.bluray.dts-hd.ma.x-264"),
     ("Steven Spielberg", "jaws-35mm-1080p-avc-aac-2.0"),
     ("Quentin Tarantino", "reservoir-dogs-1992_202605"),
@@ -117,9 +117,19 @@ AUTHORS = [
     ("Denis Villeneuve", "incendies.-2010.1080p"),
     ("James Cameron", "the-terminator-1984_202606"),
     ("Michael Haneke", "funny-games_202511"),
+    # Novi val (9 autora)
+    ("Tim Burton", "edward-scissorhands_202607"),
+    ("Wes Anderson", "bottle.-rocket.-1996"),
+    ("Spike Lee", "Clockers"),
+    ("David Fincher", "fight-club-1999-35mm-4-k.-scan-1080p-fx-265"),
+    ("Guillermo del Toro", "el-laberinto-del-fauno-2006"),
+    ("Jerry Bruckheimer", "top-gun_202611"),
+    ("Peter Jackson", "king-kong-ultimate-edition"),
+    ("Robert Zemeckis", "back-to-the-future-part-ii-1989_202610"),
+    ("Russo braća", "the-gray-man_2022"),
 ]
 
-# Provjereni pojedinačni Archive.org zapisi iz pretrage za svakog novog redatelja
+# Provjereni pojedinačni Archive.org zapisi za redatelje i producente
 VERIFIED_AUTHOR_ARCHIVE_ITEMS = {
     "Martin Scorsese": [
         (33878, "boxcar-bertha-1972_202406"),
@@ -235,6 +245,84 @@ VERIFIED_AUTHOR_ARCHIVE_ITEMS = {
         (26564, "michael-haneke-1997-the-castle-vidomon"),
         (1717, "the-piano-teacher-2001"),
         (86837, "VILIBAZMIO-amour-2012"),
+    ],
+    "Tim Burton": [
+        (162, "edward-scissorhands_202607"),
+        (522, "ed.-wood.-1994.1080p.-blu-ray.x-264.-yify"),
+        (869, "planet-of-the-apes-usa-canada-en-es-disc-1-2-disc-special-edition-nuon"),
+        (587, "bigfish_dishondemand"),
+        (118, "charlie-and-the-chocolate-factory-2005-720p-br-rip_202607"),
+    ],
+    "Wes Anderson": [
+        (13685, "bottle.-rocket.-1996"),
+        (9428, "the-royal-tenenbaums-disc-1"),
+        (10315, "fantastic-mr.-fox-2009_202603"),
+    ],
+    "Spike Lee": [
+        (20649, "Clockers"),
+        (38410, "get-on-the-bus-spike-lee-1996"),
+        (40814, "girl-61996.1080p-blu-ray.x-265-rarbg"),
+        (13537, "bamboozled-2000-720p-w.subs-x-265-hevc"),
+        (44755, "sucker-free-city"),
+        (487558, "jskf9osvcDevolt758aLkERIAL"),
+    ],
+    "David Fincher": [
+        (807, "Se7en.1995.Remastered.Edition.Blu-ray.1080p.VC-1.DTS-HD.MA.7.1.REMUX-FraMeSToR"),
+        (2649, "the-game-1997-bdrip-ita-eng-1080p-x-265-paso-77"),
+        (550, "fight-club-1999-35mm-4-k.-scan-1080p-fx-265"),
+    ],
+    "Guillermo del Toro": [
+        (11655, "cronos-1993_202408"),
+        (36586, "blade.-2.2002.720p.-brrip.-dual-audio.x-264.www.mastitorrents.com"),
+        (1487, "Hellboy.2004.720p.BluRay.DUAL.x264"),
+        (1417, "el-laberinto-del-fauno-2006"),
+    ],
+    "Jerry Bruckheimer": [
+        (26175, "1975-farewell-my-lovely"),
+        (29972, "march-or-die-1977"),
+        (11062, "vlc-record-2025-09-04-21h36m55s-dvd____E__-"),
+        (11524, "thief-1981-directors-cut-1080p-pvca"),
+        (11454, "cat-people-1982_202603"),
+        (42159, "thief.-of.-hearts.-1984"),
+        (744, "top-gun_202611"),
+        (10872, "the-ref-1994_202602"),
+        (1701, "con-air-cw-5-17-26"),
+        (95, "armageddon-1998-criterion-dvd-rip"),
+        (9798, "enemy-of-the-state-1998_202408"),
+        (6282, "coyote-ugly-1080p_202506"),
+        (10637, "remember-the-titans-2000"),
+        (855, "black.-hawk.-down.-2001.-extended.-1080p.-blu-ray.-ddp-5.1.x-265.10bit-galaxy-rg-265"),
+        (676, "pearl-harbor-2001-directors-cut.-720p"),
+        (8961, "bad-boys-ii-2003_202605"),
+        (10628, "kangaroo-jack-double-feature-dvd"),
+        (9477, "king-arthur_202101"),
+        (2059, "national-treasure_202504"),
+        (38700, "bad-boys-for-life-2020_202407"),
+        (929590, "the-ministry-of-ungentlemanly-warfare"),
+    ],
+    "Peter Jackson": [
+        (9964, "bad-taste-1987-full-movie"),
+        (8216, "meet-the-feebles-1989_202406"),
+        (763, "braindead-1992-classic-cult-comedy-1080p-upscale"),
+        (1024, "heavenly-creatures_202507"),
+        (254, "king-kong-ultimate-edition"),
+    ],
+    "Robert Zemeckis": [
+        (27145, "i-wanna-hold-your-hand-1978"),
+        (13684, "used-cars-1980"),
+        (9326, "romancing-the-stone-1984-directed-by-robert-zemeckis"),
+        (105, "hbo-showing-of-back-to-the-future"),
+        (856, "Who-Framed-Roger-Rabbit-1988-English-Dub"),
+        (165, "back-to-the-future-part-ii-1989_202610"),
+        (196, "back-to-the-future-part-iii-1990_202610"),
+        (8358, "Cast-Away_2000_AI_1080p.BluRay.10b.HEVC.FLAC.5.1_BLUDUAINE"),
+        (2655, "what-lies-beneath_202210"),
+        (2310, "beowulf-bagby"),
+        (17979, "a-christmas-carol-animation-movies-for-kids"),
+    ],
+    "Russo braća": [
+        (725201, "the-gray-man_2022"),
+        (777443, "the-electric-state-movie"),
     ],
 }
 
@@ -355,12 +443,16 @@ def get_author_search_names(author_name):
         return ["Paul Thomas Anderson"]
     if author_name in ("Braća Coen", "Braća Coen (Joel i Ethan)"):
         return ["Joel Coen", "Ethan Coen"]
+    if author_name in ("Russo braća", "Russo braća (Anthony i Joe Russo)"):
+        return ["Anthony Russo", "Joe Russo"]
     return [author_name]
 
 
 def author_matches_tmdb_credits(author_name, details):
     if not details:
         return False
+    if author_name == "Jerry Bruckheimer":
+        return True
     search_names = get_author_search_names(author_name)
     surnames = set()
     for s_person in search_names:
@@ -494,9 +586,14 @@ def tmdb_enrich_author_movie(title, year=0, author_name="", filmography_credits=
 
 
 def fetch_wiki_bio_and_photo(author_name):
-    search_name = "Coen brothers" if author_name in ("Braća Coen", "Braća Coen (Joel i Ethan)") else (
-        "Paul Thomas Anderson" if author_name == "PTA Filmography" else author_name
-    )
+    wiki_map = {
+        "Braća Coen": "Coen brothers",
+        "Braća Coen (Joel i Ethan)": "Coen brothers",
+        "Russo braća": "Russo brothers",
+        "Russo braća (Anthony i Joe Russo)": "Russo brothers",
+        "PTA Filmography": "Paul Thomas Anderson",
+    }
+    search_name = wiki_map.get(author_name, author_name)
     encoded = urllib.parse.quote(search_name.replace(" ", "_"))
     bio = ""
     photo = ""
@@ -536,6 +633,7 @@ def compute_credits_score(credits_list):
 def fetch_author_tmdb_profile(author_name, archive_id):
     """Dohvaća portret, biografiju, TMDB indeks poznatosti i popis filmova iz filmografije autora."""
     search_names = get_author_search_names(author_name)
+    is_producer_author = author_name == "Jerry Bruckheimer"
     photo_url = ""
     bio_hr = ""
     fame_score = 0.0
@@ -549,7 +647,10 @@ def fetch_author_tmdb_profile(author_name, archive_id):
         candidates = (person_res or {}).get("results") or []
         person = None
         if candidates:
-            if search_person not in {"Elvis Presley", "Jackie Collins"}:
+            if is_producer_author:
+                prod_only = [p for p in candidates if p.get("known_for_department") == "Production"]
+                pool_list = prod_only if prod_only else candidates
+            elif search_person not in {"Elvis Presley", "Jackie Collins"}:
                 directors_only = [p for p in candidates if p.get("known_for_department") == "Directing"]
                 pool_list = directors_only if directors_only else candidates
             else:
@@ -571,12 +672,18 @@ def fetch_author_tmdb_profile(author_name, archive_id):
             crew_list = credits.get("crew") or []
             cast_list = credits.get("cast") or []
 
-            directed = [c for c in crew_list if c.get("job") == "Director"]
-            directing_score = compute_credits_score(directed)
-            other_score = compute_credits_score(crew_list + cast_list) * 0.65
-            fame_score = max(fame_score, (person_pop * 120.0) + max(directing_score, other_score))
+            if is_producer_author:
+                produced = [c for c in crew_list if c.get("job") in ("Producer", "Executive Producer")]
+                prod_score = compute_credits_score(produced)
+                fame_score = max(fame_score, (person_pop * 120.0) + prod_score)
+                raw_pool = produced
+            else:
+                directed = [c for c in crew_list if c.get("job") == "Director"]
+                directing_score = compute_credits_score(directed)
+                other_score = compute_credits_score(crew_list + cast_list) * 0.65
+                fame_score = max(fame_score, (person_pop * 120.0) + max(directing_score, other_score))
+                raw_pool = directed if (directed and search_person not in {"Elvis Presley", "Jackie Collins"}) else (directed + crew_list + cast_list)
 
-            raw_pool = directed if (directed and search_person not in {"Elvis Presley", "Jackie Collins"}) else (directed + crew_list + cast_list)
             for c in raw_pool:
                 mid = c.get("id")
                 if not mid or c.get("adult"):
@@ -866,7 +973,7 @@ def run_authors_sync():
                     ):
                         promoted_for_author += 1
 
-        # Korak B0: Provjereni Archive.org zapisi iz tablice pretrage redatelja
+        # Korak B0: Provjereni Archive.org zapisi iz tablica pretrage autora
         for verified_tmdb_id, verified_arch_id in VERIFIED_AUTHOR_ARCHIVE_ITEMS.get(author_name, []):
             if verified_tmdb_id in found_tmdb_ids:
                 continue
