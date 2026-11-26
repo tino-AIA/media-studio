@@ -203,15 +203,15 @@ BAD_TITLE_MARKER_RE = re.compile(
     r"mickey\s*mouse\s*club|hardy\s*boys|broncos\s*vs|seahawks?|soultrain|manlyphall)"
 )
 
-# Samo stvarne TV vijesti i sportski prijenosi (bez diranja 'Alien vs Predator', 'Freddy vs Jason', 'Police Academy' itd.)
+# Isključivo službeni prefiksi Archive.org TV arhive (^tv-) i sportski prijenosi (ne dira 'dw_griffith_...')
 TV_NEWS_OR_SPORTS_ID_RE = re.compile(
-    r"(?i)(?:^(?:cspan|foxnews|msnbc|cnn|dw_|bbcnews|rt_|aljazeera)|"
+    r"(?i)(?:^(?:tv-|cspan\d*_|foxnews|msnbc|cnn_|bbcnews|aljazeera)|"
     r"\b(?:broncos|seahawks|nfl|nba|mlb|nhl|ufc|wwe)\b)"
 )
 
-# Oznaka epizode serije (samo čisti formati poput 1x02 ili S01E01, bez hvatanja 'x-264' ili 'x-265'!)
+# Oznaka epizode serije (izuzima tehničke oznake poput 10x265, 10x264, 1x720, 1x1080)
 STRICT_EPISODE_RE = re.compile(
-    r"(?i)(?:\b\d{1,2}x\d{2,3}\b|\bs\d{1,2}e\d{1,3}\b)"
+    r"(?i)(?:\b\d{1,2}x(?!264\b|265\b|480\b|540\b|576\b|720\b|1080\b)\d{2,3}\b|\bs\d{1,2}e\d{1,3}\b)"
 )
 
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
@@ -334,13 +334,10 @@ def extract_clean_film_year_from_filename(text):
     if not text:
         return 0
     s = unquote(str(text))
-    # Ukloni pune datume YYYY-MM-DD, YYYYMMDD i Archive.org sufikse uploada _YYYYMM / _YYYYMMDD
     s = re.sub(r"\b20\d{2}[-_]\d{2}(?:[-_]\d{2})?\b", " ", s)
     s = re.sub(r"\b20\d{6}\b", " ", s)
     s = re.sub(r"_20\d{4,6}\b", " ", s)
-    # Ukloni rezolucije i kodeke
     s = re.sub(r"(?i)\b(?:1080p|720p|480p|2160p|x264|x265|h264|h265)\b", " ", s)
-    # Traži godinu u zagradama (1985) ili odvojenu točkom/crticom/razmakom
     m = re.search(r"(?:^|[\s._(\[-])(19\d{2}|20\d{2})(?:$|[\s._)\]-])", s)
     return int(m.group(1)) if m else 0
 
@@ -378,7 +375,6 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
     arch_creator = str((arch_md or {}).get("creator") or "")
     arch_desc = str((arch_md or {}).get("description") or "")
 
-    # Provjera godine samo iz čistog naslova/datoteke (bez datuma uploada)
     if rel_year > 0:
         file_y = extract_clean_film_year_from_filename(chosen_filename or "")
         title_y = extract_clean_film_year_from_filename(arch_title)
@@ -414,7 +410,6 @@ def verify_multilayer_title_and_file(chosen_filename, ident, arch_md, expected_t
             return False
         return True
 
-    # Zabrana zamke jednorječnog podskupa (npr. TMDB='Mouse'/'Runner'/'Madden' vs Archive='The Mickey Mouse Club - Hardy Boys')
     shortest_expected = min((_tokenize_words(t) for t in expected_titles if _tokenize_words(t)), key=len, default=set())
     if len(shortest_expected) == 1 and len(stem_tokens) >= 4:
         credit_blob = f"{arch_desc} {arch_creator}".lower()
@@ -1053,7 +1048,7 @@ def audit_and_repair_existing_movies(
     tmdb_best_tier,
     phase_deadline_ts
 ):
-    # 1. Odmah vrati is_valid=True za prave filmove koji su u prošlom runu lažno odbačeni (imaju tmdb_id > 0 i stream_url)
+    # Odmah vrati is_valid=True za prave filmove koji su u prošlom runu lažno odbačeni (imaju tmdb_id > 0 i stream_url)
     restored_count = 0
     for r in all_movie_rows:
         if r.get("is_valid", True):
@@ -1066,6 +1061,8 @@ def audit_and_repair_existing_movies(
             if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title) or BAD_TITLE_MARKER_RE.search(s_url):
                 continue
             if TV_NEWS_OR_SPORTS_ID_RE.search(ident) or STRICT_EPISODE_RE.search(s_url):
+                continue
+            if is_explicit_junk_item(ident, title, s_url):
                 continue
             supabase_patch_row("catalog_items", r["id"], {"is_valid": True})
             r["is_valid"] = True
@@ -1119,8 +1116,6 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena TV emisija/serija iz filmova: {title} ({ident})")
             return
 
-        # Ako datoteka nosi jasnu godinu (npr. 1985 ili 2023) koja se razlikuje od godine u bazi (npr. 2026),
-        # NE brišemo zapis — nego ga prebacujemo na pravi samostalni film iz te godine!
         if rel_year > 0 and stream_url:
             clean_file_y = extract_clean_film_year_from_filename(os.path.basename(stream_url)) or extract_clean_film_year_from_filename(base_ident)
             if clean_file_y > 0 and abs(clean_file_y - rel_year) > 1:
