@@ -9,9 +9,9 @@ import requests
 from requests.adapters import HTTPAdapter
 
 TMDB_API_KEY = os.environ["TMDB_API_KEY"].strip()
-RAW_SB_URL = os.environ["SUPABASE_URL"].strip().rstrip("/")
+RAW_SB_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_URL = RAW_SB_URL[:-8] if RAW_SB_URL.endswith("/rest/v1") else RAW_SB_URL
-SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"].strip()
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMG_POSTER = "https://image.tmdb.org/t/p/w500"
@@ -34,7 +34,7 @@ SB_HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "resolution=merge-duplicates,return=representation"
 }
-if not SUPABASE_SERVICE_KEY.startswith("sb_"):
+if SUPABASE_SERVICE_KEY and not SUPABASE_SERVICE_KEY.startswith("sb_"):
     SB_HEADERS["Authorization"] = f"Bearer {SUPABASE_SERVICE_KEY}"
 
 EX_YU_LANGUAGES = {"hr", "sr", "bs", "sl", "mk", "sh"}
@@ -92,7 +92,7 @@ SPAM_OR_FAKE_KEYWORDS = [
 NON_MOVIE_SUBTITLE_SUFFIX_RE = re.compile(
     r"(?i)\b(?:holiday\s+special|tv\s+special|special|making\s+of|behind\s+the\s+scenes|"
     r"documentary|featurette|parody|rifftrax|mockbuster|review|interview|trailer|"
-    r"teaser|deleted\s+scenes|bloopers|fan\s*film|fan\s*edit|recap)\b"
+    r"teaser|deleted\s+scenes|bloopers|fan\s*film|recap)\b"
 )
 
 EXPLICIT_DUB_KEYWORDS = [
@@ -122,11 +122,12 @@ RELEASE_TAG_PATTERN = re.compile(
     r"aac|ac3|dts|ddp5\s*1|ddp2\s*0|10bit|8bit|mp4|mkv|avi|mov|ia|remastered|restored|"
     r"colorized|extended|unrated|theatrical|directors\s*cut|director's\s*cut|uncut|"
     r"alternative\s*edition|redux|fanedit|fan\s*edit|the\s*complete\s*saga|complete\s*saga|"
-    r"special\s*edition|tv\s*version|vimeo|flac|subs|"
+    r"special\s*edition|tv\s*version|vimeo|flac|subs|despecialized|4k77|4k80|4k83|"
     r"full\s*movie|movie|film|subtitles|subbed|dubbed|eng|english|multi|dual\s*audio|"
     r"yify|yts|rarbg|galaxyrg|galaxy-rg|etrg|sparks|fgt|evo|bone|sartre|anoxmous|juggs|"
     r"shaanig|mkvcage|pahe|psa|criterion|complete\s*series|complete\s*season|tv\s*series|"
-    r"the\s*original\s*series|original\s*series|tos|no\s*subs|widescreen|fullscreen"
+    r"the\s*original\s*series|original\s*series|tos|no\s*subs|widescreen|fullscreen|"
+    r"open\s*matte|imax|hybrid|remux|hdr|sdr|dolby|atmos"
     r")\b"
 )
 
@@ -134,7 +135,7 @@ VARIANT_TAG_RE = re.compile(
     r"(?i)[\(\[]\s*("
     r"the\s+complete\s+novel|complete\s+novel|the\s+complete\s+saga|complete\s+saga|"
     r"alternative\s+edition(?:\s+redux)?|redux|fanedit|fan\s+edit|special\s+edition|tv\s+version|"
-    r"director'?s?\s*cut|theatrical\s*cut|theatrical|vimeo|mkv-flac-subs|"
+    r"director'?s?\s*cut|theatrical\s*cut|theatrical|vimeo|mkv-flac-subs|despecialized|open\s+matte|imax|"
     r"extended\s*cut|extended|final\s*cut|workprint|unrated|uncut|tv\s*cut|us\s*cut|eu\s*cut|uk\s*cut|"
     r"restored|remastered|colorized|part\s*\d+|pt\.?\s*\d+|cd\s*\d+|disc\s*\d+"
     r")\s*[\)\]]"
@@ -143,12 +144,12 @@ VARIANT_TAG_RE = re.compile(
 EXTENDED_CUT_TAG_RE = re.compile(
     r"(?i)\b("
     r"redux|extended|complete\s+saga|complete\s+novel|alternative\s+edition|"
-    r"director'?s?\s*cut|tv\s*cut|tv\s*version|uncut|special\s+edition|fanedit|fan\s*edit"
+    r"director'?s?\s*cut|tv\s*cut|tv\s*version|uncut|special\s+edition|fanedit|fan\s*edit|open\s+matte|imax"
     r")\b"
 )
 
 WIDESCREEN_TAG_RE = re.compile(
-    r"(?i)\b(widescreen|16x9|16_9|16-9|1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip)\b"
+    r"(?i)\b(widescreen|16x9|16_9|16-9|1080p|2160p|4k|720p|bluray|blu-ray|bdrip|brrip|web-dl|webdl|webrip|open[\s._-]*matte|imax)\b"
 )
 
 FULLSCREEN_4_3_TAG_RE = re.compile(
@@ -238,7 +239,7 @@ def verify_stream_url_playable(url):
 
 
 def supabase_upsert(table, rows, conflict_col):
-    if not rows:
+    if not rows or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return []
     conflict_cols = [c.strip() for c in conflict_col.split(",") if c.strip()]
     if conflict_cols:
@@ -284,6 +285,8 @@ def supabase_upsert(table, rows, conflict_col):
 
 
 def supabase_patch_row(table, row_id, payload):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
     url = f"{SUPABASE_URL}/rest/v1/{table}?id=eq.{row_id}"
     try:
         r = session.patch(url, headers=SB_HEADERS, json=payload, timeout=15)
@@ -294,6 +297,8 @@ def supabase_patch_row(table, row_id, payload):
 
 
 def supabase_delete_author_movies(author_db_id):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
     url = f"{SUPABASE_URL}/rest/v1/author_movies?author_id=eq.{author_db_id}"
     try:
         session.delete(url, headers=SB_HEADERS, timeout=15)
@@ -303,6 +308,9 @@ def supabase_delete_author_movies(author_db_id):
 
 def fetch_existing_catalog_state(media_type_filter=None):
     """Dohvaća sve postojeće zapise iz Supabasea (uz paginaciju po 1000) bez brisanja valjanih stavki."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return set(), set(), set(), []
+
     existing_archive_ids = set()
     seen_tmdb_ids = set()
     seen_title_years = set()
@@ -395,10 +403,8 @@ def _stream_has_english_or_multi_audio_track(stream_url):
         )
         if r.status_code in (200, 206) and r.content:
             head = r.content
-            # Matroska TrackType = Audio (\x83\x02) — ako se pojavi >= 2 puta, datoteka ima više audio traka
             if head.count(b"\x83\x02") >= 2:
                 return True
-            # Matroska Language element (\x22\xb5\x9c) s vrijednošću 'eng' ili 'und'
             if b"\x22\xb5\x9c\x83eng" in head or b"\x22\xb5\x9c\x83und" in head:
                 return True
     except Exception:
@@ -410,7 +416,6 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
     if orig_lang and orig_lang.lower() in EX_YU_LANGUAGES:
         return False
 
-    # Nijemi filmovi (prije 1930.) nemaju govornu sinkronizaciju (samo prevedene međunaslove)
     arch_year = extract_year_from_text(f"{identifier} {archive_md.get('title') or ''} {archive_md.get('year') or ''}")
     if 1890 <= arch_year <= 1929:
         return False
@@ -434,7 +439,6 @@ def is_foreign_dub_without_english(archive_md, identifier, filename="", orig_lan
     if isinstance(lang_field, list) and len(lang_field) >= 2:
         return False
 
-    # Ako je link na .mkv datoteku, provjeri prvih 128 KB ima li više audio traka ili 'eng' track
     if filename and filename.startswith("http") and _stream_has_english_or_multi_audio_track(filename):
         return False
 
@@ -591,14 +595,31 @@ def normalize_for_exact_title_compare(raw_title):
     return s
 
 
+def _expand_title_candidates(norm_candidates):
+    """Proširuje kandidate za franšize (npr. 'star wars episode iv a new hope' -> i 'star wars' i 'a new hope')."""
+    expanded = set(norm_candidates)
+    for cand in list(norm_candidates):
+        stripped_ep = re.sub(r"\bepisode\s+(?:i|ii|iii|iv|v|vi|vii|viii|ix|[1-9])\b", " ", cand)
+        stripped_ep = re.sub(r"\s+", " ", stripped_ep).strip()
+        if len(stripped_ep) >= 4:
+            expanded.add(stripped_ep)
+        m_ep = re.match(r"^(star\s+wars|star\s+trek|indiana\s+jones|mission\s+impossible)\s+(?:episode\s+(?:i|ii|iii|iv|v|vi|vii|viii|ix|[1-9])\s+)?(.+)$", cand)
+        if m_ep:
+            sub = m_ep.group(2).strip()
+            if len(sub) >= 5:
+                expanded.add(sub)
+    return expanded
+
+
 def titles_match_flexibly(arch_norm, norm_candidates):
     """Dopušta točno poklapanje ili poklapanje kad Archive naslov sadrži podnaslov / ime redatelja,
     ali blokira TV/Holiday specijale, dokumentarce o snimanju i parodije kad ih TMDB naslov nema."""
     if not arch_norm or not norm_candidates:
         return False
-    if arch_norm in norm_candidates:
+    expanded_candidates = _expand_title_candidates(norm_candidates)
+    if arch_norm in expanded_candidates:
         return True
-    for cand in norm_candidates:
+    for cand in expanded_candidates:
         if len(cand) >= 4 and (arch_norm.startswith(cand + " ") or arch_norm.endswith(" " + cand)):
             if arch_norm.startswith(cand + " "):
                 extra_suffix = arch_norm[len(cand):].strip()
