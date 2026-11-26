@@ -618,7 +618,7 @@ def sync_multi_file_movie_bundles(
     phase_deadline_ts,
     all_movie_rows=None
 ):
-    """Izvlači pojedinačne filmove iz multi-file Archive.org zapisa i sprema ih isključivo u njihove TMDB žanrove."""
+    """Izvlači pojedinačne filmove iz multi-file Archive.org zapisa, ispisuje njihov popis u logove i sprema ih u TMDB žanrove."""
     print("1B/4 Izvlačenje filmova iz multi-file Archive.org paketa (samo u odgovarajuće žanrove)...", flush=True)
     if time.monotonic() > phase_deadline_ts:
         return
@@ -639,7 +639,7 @@ def sync_multi_file_movie_bundles(
             fname = v.get("filename") or ""
             if is_explicit_junk_item(bundle_ident, "", fname):
                 continue
-            clean_t, year = clean_filename_to_title(fname, fallback_to_stem=False)
+            clean_t, year = clean_filename_to_title(fname, fallback_to_stem=True)
             if not clean_t or len(clean_t) < 2:
                 continue
             stem_key = re.sub(r"(?i)\.ia$", "", fname.rsplit("/", 1)[-1].rsplit(".", 1)[0]).lower()
@@ -649,7 +649,18 @@ def sync_multi_file_movie_bundles(
             if stem_key not in deduped_files or score > deduped_files[stem_key][0]:
                 deduped_files[stem_key] = (score, v, clean_t, year)
 
-        print(f"  • {bundle_ident}: pronađeno {len(deduped_files)} video zapisa za provjeru...", flush=True)
+        sorted_entries = sorted(deduped_files.values(), key=lambda e: (e[1].get("filename") or "").lower())
+        print(f"  • {bundle_ident}: pronađeno {len(sorted_entries)} video zapisa — popis datoteka i trajanja:", flush=True)
+        for idx, (_, v_info, clean_t, parsed_y) in enumerate(sorted_entries, start=1):
+            mins = int(v_info.get("duration_mins") or 0)
+            size_mb = float(v_info.get("size_mb") or 0.0)
+            fname_disp = unquote(v_info.get("filename") or "")
+            y_str = f" | god={parsed_y}" if parsed_y > 0 else ""
+            print(
+                f"      [{idx:02d}] {fname_disp} -> naslov='{clean_t}'{y_str} | trajanje={mins} min | {size_mb:.0f} MB",
+                flush=True
+            )
+
         bundle_added = [0]
 
         def process_bundle_entry(entry):
@@ -760,7 +771,7 @@ def sync_multi_file_movie_bundles(
                     added_total[0] += 1
 
         run_batched_with_deadline(
-            deduped_files.values(), process_bundle_entry, phase_deadline_ts, max_workers=10, batch_size=35
+            sorted_entries, process_bundle_entry, phase_deadline_ts, max_workers=10, batch_size=35
         )
         print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
 
