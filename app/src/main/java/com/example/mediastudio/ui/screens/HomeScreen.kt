@@ -147,7 +147,7 @@ fun HomeScreen(
                     .ifBlank { "https://archive.org/services/img/$firstId" }
             }
             currentHeroPosterUrl = resolvedPoster
-            currentHeroBackdropUrl = sbBackdrop
+            currentHeroBackdropUrl = sbBackdrop.ifBlank { resolvedPoster }
 
             val parts = mutableListOf<String>()
             val yearVal = sbItem?.releaseYear ?: 0
@@ -645,18 +645,18 @@ fun HomeScreen(
                                     .height(156.dp)
                                     .background(Color(0xFF0A0A0A))
                             ) {
-                                // Diskretna 16:9 backdrop pozadina u desnoj polovici za dubinu
+                                // Ambijentalna pozadinska slika preko desnih 68% ekrana
                                 if (currentHeroBackdropUrl.isNotEmpty()) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxHeight()
-                                            .fillMaxWidth(0.55f)
+                                            .fillMaxWidth(0.68f)
                                             .align(Alignment.CenterEnd)
                                     ) {
                                         val heroBgRequest = remember(currentHeroBackdropUrl) {
                                             ImageRequest.Builder(context)
                                                 .data(currentHeroBackdropUrl)
-                                                .size(480, 270)
+                                                .size(640, 360)
                                                 .scale(Scale.FILL)
                                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                                 .allowHardware(true)
@@ -669,7 +669,7 @@ fun HomeScreen(
                                             alignment = Alignment.Center,
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .alpha(0.32f)
+                                                .alpha(0.48f)
                                         )
                                         Box(
                                             modifier = Modifier
@@ -677,8 +677,9 @@ fun HomeScreen(
                                                 .background(
                                                     Brush.horizontalGradient(
                                                         0.0f to Color(0xFF0A0A0A),
-                                                        0.45f to Color(0xFF0A0A0A).copy(alpha = 0.65f),
-                                                        1.0f to Color.Transparent
+                                                        0.35f to Color(0xFF0A0A0A).copy(alpha = 0.55f),
+                                                        0.75f to Color(0xFF0A0A0A).copy(alpha = 0.25f),
+                                                        1.0f to Color(0xFF0A0A0A).copy(alpha = 0.45f)
                                                     )
                                                 )
                                         )
@@ -687,7 +688,7 @@ fun HomeScreen(
                                                 .fillMaxSize()
                                                 .background(
                                                     Brush.verticalGradient(
-                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.35f),
+                                                        0.0f to Color(0xFF0A0A0A).copy(alpha = 0.30f),
                                                         0.25f to Color.Transparent,
                                                         0.78f to Color.Transparent,
                                                         1.0f to Color(0xFF0A0A0A)
@@ -698,17 +699,16 @@ fun HomeScreen(
                                 }
 
                                 currentHeroMovie?.let { (movie, isSeries) ->
-                                    // Centrirani raspored: tekst lijevo + oštar plakat desno
+                                    // Centrirani blok u sredini ekrana: tekst lijevo + plakat odmah uz tekst desno
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.Center)
-                                            .fillMaxWidth(0.84f)
-                                            .padding(bottom = 8.dp),
+                                            .padding(horizontal = 24.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(24.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally)
                                     ) {
                                         Column(
-                                            modifier = Modifier.weight(1f),
+                                            modifier = Modifier.widthIn(max = 360.dp),
                                             verticalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Text(
@@ -745,7 +745,7 @@ fun HomeScreen(
                                             if (currentHeroOverview.isNotBlank()) {
                                                 Text(
                                                     text = currentHeroOverview,
-                                                    color = Color.Gray,
+                                                    color = Color.LightGray.copy(alpha = 0.82f),
                                                     fontSize = 11.sp,
                                                     lineHeight = 14.sp,
                                                     maxLines = 2,
@@ -813,9 +813,9 @@ fun HomeScreen(
                                                 modifier = Modifier
                                                     .width(92.dp)
                                                     .height(134.dp)
-                                                    .border(1.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(8.dp)),
+                                                    .border(1.2.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(8.dp)),
                                                 shape = RoundedCornerShape(8.dp),
-                                                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                                elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
                                             ) {
                                                 val posterReq = remember(currentHeroPosterUrl) {
@@ -840,7 +840,7 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
-                                            .padding(bottom = 4.dp),
+                                            .padding(bottom = 3.dp),
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         heroMovies.forEachIndexed { index, _ ->
