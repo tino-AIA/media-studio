@@ -41,16 +41,16 @@ from sync_common import (
 # Siguran vremenski okvir (50 min) s pojedinačnim budžetima po fazi
 MAX_MOVIES_SYNC_SECONDS = 50 * 60
 PHASE1_AUDIT_MAX_SECONDS = 8 * 60
-PHASE1B_BUNDLES_MAX_SECONDS = 12 * 60
-PHASE2_EXYU_MAX_SECONDS = 10 * 60
-PHASE3_CULT_MAX_SECONDS = 10 * 60
+PHASE1B_BUNDLES_MAX_SECONDS = 14 * 60
+PHASE2_EXYU_MAX_SECONDS = 9 * 60
+PHASE3_CULT_MAX_SECONDS = 9 * 60
 
 BATCH_SIZE_CANDIDATES = 40
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 3 * 60
 
 MAX_VERSIONS_PER_MOVIE = 2
 MAX_VHS_UPGRADE_CHECKS_PER_RUN = 20
-MAX_DYNAMIC_BUNDLES_PER_RUN = 12
+MAX_DYNAMIC_BUNDLES_PER_RUN = 35
 
 # Ručno zadani multi-file paketi + automatsko otkrivanje novih paketa ispod collection:movies
 PINNED_MULTI_FILE_BUNDLES = [
@@ -100,10 +100,37 @@ EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     ("isoanimationmoviesdvd", "monstruossa.mp4"): 585,
 }
 
+# Ciljani upiti koji traže isključivo filmske i animirane multi-file pakete (bez sporta, vijesti i predavanja)
 DYNAMIC_BUNDLE_QUERIES = [
-    'mediatype:(movies OR web) AND collection:movies AND item_size:[7000000000 TO 999999999999] AND -collection:television AND -subject:"tv series" AND -subject:news',
-    'mediatype:(movies OR web) AND collection:movies AND title:(iso OR dvd OR pack OR anthology OR trilogy OR quadrilogy OR boxset OR "box set" OR "movie collection" OR "film collection") AND -collection:television AND -subject:"tv series" AND -subject:news',
+    (
+        'mediatype:(movies OR web) AND collection:movies '
+        'AND title:(iso OR dvd OR pack OR anthology OR trilogy OR quadrilogy OR boxset OR "box set" OR "movie collection" OR "film collection" OR "movies collection" OR "films collection") '
+        'AND -collection:television AND -collection:newsandpublicaffairs AND -collection:twitchstreams '
+        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
+        "downloads desc",
+    ),
+    (
+        'mediatype:(movies OR web) AND collection:movies '
+        'AND item_size:[5000000000 TO 999999999999] '
+        'AND (subject:(movies OR films OR cinema OR animation OR cartoons OR feature) OR collection:(moviesandfilms OR dvdtray OR dvdtray_inbox OR feature_films OR vhsvault OR animationandcartoons OR scifihorror)) '
+        'AND -collection:television AND -collection:newsandpublicaffairs AND -collection:twitchstreams '
+        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
+        "downloads desc",
+    ),
+    (
+        'mediatype:(movies OR web) AND collection:movies '
+        'AND title:(iso OR dvd OR pack OR anthology OR trilogy OR "movie collection" OR "film collection") '
+        'AND -collection:television AND -collection:newsandpublicaffairs '
+        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture',
+        "addeddate desc",
+    ),
 ]
+
+BUNDLE_NOISE_RE = re.compile(
+    r"(?i)(?:olympic|berkeley|lecture|course|seminar|webcast|podcast|news|cnn|fox[\s._-]*news|"
+    r"twitch|tiktok|vlog|sermon|church|prayer|symphony|orchestra|sonata|championship|tournament|"
+    r"football|basketball|swimming|gymnastics|athletics|gameplay|speedrun|walkthrough)"
+)
 
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
@@ -382,16 +409,24 @@ def resolve_movie_genres(details, final_title, hint_genre=None):
     return genres[:3]
 
 
+# Glavne filmske podkolekcije ispod https://archive.org/details/movies
 ARCHIVE_FEATURE_COLLECTIONS = [
+    ("moviesandfilms", 5),
     ("dvdtray", 6),
     ("dvdtray_inbox", 6),
     ("feature_films", 5),
     ("opensource_movies", 4),
+    ("vhsvault", 4),
+    ("vhsvault_inbox", 4),
+    ("vhs_movies_and_tv", 4),
+    ("animationandcartoons", 4),
+    ("scifihorror", 4),
     ("SciFi_Films", 4),
     ("film_noir", 3),
-    ("comedy_films", 3),
-    ("vhsvault", 2),
-    ("laserdiscarchive", 2),
+    ("comedy_films", 4),
+    ("silent_films", 3),
+    ("saturdaymorningcartoons", 3),
+    ("laserdiscarchive", 3),
     ("colorized-and-upscaled-movies", 3),
     ("popcornmaker", 5),
     ("westerns", 3),
@@ -403,6 +438,49 @@ ARCHIVE_FEATURE_COLLECTIONS = [
     ("drama_films", 3),
     ("mystery_films", 3),
 ]
+
+SUBCOLLECTION_BLOCK_RE = re.compile(
+    r"(?i)(?:news|television|tv|twitch|tiktok|vlog|podcast|radio|audio|religion|"
+    r"spirituality|government|fedflix|university|education|sports|olympics|trailer|"
+    r"commercial|prelinger|ephemeral|home_movies|videogame|anime)"
+)
+
+
+def discover_movies_subcollections(deadline_ts):
+    """Automatski dohvaća dodatne filmske podkolekcije registrirane ispod /details/movies."""
+    known = {c for c, _ in ARCHIVE_FEATURE_COLLECTIONS}
+    extra = []
+    if time.monotonic() > deadline_ts:
+        return extra
+
+    data = safe_get(
+        "https://archive.org/advancedsearch.php",
+        params={
+            "q": "mediatype:collection AND collection:movies",
+            "fl[]": ["identifier", "title", "downloads"],
+            "sort[]": "downloads desc",
+            "rows": 120,
+            "page": 1,
+            "output": "json",
+        },
+    )
+    for doc in (data or {}).get("response", {}).get("docs", []):
+        ident = (doc.get("identifier") or "").strip()
+        if not ident or ident in known:
+            continue
+        raw_t = doc.get("title") or ident
+        if isinstance(raw_t, list):
+            raw_t = raw_t[0]
+        blob = f"{ident} {raw_t}"
+        if SUBCOLLECTION_BLOCK_RE.search(blob):
+            continue
+        if any(k in blob.lower() for k in ("movie", "film", "cinema", "dvd", "vhs", "cartoon", "noir", "horror", "western", "sci-fi", "scifi", "comedy", "drama", "action", "classic")):
+            known.add(ident)
+            extra.append((ident, 3))
+            if len(extra) >= 20:
+                break
+    return extra
+
 
 EX_YU_ARCHIVE_QUERIES = [
     'mediatype:(movies OR web) AND language:(Croatian OR Serbian OR "Serbo-Croatian" OR Bosnian OR Slovenian OR Macedonian OR hrv OR srp OR scr OR bos OR slv OR mac) AND -subject:news AND -subject:trailer',
@@ -657,14 +735,14 @@ def sync_curated_movie_exceptions(
 
 
 def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
-    """Automatski pronalazi velike multi-file pakete filmova ispod collection:movies koji još nisu skenirani."""
+    """Automatski pronalazi velike multi-file filmske pakete ispod collection:movies koji još nisu skenirani."""
     discovered = []
     seen_ids = set(PINNED_MULTI_FILE_BUNDLES)
 
-    for q in DYNAMIC_BUNDLE_QUERIES:
+    for q, sort_order in DYNAMIC_BUNDLE_QUERIES:
         if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
             break
-        for page in [1, 2]:
+        for page in [1, 2, 3]:
             if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
                 break
             data = safe_get(
@@ -672,8 +750,8 @@ def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
                 params={
                     "q": q,
                     "fl[]": ["identifier", "title", "downloads"],
-                    "sort[]": "downloads desc",
-                    "rows": 80,
+                    "sort[]": sort_order,
+                    "rows": 100,
                     "page": page,
                     "output": "json"
                 }
@@ -689,7 +767,11 @@ def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
                 raw_t = doc.get("title") or ident
                 if isinstance(raw_t, list):
                     raw_t = raw_t[0]
+                if BUNDLE_NOISE_RE.search(f"{ident} {raw_t}"):
+                    record_rejected_archive_id(f"bundle_checked:{ident}", raw_t, 0, existing_archive_ids)
+                    continue
                 if is_explicit_junk_item(ident, raw_t) or contains_hentai_or_adult(ident, raw_t) or contains_blocked_regional_or_arabic(ident, raw_t):
+                    record_rejected_archive_id(f"bundle_checked:{ident}", raw_t, 0, existing_archive_ids)
                     continue
                 seen_ids.add(ident)
                 discovered.append(ident)
@@ -746,8 +828,8 @@ def sync_multi_file_movie_bundles(
             if stem_key not in deduped_files or score > deduped_files[stem_key][0]:
                 deduped_files[stem_key] = (score, v, clean_t, year)
 
-        # Automatski otkriveni zapisi obrađuju se kao paket samo ako imaju 3+ različita videa
-        if not is_pinned and len(deduped_files) < 3:
+        # Automatski otkriveni zapisi obrađuju se kao paket samo ako imaju 2+ različita videa
+        if not is_pinned and len(deduped_files) < 2:
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
@@ -1694,6 +1776,11 @@ def mine_archive_collections(
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
 
+    extra_cols = discover_movies_subcollections(deadline_ts)
+    collections_to_scan = list(ARCHIVE_FEATURE_COLLECTIONS) + extra_cols
+    if extra_cols:
+        print(f"  Otkriveno {len(extra_cols)} dodatnih filmskih podkolekcija ispod /details/movies.", flush=True)
+
     archive_docs = {}
 
     def fetch_col_page(col_page):
@@ -1717,7 +1804,7 @@ def mine_archive_collections(
         )
         return (data or {}).get("response", {}).get("docs", [])
 
-    tasks = [(col, p) for col, max_p in ARCHIVE_FEATURE_COLLECTIONS for p in range(1, max_p + 1)]
+    tasks = [(col, p) for col, max_p in collections_to_scan for p in range(1, max_p + 1)]
     with ThreadPoolExecutor(max_workers=8) as pool:
         for docs in pool.map(fetch_col_page, tasks):
             for doc in docs:
