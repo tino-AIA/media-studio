@@ -140,7 +140,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val blockedRegionalAndArabicKeywords = listOf(
         "bollywood", "tollywood", "kollywood", "hindi", "telugu", "tamil", "urdu",
         "punjabi", "desi", "bengali", "malayalam", "marathi", "gujarati", "kannada",
-        "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh"
+        "arabic", "arab", "islam", "quran", "khutba", "dourous", "muslim", "sheikh",
+        "indonesian", "indonesia", "malay", "malaysia", "tagalog", "bahasa", "sinetron",
+        "dengan", "cinta", "jakarta", "yogyakarta", "bandung", "surabaya"
     )
 
     private val blockedUnicodeScriptRegex = Regex("[\\u0600-\\u06FF\\u0750-\\u077F\\u0900-\\u0D7F]")
@@ -719,6 +721,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun rankTop10Items(
+        items: List<SupabaseCatalogItem>,
+        minRating: Double = 6.0
+    ): List<SupabaseCatalogItem> {
+        val comparator = compareByDescending<SupabaseCatalogItem> {
+            it.popularityScore + (it.rating * 180.0)
+        }.thenByDescending { it.rating }
+
+        val highRated = items.filter { it.rating >= minRating }.sortedWith(comparator)
+        if (highRated.size >= 10) {
+            return highRated
+        }
+        val remaining = items.filter { it.rating < minRating }.sortedWith(comparator)
+        return highRated + remaining
+    }
+
     private fun deduplicateCatalogItems(items: List<SupabaseCatalogItem>): List<SupabaseCatalogItem> {
         val seenTitleYears = HashSet<String>(items.size)
         val seenTmdbTokens = HashSet<String>(items.size / 2)
@@ -849,7 +867,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 genre.title == "Top 10 danas" -> {
-                    val top10 = liveActionMovies.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    val top10 = rankTop10Items(liveActionMovies, minRating = 6.0).take(10).map { it.toArchiveMovie() }
                     if (top10.isNotEmpty()) genre to top10 else null
                 }
                 genre.title == "Klasici i Najgledanije" -> {
@@ -895,7 +913,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val builtAnimationCategories = animationGenreDefinitions.mapNotNull { genre ->
             when (genre.title) {
                 "Top 10 animiranih" -> {
-                    val top10 = featureAnimations.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    val top10 = rankTop10Items(featureAnimations, minRating = 6.0).take(10).map { it.toArchiveMovie() }
                     if (top10.isNotEmpty()) genre to top10 else null
                 }
                 "Disney i Pixar klasici" -> {
@@ -952,7 +970,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val builtSeriesCategories = seriesGenreDefinitions.mapNotNull { genre ->
             when {
                 genre.title.startsWith("Top 10") -> {
-                    val top10 = liveActionSeries.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                    val top10 = rankTop10Items(liveActionSeries, minRating = 6.0).take(10).map { it.toArchiveMovie() }
                     if (top10.isNotEmpty()) genre to top10 else null
                 }
                 genre.title == "Ex-Yu serije" -> {
@@ -977,7 +995,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         val builtConcertCategories = concertGenreDefinitions.mapNotNull { genre ->
             if (genre.title.startsWith("Top 10")) {
-                val top10 = concerts.sortedByDescending { it.popularityScore }.take(10).map { it.toArchiveMovie() }
+                val top10 = rankTop10Items(concerts, minRating = 0.0).take(10).map { it.toArchiveMovie() }
                 if (top10.isNotEmpty()) genre to top10 else null
             } else {
                 val matching = concerts.filter { item ->
@@ -1332,7 +1350,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             val animSeries = snap.animatedSeries
 
             return when (genre.title) {
-                "Top 10 animiranih" -> featureAnim.sortedByDescending { it.popularityScore }
+                "Top 10 animiranih" -> rankTop10Items(featureAnim, minRating = 6.0)
                 "Disney i Pixar klasici" -> featureAnim.filter { isDisneyOrPixarItem(it) }.sortedWith(
                     compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
                 )
@@ -1366,7 +1384,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return when {
-            genre.title.startsWith("Top 10") -> typedItems.sortedByDescending { it.popularityScore }
+            genre.title.startsWith("Top 10") -> rankTop10Items(
+                typedItems,
+                minRating = if (genre.isConcertCategory) 0.0 else 6.0
+            )
             genre.title == "Klasici i Najgledanije" -> typedItems.sortedWith(
                 compareByDescending<SupabaseCatalogItem> { it.rating }.thenByDescending { it.popularityScore }
             )
