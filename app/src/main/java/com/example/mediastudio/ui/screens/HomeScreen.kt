@@ -146,8 +146,6 @@ fun HomeScreen(
     val isSeriesTab = selectedTab == ContentTab.SERIES
     val isDrawerOpen = drawerState.isOpen
 
-    // Postavi početni fokus samo jednom pri prvom učitavanju ekrana,
-    // bez ponovnog okidanja kad se Hero banner rotira u pozadini
     LaunchedEffect(isLoading) {
         if (!isLoading && !isDrawerOpen && !hasRequestedInitialFocus && lastFocusedMovieId.isNullOrBlank()) {
             delay(100L)
@@ -272,14 +270,14 @@ fun HomeScreen(
         gesturesEnabled = isDrawerOpen,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(280.dp),
+                modifier = Modifier.width(240.dp),
                 drawerContainerColor = Color(0xFF121212)
             ) {
                 if (isDrawerOpen) {
                     Column(
                         modifier = Modifier
                             .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp)
+                            .padding(horizontal = 6.dp)
                             .onPreviewKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight) {
                                     scope.launch {
@@ -296,16 +294,16 @@ fun HomeScreen(
                                 }
                             }
                     ) {
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(18.dp))
                         Text(
                             text = "Izbornik",
                             color = Color.White,
-                            fontSize = 22.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(12.dp)
+                            modifier = Modifier.padding(10.dp)
                         )
                         Divider(color = Color.DarkGray)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
                         DrawerFocusableItem(
                             title = "⭐ Moji Favoriti",
@@ -319,7 +317,7 @@ fun HomeScreen(
                             }
                         )
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = when (selectedTab) {
                                 ContentTab.ANIMATION -> "Kategorije crtića"
@@ -328,9 +326,9 @@ fun HomeScreen(
                                 else -> "Žanrovi filmova"
                             },
                             color = Color.Gray,
-                            fontSize = 14.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
+                            modifier = Modifier.padding(start = 10.dp, bottom = 4.dp)
                         )
 
                         activeDrawerList
@@ -348,9 +346,9 @@ fun HomeScreen(
                                 )
                             }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Divider(color = Color.DarkGray)
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
                         DrawerFocusableItem(
                             title = "⚙ Postavke",
@@ -362,7 +360,7 @@ fun HomeScreen(
                                 }
                             }
                         )
-                        Spacer(modifier = Modifier.height(32.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
             }
@@ -378,7 +376,7 @@ fun HomeScreen(
                 val heroBgRequest = remember(currentHeroPosterUrl) {
                     ImageRequest.Builder(context)
                         .data(currentHeroPosterUrl)
-                        .size(420, 280)
+                        .size(320, 180)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(true)
@@ -399,7 +397,7 @@ fun HomeScreen(
                         Brush.horizontalGradient(
                             colors = listOf(Color(0xFF0F0F0F), Color(0xFF0F0F0F).copy(alpha = 0.72f), Color.Transparent),
                             startX = 0f,
-                            endX = 1200f
+                            endX = 1100f
                         )
                     )
             )
@@ -409,7 +407,7 @@ fun HomeScreen(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(Color.Transparent, Color(0xFF0A0A0A)),
-                            startY = 200f
+                            startY = 160f
                         )
                     )
             )
@@ -420,15 +418,15 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(Color(0xFF0D0D0D).copy(alpha = 0.96f))
-                            .padding(top = 4.dp, bottom = 4.dp)
+                            .padding(top = 3.dp, bottom = 3.dp)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 4.dp)
                                 .focusGroup(),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             HomeTvHighlightIconButton(
                                 onClick = { scope.launch { drawerState.open() } },
@@ -441,17 +439,22 @@ fun HomeScreen(
                                         down = activeTabFR
                                     }
                             ) {
-                                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
+                                Icon(
+                                    Icons.Default.Menu,
+                                    contentDescription = "Menu",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
 
                             Text(
                                 text = "Media Studio",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 21.sp
+                                fontSize = 18.sp
                             )
 
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
 
                             SearchTriggerBar(
                                 onClick = onOpenSearch,
@@ -470,9 +473,9 @@ fun HomeScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 4.dp)
                                 .focusGroup(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             TabButton(
                                 title = "🎬 Filmovi",
@@ -551,12 +554,12 @@ fun HomeScreen(
             ) { paddingValues ->
                 if (isLoading && selectedTab != ContentTab.FAVORITES) {
                     Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color.Red)
+                        CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(36.dp))
                     }
                 } else if (selectedTab == ContentTab.FAVORITES) {
                     if (favoriteMovies.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                            Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 16.sp)
+                            Text("Nemate spremljenih favorita.", color = Color.Gray, fontSize = 14.sp)
                         }
                     } else {
                         DisposableEffect(favGridState) {
@@ -585,10 +588,10 @@ fun HomeScreen(
 
                         LazyVerticalGrid(
                             state = favGridState,
-                            columns = GridCells.Adaptive(minSize = 120.dp),
-                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 64.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            columns = GridCells.Adaptive(minSize = 100.dp),
+                            contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 52.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(paddingValues)
@@ -649,7 +652,7 @@ fun HomeScreen(
 
                     LazyColumn(
                         state = homeListState,
-                        contentPadding = PaddingValues(top = 6.dp, bottom = 72.dp),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 56.dp),
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(paddingValues)
@@ -659,47 +662,47 @@ fun HomeScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(275.dp)
-                                    .padding(start = 24.dp, bottom = 10.dp, end = 24.dp)
+                                    .height(215.dp)
+                                    .padding(start = 20.dp, bottom = 8.dp, end = 20.dp)
                             ) {
                                 currentHeroMovie?.let { (movie, isSeries) ->
                                     Column(
                                         modifier = Modifier.align(Alignment.BottomStart),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
                                             text = movie.title,
                                             color = Color.White,
-                                            fontSize = 32.sp,
+                                            fontSize = 25.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             maxLines = 2,
-                                            lineHeight = 36.sp,
+                                            lineHeight = 29.sp,
                                             overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.width(650.dp)
+                                            modifier = Modifier.width(560.dp)
                                         )
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
                                                 text = if (isSeries) "SERIJA" else "FILM",
                                                 color = Color.LightGray,
-                                                fontSize = 12.sp,
+                                                fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 modifier = Modifier
                                                     .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
                                             )
-                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = "Istaknuto na Media Studiju",
                                                 color = Color.Gray,
-                                                fontSize = 14.sp,
+                                                fontSize = 12.sp,
                                                 fontWeight = FontWeight.Medium
                                             )
                                         }
 
                                         Row(
                                             modifier = Modifier.focusGroup(),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
                                             HeroButton(
                                                 text = "Gledaj odmah",
@@ -753,13 +756,13 @@ fun HomeScreen(
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.BottomCenter)
-                                            .offset(y = 10.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            .offset(y = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         heroMovies.forEachIndexed { index, _ ->
                                             Box(
                                                 modifier = Modifier
-                                                    .size(if (index == activeHeroIndex) 8.dp else 6.dp)
+                                                    .size(if (index == activeHeroIndex) 7.dp else 5.dp)
                                                     .background(
                                                         color = if (index == activeHeroIndex) Color.White else Color.Gray.copy(alpha = 0.5f),
                                                         shape = CircleShape
@@ -813,14 +816,14 @@ fun HomeScreen(
                     text = "Izlaz iz aplikacije",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
+                    fontSize = 18.sp
                 )
             },
             text = {
                 Text(
                     text = "Da li ste sigurni da želite izaći iz aplikacije Media Studio?",
                     color = Color.LightGray,
-                    fontSize = 16.sp
+                    fontSize = 14.sp
                 )
             },
             confirmButton = {
@@ -858,25 +861,25 @@ private fun HeroButton(
 
     Row(
         modifier = modifier
-            .height(44.dp)
-            .background(color = bgColor, shape = RoundedCornerShape(22.dp))
-            .border(width = if (isFocused) 3.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(22.dp))
+            .height(36.dp)
+            .background(color = bgColor, shape = RoundedCornerShape(18.dp))
+            .border(width = if (isFocused) 2.5.dp else 0.dp, color = borderColor, shape = RoundedCornerShape(18.dp))
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = contentColor,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(17.dp)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = text,
             color = contentColor,
             fontWeight = FontWeight.Bold,
-            fontSize = 15.sp
+            fontSize = 13.sp
         )
     }
 }
@@ -898,22 +901,22 @@ private fun DialogFocusableButton(
                     isPrimary -> Color(0xFF990000)
                     else -> Color(0xFF2B2B2B)
                 },
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 1.dp,
+                width = if (isFocused) 2.dp else 1.dp,
                 color = if (isFocused) Color.White else Color.DarkGray,
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 24.dp, vertical = 10.dp),
+            .padding(horizontal = 20.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 15.sp
+            fontSize = 13.sp
         )
     }
 }
@@ -929,15 +932,15 @@ private fun HomeTvHighlightIconButton(
 
     Box(
         modifier = modifier
-            .size(44.dp)
+            .size(36.dp)
             .background(
                 color = if (isFocused) Color.Red else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
+                width = if (isFocused) 2.dp else 0.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() },
         contentAlignment = Alignment.Center
@@ -959,23 +962,23 @@ private fun DrawerFocusableItem(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp)
+            .padding(vertical = 2.dp)
             .background(
                 color = if (isFocused) Color(0xFF2B2B2B) else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused) 2.5.dp else 0.dp,
+                width = if (isFocused) 2.dp else 0.dp,
                 color = if (isFocused) Color.White else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
         Text(
             text = title,
             color = if (isAdult) Color(0xFFFF6B6B) else Color.White,
-            fontSize = 15.sp,
+            fontSize = 13.sp,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal
         )
     }
@@ -991,31 +994,31 @@ private fun SearchTriggerBar(
 
     Row(
         modifier = modifier
-            .height(44.dp)
+            .height(36.dp)
             .background(
                 color = if (isFocused) Color(0xFF2A2A2A) else Color(0xFF161616),
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 3.dp else 1.dp,
+                width = if (isFocused) 2.5.dp else 1.dp,
                 color = if (isFocused) Color.White else Color.DarkGray,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = Icons.Default.Search,
             contentDescription = "Pretraži",
             tint = if (isFocused) Color.White else Color.Gray,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(17.dp)
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = "Pretraži filmove i serije...",
             color = if (isFocused) Color.White else Color.Gray,
-            fontSize = 14.sp,
+            fontSize = 12.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1036,22 +1039,22 @@ private fun TabButton(
         modifier = modifier
             .background(
                 color = if (isSelected) Color.Red else if (isFocused) Color(0xFF2B2B2B) else Color(0xFF1A1A1A),
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .border(
-                width = if (isFocused) 3.dp else 1.dp,
+                width = if (isFocused) 2.5.dp else 1.dp,
                 color = if (isFocused) Color.White else if (isSelected) Color.Red else Color.DarkGray,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 6.dp, vertical = 10.dp),
+            .padding(horizontal = 5.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
+            fontSize = 11.5.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
@@ -1095,49 +1098,49 @@ fun MovieCategoryRow(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .padding(horizontal = 14.dp, vertical = 2.dp)
                 .focusProperties { left = FocusRequester.Cancel }
                 .background(
                     color = if (isHeaderFocused) Color(0xFF222222) else Color.Transparent,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(7.dp)
                 )
                 .border(
-                    width = if (isHeaderFocused) 2.5.dp else 0.dp,
+                    width = if (isHeaderFocused) 2.dp else 0.dp,
                     color = if (isHeaderFocused) Color.White else Color.Transparent,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(7.dp)
                 )
                 .clickable(interactionSource = headerInteraction, indication = null) { onHeaderClick() }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = displayTitle,
                 color = Color.White,
-                fontSize = 19.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = "Svi",
                 color = if (isHeaderFocused) Color.White else Color.Gray,
-                fontSize = 13.sp,
+                fontSize = 11.5.sp,
                 fontWeight = if (isHeaderFocused) FontWeight.Bold else FontWeight.Normal
             )
             Icon(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = "Otvori žanr",
                 tint = if (isHeaderFocused) Color.White else Color.Gray,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(17.dp)
             )
         }
 
         LazyRow(
             state = rowListState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 16.dp else 12.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (isNetflixTop10) 12.dp else 10.dp),
             modifier = Modifier.focusGroup()
         ) {
             itemsIndexed(
@@ -1197,7 +1200,7 @@ fun NetflixTop10Card(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val borderWidth = if (isFocused) 2.5.dp else 1.dp
     val internalFocusRequester = remember { FocusRequester() }
     val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
@@ -1230,7 +1233,7 @@ fun NetflixTop10Card(
 
     Column(
         modifier = modifier
-            .width(162.dp)
+            .width(136.dp)
             .graphicsLayer {
                 scaleX = scaleVal
                 scaleY = scaleVal
@@ -1239,27 +1242,27 @@ fun NetflixTop10Card(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
-            .padding(bottom = 4.dp),
+            .padding(bottom = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
-                .width(162.dp)
-                .height(175.dp)
+                .width(136.dp)
+                .height(146.dp)
         ) {
             Card(
                 modifier = Modifier
-                    .width(115.dp)
-                    .height(170.dp)
+                    .width(96.dp)
+                    .height(142.dp)
                     .align(Alignment.CenterEnd)
-                    .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp)
+                    .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
+                shape = RoundedCornerShape(9.dp)
             ) {
                 val activeUrl = posterUrl.ifBlank { fallbackUrl }
                 val imageRequest = remember(activeUrl) {
                     ImageRequest.Builder(context)
                         .data(activeUrl)
-                        .size(180, 270)
+                        .size(140, 210)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(true)
@@ -1269,7 +1272,7 @@ fun NetflixTop10Card(
 
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(18.dp))
                     }
                     Image(
                         painter = painter,
@@ -1281,7 +1284,7 @@ fun NetflixTop10Card(
                         val fallbackReq = remember(fallbackUrl) {
                             ImageRequest.Builder(context)
                                 .data(fallbackUrl)
-                                .size(180, 270)
+                                .size(140, 210)
                                 .scale(Scale.FILL)
                                 .bitmapConfig(Bitmap.Config.RGB_565)
                                 .allowHardware(true)
@@ -1297,13 +1300,13 @@ fun NetflixTop10Card(
                 }
             }
 
-            val numberFontSize = if (rankNumber == 10) 86.sp else 96.sp
-            val numberLetterSpacing = if (rankNumber == 10) (-7).sp else 0.sp
+            val numberFontSize = if (rankNumber == 10) 70.sp else 78.sp
+            val numberLetterSpacing = if (rankNumber == 10) (-6).sp else 0.sp
 
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .offset(x = 0.dp, y = 8.dp)
+                    .offset(x = 0.dp, y = 6.dp)
             ) {
                 Text(
                     text = "$rankNumber",
@@ -1314,7 +1317,7 @@ fun NetflixTop10Card(
                         letterSpacing = numberLetterSpacing,
                         drawStyle = Stroke(
                             miter = 10f,
-                            width = 8f,
+                            width = 6f,
                             join = StrokeJoin.Round
                         )
                     )
@@ -1330,16 +1333,16 @@ fun NetflixTop10Card(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(5.dp))
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(162.dp).padding(start = 28.dp)
+            modifier = Modifier.width(136.dp).padding(start = 24.dp)
         )
     }
 }
@@ -1361,7 +1364,7 @@ fun MovieCard(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val borderWidth = if (isFocused) 2.5.dp else 1.dp
     val internalFocusRequester = remember { FocusRequester() }
     val activeFocusRequester = externalFocusRequester ?: internalFocusRequester
 
@@ -1418,7 +1421,7 @@ fun MovieCard(
 
     Column(
         modifier = modifier
-            .width(120.dp)
+            .width(100.dp)
             .graphicsLayer {
                 scaleX = scaleVal
                 scaleY = scaleVal
@@ -1427,22 +1430,22 @@ fun MovieCard(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
-            .padding(bottom = 4.dp),
+            .padding(bottom = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Card(
             modifier = Modifier
-                .width(120.dp)
-                .height(175.dp)
-                .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
+                .width(100.dp)
+                .height(146.dp)
+                .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
+            shape = RoundedCornerShape(9.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
         ) {
             if (posterUrl.isNotEmpty()) {
                 val imageRequest = remember(posterUrl) {
                     ImageRequest.Builder(context)
                         .data(posterUrl)
-                        .size(180, 270)
+                        .size(140, 210)
                         .scale(Scale.FILL)
                         .bitmapConfig(Bitmap.Config.RGB_565)
                         .allowHardware(true)
@@ -1451,7 +1454,7 @@ fun MovieCard(
                 val painter = rememberAsyncImagePainter(model = imageRequest)
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (painter.state is AsyncImagePainter.State.Loading) {
-                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
+                        CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(18.dp))
                     }
                     if (painter.state is AsyncImagePainter.State.Error) {
                         if (isAuthor) {
@@ -1463,7 +1466,7 @@ fun MovieCard(
                                     imageVector = Icons.Default.Person,
                                     contentDescription = movie.title,
                                     tint = Color.Gray,
-                                    modifier = Modifier.size(52.dp)
+                                    modifier = Modifier.size(44.dp)
                                 )
                             }
                         } else {
@@ -1472,7 +1475,7 @@ fun MovieCard(
                             val fallbackReq = remember(fallback) {
                                 ImageRequest.Builder(context)
                                     .data(fallback)
-                                    .size(180, 270)
+                                    .size(140, 210)
                                     .scale(Scale.FILL)
                                     .bitmapConfig(Bitmap.Config.RGB_565)
                                     .allowHardware(true)
@@ -1504,23 +1507,23 @@ fun MovieCard(
                         imageVector = Icons.Default.Person,
                         contentDescription = movie.title,
                         tint = Color.Gray,
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(44.dp)
                     )
                 }
             } else {
                 Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray))
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(5.dp))
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(120.dp)
+            modifier = Modifier.width(100.dp)
         )
     }
 }
