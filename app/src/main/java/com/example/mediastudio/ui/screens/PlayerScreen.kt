@@ -82,7 +82,12 @@ private const val STREAM_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 private val UNWANTED_CLIP_REGEX = Regex(
-    "(?i)(trailer|sample|teaser|preview|promo|pencil[\\s._-]*test|shot[\\s._-]*demo|transformation|test[\\s._-]*footage|commentary|subtlet|review)"
+    "(?i)(?:\\b(?:trailer|sample|teaser|preview|promo|commentary|subtlet|review|" +
+        "extras?|featurettes?|interviews?|bloopers?|outtakes?|stills?|epk|b[\\s._-]*roll)\\b|" +
+        "pencil[\\s._-]*test|shot[\\s._-]*demo|transformation|test[\\s._-]*footage|" +
+        "deleted[\\s._-]*scenes?|behind[\\s._-]*the[\\s._-]*scenes|making[\\s._-]*of|" +
+        "a[\\s._-]*look[\\s._-]*back|charlie[\\s._-]*rose|gag[\\s._-]*reel|scorsese[\\s._-]*on[\\s._-]*scorsese|" +
+        "crossing[\\s._-]*criminal|stills[\\s._-]*with[\\s._-]*score)"
 )
 
 data class SrtCue(
@@ -437,6 +442,7 @@ fun PlayerScreen(
             directVideoUrl
         } else {
             val moduleQualities = ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)
+                .filterNot { UNWANTED_CLIP_REGEX.containsMatchIn("${it.label} ${it.url}") }
             val mapped = moduleQualities.map {
                 PlayerVersionOption(
                     label = it.label,
@@ -1829,6 +1835,28 @@ private suspend fun loadAllMovieVersions(
 
             val files = metaJson.optJSONArray("files")
             if (files != null) {
+                // Prvo odredi stvarno trajanje glavnog filma unutar ovog Archive.org itema (radi filtriranja bonus diskova/dodataka)
+                var maxItemRuntimeSecs = detectedPrimaryRuntimeSecs
+                for (i in 0 until files.length()) {
+                    val f = files.optJSONObject(i) ?: continue
+                    val name = f.optString("name")
+                    val lower = name.lowercase(Locale.ROOT)
+                    if (!lower.endsWith(".mp4") && !lower.endsWith(".mkv") && !lower.endsWith(".avi")) continue
+                    if (UNWANTED_CLIP_REGEX.containsMatchIn(lower)) continue
+                    val lSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                    if (lSecs > maxItemRuntimeSecs) {
+                        maxItemRuntimeSecs = lSecs
+                    }
+                }
+                if (maxItemRuntimeSecs > detectedPrimaryRuntimeSecs) {
+                    detectedPrimaryRuntimeSecs = maxItemRuntimeSecs
+                }
+                val minFeatureSecs = if (!episodeCtx.isSeries && maxItemRuntimeSecs >= 3600) {
+                    (maxItemRuntimeSecs * 0.60).toInt().coerceAtLeast(2700)
+                } else {
+                    0
+                }
+
                 for (i in 0 until files.length()) {
                     val f = files.optJSONObject(i) ?: continue
                     val name = f.optString("name")
@@ -1839,32 +1867,33 @@ private suspend fun loadAllMovieVersions(
                     val sizeBytes = f.optString("size").toLongOrNull() ?: 0L
                     if (sizeBytes < 25_000_000L) continue
 
+                    val encoded = name.split("/").joinToString("/") { part ->
+                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+                    }
+                    val streamUrl = "https://archive.org/download/$cleanArchiveId/$encoded"
+                    val isCurrentFile = urlsMatchArchiveFile(streamUrl, currentUrl)
+
+                    val lenSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
+                    if (!isCurrentFile && minFeatureSecs > 0 && lenSecs in 1 until minFeatureSecs) {
+                        continue
+                    }
+
                     if (episodeCtx.isSeries) {
                         if (episodeCtx.season > 0 && episodeCtx.episode > 0) {
                             if (!fileMatchesEpisode(name, episodeCtx.season, episodeCtx.episode)) continue
-                        } else if (!urlsMatchArchiveFile("https://archive.org/download/$cleanArchiveId/$name", currentUrl)) {
+                        } else if (!isCurrentFile) {
                             continue
                         }
                     } else if (itemIsCollection) {
                         val fileCleanTitle = cleanMovieTitleForSubtitleSearch(name.substringAfterLast("/").substringBeforeLast("."))
                         val matchesByTitle = titlesMatchStrictly(targetMovieWords, fileCleanTitle)
-                        val isCurrentFile = urlsMatchArchiveFile("https://archive.org/download/$cleanArchiveId/$name", currentUrl)
                         if (!matchesByTitle && !isCurrentFile) continue
-                    }
-
-                    val lenSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                    if (detectedPrimaryRuntimeSecs <= 0 && lenSecs > 900) {
-                        detectedPrimaryRuntimeSecs = lenSecs
                     }
 
                     val width = f.optString("width").toDoubleOrNull()?.toInt() ?: 0
                     val height = f.optString("height").toDoubleOrNull()?.toInt() ?: 0
                     val isDeriv = lower.endsWith(".ia.mp4") || f.optString("source") == "derivative"
                     val langRank = classifyVersionLanguageRank("$itemLangBlob $name")
-                    val encoded = name.split("/").joinToString("/") { part ->
-                        URLEncoder.encode(part, "UTF-8").replace("+", "%20")
-                    }
-                    val streamUrl = "https://archive.org/download/$cleanArchiveId/$encoded"
                     val label = buildVersionDisplayLabel(
                         filename = name,
                         width = width,
@@ -1893,6 +1922,7 @@ private suspend fun loadAllMovieVersions(
     if (!isAuthorOrMultiCollection && !episodeCtx.isSeries) {
         try {
             for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
+                if (UNWANTED_CLIP_REGEX.containsMatchIn("${q.label} ${q.url}")) continue
                 addUniqueVersion(
                     PlayerVersionOption(
                         label = q.label,
@@ -1981,8 +2011,8 @@ private suspend fun loadAllMovieVersions(
                                     }
                                 } else {
                                     val afSecs = af.optString("length").toDoubleOrNull()?.toInt() ?: 0
-                                    if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 600) {
-                                        if (afSecs < (detectedPrimaryRuntimeSecs * 0.85).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.18).toInt()) {
+                                    if (detectedPrimaryRuntimeSecs > 1800 && afSecs > 0) {
+                                        if (afSecs < (detectedPrimaryRuntimeSecs * 0.75).toInt() || afSecs > (detectedPrimaryRuntimeSecs * 1.22).toInt()) {
                                             continue
                                         }
                                     }
