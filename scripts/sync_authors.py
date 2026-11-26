@@ -117,7 +117,8 @@ AUTHORS = [
     ("Denis Villeneuve", "incendies.-2010.1080p"),
     ("James Cameron", "the-terminator-1984_202606"),
     ("Michael Haneke", "funny-games_202511"),
-    # Novi val (9 autora)
+    # Novi val (10 autora)
+    ("George Lucas", "american-graffiti-35mm-hd-upscale-lighter"),
     ("Tim Burton", "edward-scissorhands_202607"),
     ("Wes Anderson", "bottle.-rocket.-1996"),
     ("Spike Lee", "Clockers"),
@@ -245,6 +246,10 @@ VERIFIED_AUTHOR_ARCHIVE_ITEMS = {
         (26564, "michael-haneke-1997-the-castle-vidomon"),
         (1717, "the-piano-teacher-2001"),
         (86837, "VILIBAZMIO-amour-2012"),
+    ],
+    "George Lucas": [
+        (636, "thx-1138-george-lucas-1971-grindhouse-35mm-scan"),
+        (838, "american-graffiti-35mm-hd-upscale-lighter"),
     ],
     "Tim Burton": [
         (162, "edward-scissorhands_202607"),
