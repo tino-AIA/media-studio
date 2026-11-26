@@ -38,11 +38,11 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Siguran vremenski okvir (50 min) s pojedinačnim budžetima po fazi
+# Siguran vremenski okvir (50 min) s uravnoteženim budžetima po fazi (korak 4/4 dobiva ~20 min)
 MAX_MOVIES_SYNC_SECONDS = 50 * 60
-PHASE1_AUDIT_MAX_SECONDS = 8 * 60
-PHASE1B_BUNDLES_MAX_SECONDS = 16 * 60
-PHASE2_EXYU_MAX_SECONDS = 8 * 60
+PHASE1_AUDIT_MAX_SECONDS = 7 * 60
+PHASE1B_BUNDLES_MAX_SECONDS = 8 * 60
+PHASE2_EXYU_MAX_SECONDS = 7 * 60
 PHASE3_CULT_MAX_SECONDS = 8 * 60
 
 BATCH_SIZE_CANDIDATES = 40
@@ -50,21 +50,18 @@ MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 3 * 60
 
 MAX_VERSIONS_PER_MOVIE = 2
 MAX_VHS_UPGRADE_CHECKS_PER_RUN = 20
-MAX_DYNAMIC_BUNDLES_PER_RUN = 45
+MAX_DYNAMIC_BUNDLES_PER_RUN = 20
 
-# ==============================================================================
-# SLOJEVITO MAPIRANJE: https://archive.org/details/movies (Layer 0 -> 1 -> 2 -> 3)
-# ==============================================================================
 ROOT_MOVIES_COLLECTION = "movies"
 
-# Layer 1 grane koje se ODMAH odbacuju na samom ulazu (prema tvojoj uputi)
+# Layer 1 grane koje se ODMAH odbacuju na samom ulazu
 EXCLUDED_LAYER1_COLLECTIONS = {
-    "newsandpublicaffairs",  # News & Public Affairs
-    "tvnews",                # Television Archive News Search Service
-    "twitchstreams",         # Twitch streams
-    "tiktok",                # Tiktok Video Bin
-    "vlogs",                 # Vlogs
-    "videopodcasts",         # Video Podcasts
+    "newsandpublicaffairs",
+    "tvnews",
+    "twitchstreams",
+    "tiktok",
+    "vlogs",
+    "videopodcasts",
     "computersandtechvideos",
     "spiritualityandreligion",
     "community_spirituality",
@@ -72,13 +69,15 @@ EXCLUDED_LAYER1_COLLECTIONS = {
     "videogamevideos",
     "prelinger",
     "ephemeral",
+    "opensource_audio",
+    "federated_search",
 }
 
-# Podmape u dubljim slojevima koje nisu filmovi (vijesti, sportski prijenosi, predavanja)
 EXCLUDED_SUBLAYER_RE = re.compile(
     r"(?i)(?:news|cnn|fox[\s._-]*news|msnbc|cspan|election|parliament|senate|"
     r"twitch|tiktok|vlog|podcast|sermon|church|prayer|university|lecture|course|"
-    r"olympic|championship|tournament|sports|commercial|trailer|gameplay|speedrun)"
+    r"olympic|championship|tournament|sports|commercial|trailer|gameplay|speedrun|"
+    r"foia|radars|military[\s._-]*data|visual[\s._-]*novel)"
 )
 
 PINNED_MULTI_FILE_BUNDLES = [
@@ -86,6 +85,25 @@ PINNED_MULTI_FILE_BUNDLES = [
     "james-bond-collection",
     "ISOanimationMoviesDVD",
 ]
+
+# Paketi iz prethodnog pokretanja koji nisu filmovi (za automatsko čišćenje pogrešno upisanih stavki)
+BAD_BUNDLE_PREFIXES = (
+    "disc-8_20230612,tmdb-",
+    "little-people_202111,tmdb-",
+    "dadsarmythecompletecollection,tmdb-",
+    "asian-beauties,tmdb-",
+    "FFTGTG_Web_DVD,tmdb-",
+    "oldhackerinfosecvideos,tmdb-",
+    "night_of_the_living_dead_dvd,tmdb-660982",
+    "The_Scar_1948,tmdb-565310",
+    "Grundeinkommen,tmdb-",
+)
+
+BAD_TITLE_MARKER_RE = re.compile(
+    r"(?i)(?:dts\s*blu-ray|music\s*demo\s*disc|demo\s*disc\s*\d+|screen\s*snapshots|"
+    r"observational\s*series|persian\s*series|barney'?s?\s+|my\s*little\s*pony\s*live|"
+    r"bear\s*in\s*the\s*big\s*blue\s*house\s*live|asian\s*beauties|krotoplaxx)"
+)
 
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     # james-bond-collection (svih 18 filmova)
@@ -133,7 +151,9 @@ BUNDLE_NOISE_RE = re.compile(
     r"football|basketball|swimming|gymnastics|athletics|gameplay|speedrun|walkthrough|"
     r"apollo\d*|onboard[\s._-]*film|natureexplorers|youtube[\s._-]*channel|fox[\s._-]*kids|"
     r"tgif|woc\b|vh1|mtv|pbs|bbc|cbs|nbc|abc[\s._-]*beakman|visual[\s._-]*novel|"
-    r"\b\d+\s*of\s*\d+\b|series\b|season\b|episode\b|election[\s._-]*coverage)"
+    r"\b\d+\s*of\s*\d+\b|series\b|season\b|episode\b|election[\s._-]*coverage|"
+    r"templeos|foia|norad|infosec|hacker|fansub|blackadder|dadsarmy|pbj-otter|"
+    r"asian[\s._-]*beauties|demo[\s._-]*disc|little[\s._-]*people|barney|debates\d*)"
 )
 
 EXPLICIT_JUNK_RE = re.compile(
@@ -413,13 +433,13 @@ def resolve_movie_genres(details, final_title, hint_genre=None):
     return genres[:3]
 
 
-def fetch_child_collections(parent_col_id, rows=60):
-    """Dohvaća neposredni podsloj mapa (mediatype:collection) unutar zadane mape."""
+def fetch_child_collections(parent_col_id, rows=80):
+    """Dohvaća samo neposredne podmape (gdje je parent_col_id prvi roditelj u polju collection)."""
     data = safe_get(
         "https://archive.org/advancedsearch.php",
         params={
             "q": f"collection:{parent_col_id} AND mediatype:collection",
-            "fl[]": ["identifier", "title", "downloads"],
+            "fl[]": ["identifier", "title", "collection", "downloads"],
             "sort[]": "downloads desc",
             "rows": rows,
             "page": 1,
@@ -431,6 +451,11 @@ def fetch_child_collections(parent_col_id, rows=60):
         ident = (doc.get("identifier") or "").strip()
         if not ident or ident.lower() == parent_col_id.lower():
             continue
+        cols = doc.get("collection") or []
+        if isinstance(cols, str):
+            cols = [cols]
+        if cols and cols[0].lower() != parent_col_id.lower():
+            continue
         raw_t = doc.get("title") or ident
         if isinstance(raw_t, list):
             raw_t = raw_t[0]
@@ -439,17 +464,11 @@ def fetch_child_collections(parent_col_id, rows=60):
 
 
 def map_movies_hierarchy(deadline_ts):
-    """
-    Slojevito mapiranje od https://archive.org/details/movies:
-      Layer 1: prve podmape ispod 'movies' (odbacuje News & Public Affairs i sl.)
-      Layer 2: podmape odobrenih Layer 1 mapa (npr. Community Media Archive, Movies, VHS Vault...)
-      Layer 3: podmape iz Layer 2 (dublje mape s DVD/ISO kolekcijama i filmovima)
-    """
+    """Slojevito mapiranje stvarnog stabla od https://archive.org/details/movies (Layer 1 -> Layer 2 -> Layer 3)."""
     if time.monotonic() > deadline_ts:
         return [], [], []
 
-    # 1. Dohvati Layer 1 mape ispod 'movies'
-    raw_l1 = fetch_child_collections(ROOT_MOVIES_COLLECTION, rows=80)
+    raw_l1 = fetch_child_collections(ROOT_MOVIES_COLLECTION, rows=120)
     layer1_approved = []
     seen = set()
 
@@ -462,7 +481,6 @@ def map_movies_hierarchy(deadline_ts):
         seen.add(low)
         layer1_approved.append((ident, title))
 
-    # Osiguraj da su ključne grane s tvog prikaza uvijek prisutne u Layer 1
     guaranteed_l1 = [
         ("opensource_movies", "Community Media Archive"),
         ("additional_collections_video", "Additional Collections - Video"),
@@ -477,19 +495,16 @@ def map_movies_hierarchy(deadline_ts):
         ("silent_films", "Silent Films"),
         ("film_noir", "Film Noir"),
         ("saturdaymorningcartoons", "Saturday Morning Cartoons"),
-        ("television", "Television"),
-        ("tvarchive", "Television Archive"),
     ]
     for ident, title in guaranteed_l1:
         if ident.lower() not in seen:
             seen.add(ident.lower())
             layer1_approved.append((ident, title))
 
-    # 2. Dohvati Layer 2 podmape za odobrene grane iz Layer 1
     layer2_approved = []
-    l1_to_expand = [ident for ident, _ in layer1_approved[:18]]
+    l1_to_expand = [ident for ident, _ in layer1_approved[:25]]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=40), l1_to_expand):
+        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=60), l1_to_expand):
             for ident, title in children:
                 low = ident.lower()
                 if low in seen or low in EXCLUDED_LAYER1_COLLECTIONS:
@@ -499,12 +514,11 @@ def map_movies_hierarchy(deadline_ts):
                 seen.add(low)
                 layer2_approved.append((ident, title))
 
-    # 3. Dohvati Layer 3 podmape za najbogatije grane iz Layer 2
     layer3_approved = []
     if time.monotonic() < deadline_ts and layer2_approved:
-        l2_to_expand = [ident for ident, _ in layer2_approved[:20]]
+        l2_to_expand = [ident for ident, _ in layer2_approved[:30]]
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for children in pool.map(lambda cid: fetch_child_collections(cid, rows=30), l2_to_expand):
+            for children in pool.map(lambda cid: fetch_child_collections(cid, rows=40), l2_to_expand):
                 for ident, title in children:
                     low = ident.lower()
                     if low in seen or low in EXCLUDED_LAYER1_COLLECTIONS:
@@ -799,10 +813,7 @@ def sync_curated_movie_exceptions(
 
 
 def discover_layered_multi_file_bundles(mapped_layers, existing_archive_ids, phase_deadline_ts):
-    """
-    Prolazi kroz mapirane slojeve (Layer 1 -> Layer 2 -> Layer 3) i traži multi-file DVD/ISO
-    i velike pakete filmova unutar svakog sloja.
-    """
+    """Prolazi kroz mapirane slojeve i traži isključivo filmske DVD/ISO multi-file pakete."""
     layer1, layer2, layer3 = mapped_layers
     ordered_collections = (
         [ident for ident, _ in layer3]
@@ -813,11 +824,10 @@ def discover_layered_multi_file_bundles(mapped_layers, existing_archive_ids, pha
     discovered = []
     seen_ids = set(PINNED_MULTI_FILE_BUNDLES)
 
-    # 1. Globalni ISO DVD paketi unutar odobrenih slojeva
     iso_query = (
         'mediatype:movies AND format:"ISO Image" '
         'AND -collection:newsandpublicaffairs AND -collection:tvnews AND -collection:prelinger '
-        'AND -subject:"tv series" AND -subject:news AND -subject:sports'
+        'AND -subject:"tv series" AND -subject:television AND -subject:news AND -subject:sports AND -subject:music'
     )
     for sort_order in ("downloads desc", "addeddate desc"):
         if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
@@ -840,7 +850,7 @@ def discover_layered_multi_file_bundles(mapped_layers, existing_archive_ids, pha
             raw_t = doc.get("title") or ident
             if isinstance(raw_t, list):
                 raw_t = raw_t[0]
-            if BUNDLE_NOISE_RE.search(f"{ident} {raw_t}") or is_explicit_junk_item(ident, raw_t):
+            if BUNDLE_NOISE_RE.search(f"{ident} {raw_t}") or is_explicit_junk_item(ident, raw_t) or contains_hentai_or_adult(ident, raw_t):
                 record_rejected_archive_id(f"bundle_checked:{ident}", raw_t, 0, existing_archive_ids)
                 continue
             seen_ids.add(ident)
@@ -848,14 +858,13 @@ def discover_layered_multi_file_bundles(mapped_layers, existing_archive_ids, pha
             if len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
                 break
 
-    # 2. Sloj po sloj kroz mapirane grane (Layer 3 -> Layer 2 -> Layer 1)
     for col_id in ordered_collections:
         if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
             break
         q = (
             f'mediatype:movies AND collection:{col_id} '
-            f'AND item_size:[4500000000 TO 999999999999] '
-            f'AND -subject:"tv series" AND -subject:news AND -subject:sports'
+            f'AND item_size:[5500000000 TO 999999999999] '
+            f'AND -subject:"tv series" AND -subject:television AND -subject:news AND -subject:sports AND -subject:music'
         )
         data = safe_get(
             "https://archive.org/advancedsearch.php",
@@ -863,7 +872,7 @@ def discover_layered_multi_file_bundles(mapped_layers, existing_archive_ids, pha
                 "q": q,
                 "fl[]": ["identifier", "title", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 25,
+                "rows": 20,
                 "page": 1,
                 "output": "json",
             },
@@ -896,7 +905,7 @@ def sync_multi_file_movie_bundles(
     phase_deadline_ts,
     all_movie_rows=None
 ):
-    """Izvlači pojedinačne filmove iz multi-file paketa otkrivenih kroz Layer 1 -> Layer 2 -> Layer 3."""
+    """Izvlači isključivo dugometražne filmove iz multi-file paketa otkrivenih kroz Layer 1 -> Layer 2 -> Layer 3."""
     print("1B/4 Slojevito izvlačenje filmova iz multi-file Archive.org paketa (Layer 1 -> 2 -> 3)...", flush=True)
     if time.monotonic() > phase_deadline_ts:
         return
@@ -912,19 +921,32 @@ def sync_multi_file_movie_bundles(
             break
 
         is_pinned = bundle_ident in PINNED_MULTI_FILE_BUNDLES
-        videos, arch_md = get_archive_item_details(bundle_ident, min_size_mb=90, allow_mkv=True)
+        videos, arch_md = get_archive_item_details(bundle_ident, min_size_mb=120, allow_mkv=True)
         if not videos:
             if not is_pinned:
                 record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
+        raw_bundle_title = arch_md.get("title") or bundle_ident
+        if isinstance(raw_bundle_title, list):
+            raw_bundle_title = raw_bundle_title[0]
+        if not is_pinned and (BUNDLE_NOISE_RE.search(f"{bundle_ident} {raw_bundle_title}") or BAD_TITLE_MARKER_RE.search(str(raw_bundle_title))):
+            record_rejected_archive_id(f"bundle_checked:{bundle_ident}", raw_bundle_title, 0, existing_archive_ids)
+            continue
+
+        bundle_year = extract_year_from_text(str(arch_md.get("year") or arch_md.get("date") or raw_bundle_title or bundle_ident))
+
         deduped_files = {}
         for v in videos:
             fname = v.get("filename") or ""
-            if is_explicit_junk_item(bundle_ident, "", fname):
+            mins = int(v.get("duration_mins") or 0)
+            # U paketima prihvaćamo samo dugometražne video datoteke (>= 55 min)
+            if mins > 0 and mins < 55:
+                continue
+            if is_explicit_junk_item(bundle_ident, "", fname) or BAD_TITLE_MARKER_RE.search(fname):
                 continue
             clean_t, year = clean_filename_to_title(fname, fallback_to_stem=True)
-            if not clean_t or len(clean_t) < 2:
+            if not clean_t or len(clean_t) < 2 or BAD_TITLE_MARKER_RE.search(clean_t):
                 continue
             stem_key = re.sub(r"(?i)\.ia$", "", fname.rsplit("/", 1)[-1].rsplit(".", 1)[0]).lower()
             is_mp4 = fname.lower().endswith(".mp4")
@@ -933,13 +955,13 @@ def sync_multi_file_movie_bundles(
             if stem_key not in deduped_files or score > deduped_files[stem_key][0]:
                 deduped_files[stem_key] = (score, v, clean_t, year)
 
-        # Automatski otkriveni zapisi obrađuju se kao multi-file paket samo ako imaju 3+ različita videa
-        if not is_pinned and len(deduped_files) < 3:
+        # Automatski otkriveni zapisi obrađuju se kao multi-file paket samo ako imaju 3..80 različitih dugometražnih videa
+        if not is_pinned and not (3 <= len(deduped_files) <= 80):
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
         sorted_entries = sorted(deduped_files.values(), key=lambda e: (e[1].get("filename") or "").lower())
-        print(f"  • {bundle_ident}: pronađeno {len(sorted_entries)} video zapisa za provjeru...", flush=True)
+        print(f"  • {bundle_ident}: pronađeno {len(sorted_entries)} dugometražnih video zapisa za provjeru...", flush=True)
         bundle_added = [0]
 
         def process_bundle_entry(entry):
@@ -958,6 +980,7 @@ def sync_multi_file_movie_bundles(
                 if contains_hentai_or_adult(fname, clean_t) or contains_blocked_regional_or_arabic(fname, clean_t):
                     return
 
+                search_y = parsed_y if parsed_y > 0 else (bundle_year if 1900 <= bundle_year <= 2020 else 0)
                 results = []
                 for lang_code in ("hr-HR", "en-US"):
                     params = {
@@ -966,11 +989,11 @@ def sync_multi_file_movie_bundles(
                         "language": lang_code,
                         "include_adult": "false"
                     }
-                    if parsed_y > 0:
-                        params["year"] = parsed_y
+                    if search_y > 0:
+                        params["year"] = search_y
                     res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
                     results = (res or {}).get("results", [])
-                    if not results and parsed_y > 0:
+                    if not results and search_y > 0 and parsed_y == 0:
                         params.pop("year")
                         res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
                         results = (res or {}).get("results", [])
@@ -989,6 +1012,8 @@ def sync_multi_file_movie_bundles(
                     hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
                     hit_year = extract_year_from_text(hit.get("release_date") or "")
                     if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
+                        continue
+                    if bundle_year > 0 and parsed_y == 0 and hit_year > 0 and abs(hit_year - bundle_year) > 3:
                         continue
                     if clean_norm and (
                         clean_norm == hit_orig_norm
@@ -1021,6 +1046,8 @@ def sync_multi_file_movie_bundles(
                 return
             if is_future_release(details.get("release_date") or ""):
                 return
+            if BAD_TITLE_MARKER_RE.search(details["hr_title"]) or BAD_TITLE_MARKER_RE.search(details["orig_title"]):
+                return
 
             orig_lang = details.get("original_language", "")
             if explicit_mid <= 0:
@@ -1030,7 +1057,9 @@ def sync_multi_file_movie_bundles(
                     return
 
             is_doc = 99 in (details.get("genre_ids") or [])
-            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc):
+            if is_doc and explicit_mid <= 0:
+                return
+            if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=False):
                 return
 
             rel_year = extract_year_from_text(details["release_date"]) or parsed_y
@@ -1227,6 +1256,11 @@ def audit_and_repair_existing_movies(
         existing_genres = list(row.get("genres") or [])
         is_author_promoted = ",tmdb-" in ident
         base_ident = ident.split(",tmdb-")[0].strip()
+
+        # Očisti pogrešno mapirane stavke iz ne-filmskih paketa / demo diskova / serija
+        if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title):
+            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen pogrešno mapirani zapis iz paketa: {title} ({ident})")
+            return
 
         is_cartoon_row = any(
             any(k in g.lower() for k in ("animiran", "crtić", "crtic", "cartoon", "disney", "looney"))
