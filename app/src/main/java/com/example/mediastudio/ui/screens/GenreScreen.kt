@@ -155,13 +155,13 @@ fun GenreScreen(
                             text = selectedGenre?.title ?: "Žanr",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
+                            fontSize = 17.sp
                         )
                         if (totalCount > 0) {
                             Text(
                                 text = "Stranica $currentPage od $totalPages • Ukupno $totalCount naslova",
                                 color = Color.Gray,
-                                fontSize = 12.sp
+                                fontSize = 11.sp
                             )
                         }
                     }
@@ -172,7 +172,12 @@ fun GenreScreen(
                         contentDescription = "Povratak",
                         modifier = Modifier.focusProperties { left = FocusRequester.Cancel }
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Povratak", tint = Color.White)
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = "Povratak",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
@@ -184,7 +189,7 @@ fun GenreScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0xFF121212))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -211,7 +216,7 @@ fun GenreScreen(
                         text = "$currentPage / $totalPages",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                        fontSize = 13.sp
                     )
 
                     PaginationNavButton(
@@ -242,22 +247,22 @@ fun GenreScreen(
                 modifier = Modifier.fillMaxSize().padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = Color.Red)
+                CircularProgressIndicator(color = Color.Red, modifier = Modifier.size(36.dp))
             }
         } else if (movies.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Nema pronađenih naslova na ovoj stranici.", color = Color.Gray)
+                Text("Nema pronađenih naslova na ovoj stranici.", color = Color.Gray, fontSize = 14.sp)
             }
         } else {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 120.dp),
-                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 72.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                columns = GridCells.Adaptive(minSize = 100.dp),
+                contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 58.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
@@ -323,22 +328,22 @@ private fun PaginationNavButton(
                     isPrimary -> Color.Red
                     else -> Color(0xFF262626)
                 },
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .border(
-                width = if (isFocused && enabled) 3.dp else 1.dp,
+                width = if (isFocused && enabled) 2.5.dp else 1.dp,
                 color = if (isFocused && enabled) Color.White else Color.Gray.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(7.dp)
             )
             .clickable(enabled = enabled, interactionSource = interactionSource, indication = null) { onClick() }
-            .padding(horizontal = 18.dp, vertical = 10.dp),
+            .padding(horizontal = 15.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = if (enabled) Color.White else Color.DarkGray,
             fontWeight = FontWeight.Bold,
-            fontSize = 14.sp
+            fontSize = 12.sp
         )
     }
 }
@@ -359,7 +364,7 @@ fun RatedMovieGridCard(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scaleVal = if (isFocused) 1.05f else 1f
     val borderColor = if (isFocused) Color.White else Color.Gray.copy(alpha = 0.65f)
-    val borderWidth = if (isFocused) 3.5.dp else 1.5.dp
+    val borderWidth = if (isFocused) 2.5.dp else 1.dp
     val cardFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(shouldRestoreFocus) {
@@ -415,19 +420,19 @@ fun RatedMovieGridCard(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onMovieClick(movie)
             }
-            .padding(bottom = 4.dp),
+            .padding(bottom = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(175.dp)
+                .height(146.dp)
         ) {
             Card(
                 modifier = Modifier
                     .fillMaxSize()
-                    .border(borderWidth, borderColor, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
+                    .border(borderWidth, borderColor, RoundedCornerShape(9.dp)),
+                shape = RoundedCornerShape(9.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1C))
             ) {
                 val activeImageUrl = posterUrl.ifBlank { fallbackUrl }
@@ -440,14 +445,14 @@ fun RatedMovieGridCard(
                             imageVector = Icons.Default.Person,
                             contentDescription = movie.title,
                             tint = Color.Gray,
-                            modifier = Modifier.size(56.dp)
+                            modifier = Modifier.size(46.dp)
                         )
                     }
                 } else {
                     val imageRequest = remember(activeImageUrl) {
                         ImageRequest.Builder(context)
                             .data(activeImageUrl)
-                            .size(180, 270)
+                            .size(140, 210)
                             .scale(Scale.FILL)
                             .bitmapConfig(Bitmap.Config.RGB_565)
                             .allowHardware(true)
@@ -456,7 +461,7 @@ fun RatedMovieGridCard(
                     val painter = rememberAsyncImagePainter(model = imageRequest)
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (painter.state is AsyncImagePainter.State.Loading) {
-                            CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(22.dp))
+                            CircularProgressIndicator(color = Color.Gray, modifier = Modifier.size(18.dp))
                         }
                         if (painter.state is AsyncImagePainter.State.Error) {
                             if (isAuthor || fallbackUrl.isBlank()) {
@@ -468,14 +473,14 @@ fun RatedMovieGridCard(
                                         imageVector = Icons.Default.Person,
                                         contentDescription = movie.title,
                                         tint = Color.Gray,
-                                        modifier = Modifier.size(56.dp)
+                                        modifier = Modifier.size(46.dp)
                                     )
                                 }
                             } else {
                                 val fallbackRequest = remember(fallbackUrl) {
                                     ImageRequest.Builder(context)
                                         .data(fallbackUrl)
-                                        .size(180, 270)
+                                        .size(140, 210)
                                         .scale(Scale.FILL)
                                         .bitmapConfig(Bitmap.Config.RGB_565)
                                         .allowHardware(true)
@@ -505,26 +510,26 @@ fun RatedMovieGridCard(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                        .border(1.dp, Color(0xFFFFC107), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .padding(5.dp)
+                        .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(5.dp))
+                        .border(1.dp, Color(0xFFFFC107), RoundedCornerShape(5.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.5.dp)
                 ) {
                     Text(
                         text = "★ ${ratedMovie.rating}",
                         color = Color(0xFFFFC107),
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(5.dp))
         Text(
             text = movie.title,
             color = if (isFocused) Color.White else Color.LightGray,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Normal,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
