@@ -41,25 +41,23 @@ from sync_common import (
 # Siguran vremenski okvir (50 min) s pojedinačnim budžetima po fazi
 MAX_MOVIES_SYNC_SECONDS = 50 * 60
 PHASE1_AUDIT_MAX_SECONDS = 8 * 60
-PHASE1B_BUNDLES_MAX_SECONDS = 14 * 60
-PHASE2_EXYU_MAX_SECONDS = 9 * 60
-PHASE3_CULT_MAX_SECONDS = 9 * 60
+PHASE1B_BUNDLES_MAX_SECONDS = 16 * 60
+PHASE2_EXYU_MAX_SECONDS = 8 * 60
+PHASE3_CULT_MAX_SECONDS = 8 * 60
 
 BATCH_SIZE_CANDIDATES = 40
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 3 * 60
 
 MAX_VERSIONS_PER_MOVIE = 2
 MAX_VHS_UPGRADE_CHECKS_PER_RUN = 20
-MAX_DYNAMIC_BUNDLES_PER_RUN = 35
+MAX_DYNAMIC_BUNDLES_PER_RUN = 60
 
-# Ručno zadani multi-file paketi + automatsko otkrivanje novih paketa ispod collection:movies
 PINNED_MULTI_FILE_BUNDLES = [
     "dvdisocollection_202605",
     "james-bond-collection",
     "ISOanimationMoviesDVD",
 ]
 
-# Eksplicitna mapa za datoteke s kodiranim/spojenim imenima unutar paketa -> TMDB ID
 EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     # james-bond-collection (svih 18 filmova)
     ("james-bond-collection", "james bond 1-33.mp4"): 646,     # Dr. No (1962)
@@ -80,7 +78,7 @@ EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     ("james-bond-collection", "james bond 19-211.mp4"): 36643, # The World Is Not Enough (1999)
     ("james-bond-collection", "james bond 19-212.mp4"): 36669, # Die Another Day (2002)
     ("james-bond-collection", "james bond 19-21.mp4"): 36557,  # Casino Royale (2006)
-    # dvdisocollection_202605 (spojeni/skraćeni nazivi datoteka)
+    # dvdisocollection_202605
     ("dvdisocollection_202605", "austinpowers/austinpowers.mp4"): 816,
     ("dvdisocollection_202605", "austinpowers2/austinpowers2.mp4"): 817,
     ("dvdisocollection_202605", "goldmember/goldmember28.mp4"): 818,
@@ -93,35 +91,42 @@ EXPLICIT_BUNDLE_FILE_TMDB_MAP = {
     ("dvdisocollection_202605", "priscilla_qotd_p4/priscilla_qotd_p4.mp4"): 2759,
     ("dvdisocollection_202605", "star_wars_episode_v/star_wars_episode_v.mp4"): 1891,
     ("dvdisocollection_202605", "the_exorcist_2000/the_exorcist_2000.mp4"): 9552,
-    # ISOanimationMoviesDVD (španjolski / skraćeni nazivi datoteka)
+    # ISOanimationMoviesDVD
     ("isoanimationmoviesdvd", "aladindisco1.mp4"): 812,
     ("isoanimationmoviesdvd", "et.mp4"): 601,
     ("isoanimationmoviesdvd", "las locuras del emperador.mp4"): 11688,
     ("isoanimationmoviesdvd", "monstruossa.mp4"): 585,
 }
 
-# Ciljani upiti koji traže isključivo filmske i animirane multi-file pakete (bez sporta, vijesti i predavanja)
+# Široki upiti izravno po mediatype:movies AND collection:movies (bez suvišnih ograničenja na subject)
 DYNAMIC_BUNDLE_QUERIES = [
     (
-        'mediatype:(movies OR web) AND collection:movies '
-        'AND title:(iso OR dvd OR pack OR anthology OR trilogy OR quadrilogy OR boxset OR "box set" OR "movie collection" OR "film collection" OR "movies collection" OR "films collection") '
+        'mediatype:movies AND collection:movies '
+        'AND item_size:[15000000000 TO 999999999999] '
         'AND -collection:television AND -collection:newsandpublicaffairs AND -collection:twitchstreams '
-        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
+        'AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
         "downloads desc",
     ),
     (
-        'mediatype:(movies OR web) AND collection:movies '
-        'AND item_size:[5000000000 TO 999999999999] '
-        'AND (subject:(movies OR films OR cinema OR animation OR cartoons OR feature) OR collection:(moviesandfilms OR dvdtray OR dvdtray_inbox OR feature_films OR vhsvault OR animationandcartoons OR scifihorror)) '
+        'mediatype:movies AND collection:movies '
+        'AND item_size:[4500000000 TO 14999999999] '
         'AND -collection:television AND -collection:newsandpublicaffairs AND -collection:twitchstreams '
-        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
+        'AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture AND -subject:university',
         "downloads desc",
     ),
     (
-        'mediatype:(movies OR web) AND collection:movies '
-        'AND title:(iso OR dvd OR pack OR anthology OR trilogy OR "movie collection" OR "film collection") '
+        'mediatype:movies AND collection:movies '
+        'AND title:(iso OR dvd OR pack OR collection OR anthology OR trilogy OR quadrilogy OR boxset OR "box set" OR classics OR cartoons OR animated OR horror OR sci-fi OR western OR action OR comedy) '
+        'AND item_size:[2500000000 TO 999999999999] '
         'AND -collection:television AND -collection:newsandpublicaffairs '
-        'AND -subject:"tv series" AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture',
+        'AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture',
+        "addeddate desc",
+    ),
+    (
+        'mediatype:movies AND collection:movies '
+        'AND item_size:[4000000000 TO 999999999999] '
+        'AND -collection:television AND -collection:newsandpublicaffairs '
+        'AND -subject:news AND -subject:sports AND -subject:olympics AND -subject:lecture',
         "addeddate desc",
     ),
 ]
@@ -409,7 +414,6 @@ def resolve_movie_genres(details, final_title, hint_genre=None):
     return genres[:3]
 
 
-# Glavne filmske podkolekcije ispod https://archive.org/details/movies
 ARCHIVE_FEATURE_COLLECTIONS = [
     ("moviesandfilms", 5),
     ("dvdtray", 6),
@@ -459,7 +463,7 @@ def discover_movies_subcollections(deadline_ts):
             "q": "mediatype:collection AND collection:movies",
             "fl[]": ["identifier", "title", "downloads"],
             "sort[]": "downloads desc",
-            "rows": 120,
+            "rows": 150,
             "page": 1,
             "output": "json",
         },
@@ -477,7 +481,7 @@ def discover_movies_subcollections(deadline_ts):
         if any(k in blob.lower() for k in ("movie", "film", "cinema", "dvd", "vhs", "cartoon", "noir", "horror", "western", "sci-fi", "scifi", "comedy", "drama", "action", "classic")):
             known.add(ident)
             extra.append((ident, 3))
-            if len(extra) >= 20:
+            if len(extra) >= 25:
                 break
     return extra
 
@@ -735,14 +739,14 @@ def sync_curated_movie_exceptions(
 
 
 def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
-    """Automatski pronalazi velike multi-file filmske pakete ispod collection:movies koji još nisu skenirani."""
+    """Automatski pronalazi velike multi-file filmske pakete ispod mediatype:movies AND collection:movies."""
     discovered = []
     seen_ids = set(PINNED_MULTI_FILE_BUNDLES)
 
     for q, sort_order in DYNAMIC_BUNDLE_QUERIES:
         if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
             break
-        for page in [1, 2, 3]:
+        for page in [1, 2, 3, 4]:
             if time.monotonic() > phase_deadline_ts or len(discovered) >= MAX_DYNAMIC_BUNDLES_PER_RUN:
                 break
             data = safe_get(
@@ -751,7 +755,7 @@ def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
                     "q": q,
                     "fl[]": ["identifier", "title", "downloads"],
                     "sort[]": sort_order,
-                    "rows": 100,
+                    "rows": 120,
                     "page": page,
                     "output": "json"
                 }
@@ -760,7 +764,7 @@ def discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts):
                 ident = (doc.get("identifier") or "").strip()
                 if not ident or ident in seen_ids:
                     continue
-                if f"bundle_checked:{ident}" in existing_archive_ids:
+                if ident in existing_archive_ids or f"bundle_checked:{ident}" in existing_archive_ids:
                     continue
                 if ident.lower().startswith(("youtube-", "yt-")):
                     continue
@@ -790,15 +794,15 @@ def sync_multi_file_movie_bundles(
     phase_deadline_ts,
     all_movie_rows=None
 ):
-    """Izvlači pojedinačne filmove iz ručnih i automatski otkrivenih multi-file Archive.org zapisa u TMDB žanrove."""
-    print("1B/4 Izvlačenje filmova iz multi-file Archive.org paketa (samo u odgovarajuće žanrove)...", flush=True)
+    """Izvlači filmove iz ručnih i automatski otkrivenih velikih Archive.org zapisa (mediatype:movies & collection:movies)."""
+    print("1B/4 Izvlačenje filmova iz multi-file i velikih Archive.org paketa (samo u odgovarajuće žanrove)...", flush=True)
     if time.monotonic() > phase_deadline_ts:
         return
 
     dynamic_bundles = discover_dynamic_movie_bundles(existing_archive_ids, phase_deadline_ts)
     all_bundles = list(PINNED_MULTI_FILE_BUNDLES) + dynamic_bundles
     if dynamic_bundles:
-        print(f"  Automatski otkriveno {len(dynamic_bundles)} novih multi-file kandidata ispod /details/movies.", flush=True)
+        print(f"  Automatski otkriveno {len(dynamic_bundles)} novih kandidata iz collection:movies & mediatype:movies.", flush=True)
 
     added_total = [0]
 
@@ -818,7 +822,16 @@ def sync_multi_file_movie_bundles(
             fname = v.get("filename") or ""
             if is_explicit_junk_item(bundle_ident, "", fname):
                 continue
-            clean_t, year = clean_filename_to_title(fname, fallback_to_stem=True)
+            clean_t, year = clean_filename_to_title(fname, fallback_to_stem=False)
+            if (not clean_t or len(clean_t) < 2) and len(videos) <= 2:
+                raw_item_t = arch_md.get("title") or bundle_ident
+                if isinstance(raw_item_t, list):
+                    raw_item_t = raw_item_t[0]
+                cands, y_item = extract_archive_title_candidates(str(raw_item_t), bundle_ident)
+                if cands:
+                    clean_t, year = cands[0], y_item
+            elif not clean_t or len(clean_t) < 2:
+                clean_t, year = clean_filename_to_title(fname, fallback_to_stem=True)
             if not clean_t or len(clean_t) < 2:
                 continue
             stem_key = re.sub(r"(?i)\.ia$", "", fname.rsplit("/", 1)[-1].rsplit(".", 1)[0]).lower()
@@ -828,13 +841,15 @@ def sync_multi_file_movie_bundles(
             if stem_key not in deduped_files or score > deduped_files[stem_key][0]:
                 deduped_files[stem_key] = (score, v, clean_t, year)
 
-        # Automatski otkriveni zapisi obrađuju se kao paket samo ako imaju 2+ različita videa
-        if not is_pinned and len(deduped_files) < 2:
-            record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
+        if not deduped_files:
+            if not is_pinned:
+                record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
             continue
 
+        is_single_movie_item = (not is_pinned and len(deduped_files) == 1)
         sorted_entries = sorted(deduped_files.values(), key=lambda e: (e[1].get("filename") or "").lower())
-        print(f"  • {bundle_ident}: pronađeno {len(sorted_entries)} video zapisa za provjeru...", flush=True)
+        if not is_single_movie_item:
+            print(f"  • {bundle_ident}: pronađeno {len(sorted_entries)} video zapisa za provjeru...", flush=True)
         bundle_added = [0]
 
         def process_bundle_entry(entry):
@@ -899,7 +914,7 @@ def sync_multi_file_movie_bundles(
             else:
                 mid = explicit_mid
 
-            catalog_arch_id = f"{bundle_ident},tmdb-{mid}"
+            catalog_arch_id = bundle_ident if is_single_movie_item else f"{bundle_ident},tmdb-{mid}"
             cand_tier = max(int(v.get("aspect_tier", 1)), estimate_source_quality_tier(fname, stream_url, clean_t))
             special_flag = is_special_or_remastered_edition(fname, stream_url, clean_t)
 
@@ -955,11 +970,12 @@ def sync_multi_file_movie_bundles(
         timed_out = run_batched_with_deadline(
             sorted_entries, process_bundle_entry, phase_deadline_ts, max_workers=10, batch_size=35
         )
-        print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
+        if not is_single_movie_item:
+            print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
         if not is_pinned and not timed_out:
             record_rejected_archive_id(f"bundle_checked:{bundle_ident}", bundle_ident, 0, existing_archive_ids)
 
-    print(f"  Ukupno dodano iz multi-file paketa: {added_total[0]} filmova.", flush=True)
+    print(f"  Ukupno dodano iz multi-file i velikih paketa: {added_total[0]} filmova.", flush=True)
 
 
 def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, min_aspect_tier=0):
