@@ -38,13 +38,17 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Siguran vremenski okvir (50 min) da se skripta uvijek uredno završi prije GitHub Actions timeouta
+# Siguran vremenski okvir (50 min) s pojedinačnim budžetima po fazi
 MAX_MOVIES_SYNC_SECONDS = 50 * 60
-BATCH_SIZE_CANDIDATES = 50
-MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 4 * 60
+PHASE1_AUDIT_MAX_SECONDS = 8 * 60
+PHASE2_EXYU_MAX_SECONDS = 12 * 60
+PHASE3_CULT_MAX_SECONDS = 15 * 60
+
+BATCH_SIZE_CANDIDATES = 40
+MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 3 * 60
 
 MAX_VERSIONS_PER_MOVIE = 2
-MAX_VHS_UPGRADE_CHECKS_PER_RUN = 25
+MAX_VHS_UPGRADE_CHECKS_PER_RUN = 20
 
 EXPLICIT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|sample|teaser|camrip|telesync|telecine|"
@@ -54,7 +58,7 @@ EXPLICIT_JUNK_RE = re.compile(
     r"watch[\s._-]*along|audio[\s._-]*commentary|director'?s?[\s._-]*commentary|"
     r"holiday[\s._-]+special|making[\s._-]+of|"
     r"behind[\s._-]+the[\s._-]+scenes|fan[\s._-]*(?:film|edit)|"
-    r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._-]*footage|no[\s._-]+memory[\s._-]+card)"
+    r"pencil[\s._-]*test|shot[\s._-]*demo|test[\s._]*footage|no[\s._-]+memory[\s._-]+card)"
 )
 
 GENERIC_CAMERA_OR_RIP_FILENAME_RE = re.compile(
@@ -464,6 +468,23 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=10, batch_size=40):
+    """Izvršava zadatke u malim paketima tako da istek vremenskog budžeta odmah prekida daljnje čekanje."""
+    item_list = list(items)
+    for start_idx in range(0, len(item_list), batch_size):
+        if time.monotonic() > deadline_ts:
+            return True
+        chunk = item_list[start_idx:start_idx + batch_size]
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(worker_fn, x) for x in chunk]
+            for fut in as_completed(futures):
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+    return time.monotonic() > deadline_ts
+
+
 def extract_archive_title_candidates(raw_title, ident):
     raw_str = str(raw_title or "").strip()
     year_in_title = extract_year_from_text(raw_str) or extract_year_from_text(ident)
@@ -620,7 +641,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
                 "q": query,
                 "fl[]": ["identifier", "title", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 8,
+                "rows": 6,
                 "output": "json"
             }
         )
@@ -703,7 +724,7 @@ def audit_and_repair_existing_movies(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
-    deadline_ts
+    phase_deadline_ts
 ):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
     print(f"1/4 Brza provjera {len(valid_rows)} postojećih filmova u bazi...", flush=True)
@@ -725,7 +746,7 @@ def audit_and_repair_existing_movies(
         print(reason_msg, flush=True)
 
     def inspect_movie_row(row):
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             return
         row_id = row["id"]
         ident = row.get("archive_id") or ""
@@ -784,7 +805,6 @@ def audit_and_repair_existing_movies(
         looks_blocked_text = contains_blocked_regional_or_arabic(title, ident, stream_url)
         suspect_dub = is_foreign_dub_without_english({}, base_ident, stream_url, orig_lang="en")
 
-        # Ako naslov i link nemaju nikakvih znakova problema, preskoči vanjske API pozive
         if not has_non_latin_title and not looks_blocked_text and not suspect_dub:
             return
 
@@ -811,7 +831,7 @@ def audit_and_repair_existing_movies(
             final_year = rel_year or extract_year_from_text(details["release_date"])
             with state_lock:
                 exclude_snapshot = set(existing_archive_ids)
-            replacement = find_best_archive_movie_match(details, final_year, exclude_snapshot, deadline_ts)
+            replacement = find_best_archive_movie_match(details, final_year, exclude_snapshot, phase_deadline_ts)
             if replacement:
                 new_ident, new_file, new_mins = replacement
                 can_use_new_id = False
@@ -857,8 +877,7 @@ def audit_and_repair_existing_movies(
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        list(pool.map(inspect_movie_row, valid_rows))
+    run_batched_with_deadline(valid_rows, inspect_movie_row, phase_deadline_ts, max_workers=12, batch_size=100)
 
     for row in valid_rows:
         if not row.get("is_valid", True):
@@ -878,11 +897,11 @@ def audit_and_repair_existing_movies(
         and tmdb_best_tier.get(int(r["tmdb_id"]), 1) == 0
     ][:MAX_VHS_UPGRADE_CHECKS_PER_RUN]
 
-    if vhs_candidates and time.monotonic() < deadline_ts:
+    if vhs_candidates and time.monotonic() < phase_deadline_ts:
         print(f"  Traženje bolje verzije (umjesto VHS/4:3 ripa) za {len(vhs_candidates)} filmova...", flush=True)
 
         def try_upgrade_vhs_row(row):
-            if time.monotonic() > deadline_ts:
+            if time.monotonic() > phase_deadline_ts:
                 return
             mid = int(row.get("tmdb_id") or 0)
             rel_year = int(row.get("release_year") or 0)
@@ -899,7 +918,7 @@ def audit_and_repair_existing_movies(
                 details,
                 rel_year or extract_year_from_text(details["release_date"]),
                 exclude_snapshot,
-                deadline_ts,
+                phase_deadline_ts,
                 min_aspect_tier=1
             )
             if not match:
@@ -924,8 +943,7 @@ def audit_and_repair_existing_movies(
                 with state_lock:
                     hd_upgraded_count[0] += 1
 
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            list(pool.map(try_upgrade_vhs_row, vhs_candidates))
+        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=6, batch_size=10)
 
     print(
         f"  Provjera završena: {replaced_count[0]} zamijenjeno originalom, "
@@ -1020,23 +1038,25 @@ def sync_ex_yu_movies(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
-    deadline_ts,
+    phase_deadline_ts,
     all_movie_rows=None
 ):
     print("2/4 Sinkronizacija Ex-Yu filmova i crtića...", flush=True)
     ex_yu_docs = {}
 
     for base_q in EX_YU_ARCHIVE_QUERIES:
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             break
-        for page in [1, 2, 3]:
+        for page in [1, 2]:
+            if time.monotonic() > phase_deadline_ts:
+                break
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
                     "q": base_q,
                     "fl[]": ["identifier", "title", "year", "downloads"],
                     "sort[]": "downloads desc",
-                    "rows": 200,
+                    "rows": 150,
                     "page": page,
                     "output": "json"
                 }
@@ -1049,7 +1069,7 @@ def sync_ex_yu_movies(
     added_ex_yu = [0]
 
     def process_ex_yu_doc(doc):
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             return
         ident = doc.get("identifier") or ""
         if not ident or ident.lower().startswith(("youtube-", "yt-")):
@@ -1072,7 +1092,9 @@ def sync_ex_yu_movies(
 
         results = []
         for cand_q in title_candidates[:2]:
-            for lang_code in ("hr-HR", "sr-RS", "en-US"):
+            if time.monotonic() > phase_deadline_ts:
+                return
+            for lang_code in ("hr-HR", "en-US"):
                 params = {
                     "api_key": TMDB_API_KEY,
                     "query": cand_q,
@@ -1188,21 +1210,24 @@ def sync_ex_yu_movies(
             with state_lock:
                 added_ex_yu[0] += 1
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        list(pool.map(process_ex_yu_doc, ex_yu_docs.values()))
+    print(f"  Provjera {len(ex_yu_docs)} novih Ex-Yu Archive kandidata...", flush=True)
+    timed_out_docs = run_batched_with_deadline(
+        ex_yu_docs.values(), process_ex_yu_doc, phase_deadline_ts, max_workers=10, batch_size=35
+    )
+    if timed_out_docs:
+        print(f"  ⏱ Dostignut vremenski limit za korak 2/4 (dodano {added_ex_yu[0]} Ex-Yu filmova) — prijelaz na korak 3/4...", flush=True)
+        return
 
     ex_yu_tmdb_candidates = {}
 
     def fetch_ex_yu_seed(seed_title):
-        for lang_code in ("hr-HR", "sr-RS"):
-            res = safe_get(
-                f"{TMDB_BASE}/search/movie",
-                {"api_key": TMDB_API_KEY, "query": seed_title, "language": lang_code, "include_adult": "false"}
-            )
-            hits = (res or {}).get("results", [])[:2]
-            if hits:
-                return hits
-        return []
+        if time.monotonic() > phase_deadline_ts:
+            return []
+        res = safe_get(
+            f"{TMDB_BASE}/search/movie",
+            {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"}
+        )
+        return (res or {}).get("results", [])[:2]
 
     with ThreadPoolExecutor(max_workers=10) as pool:
         for res_list in pool.map(fetch_ex_yu_seed, EX_YU_MOVIE_SEEDS):
@@ -1212,26 +1237,27 @@ def sync_ex_yu_movies(
                     ex_yu_tmdb_candidates[mid] = m
 
     for lang_code in ("hr", "sr", "sh", "bs", "sl", "mk"):
-        for page in [1, 2]:
-            data = safe_get(
-                f"{TMDB_BASE}/discover/movie",
-                {
-                    "api_key": TMDB_API_KEY,
-                    "language": "hr-HR",
-                    "with_original_language": lang_code,
-                    "include_adult": "false",
-                    "vote_count.gte": 10,
-                    "sort_by": "vote_count.desc",
-                    "page": page
-                }
-            )
-            for m in (data or {}).get("results", []):
-                mid = int(m["id"])
-                if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
-                    ex_yu_tmdb_candidates[mid] = m
+        if time.monotonic() > phase_deadline_ts:
+            break
+        data = safe_get(
+            f"{TMDB_BASE}/discover/movie",
+            {
+                "api_key": TMDB_API_KEY,
+                "language": "hr-HR",
+                "with_original_language": lang_code,
+                "include_adult": "false",
+                "vote_count.gte": 10,
+                "sort_by": "vote_count.desc",
+                "page": 1
+            }
+        )
+        for m in (data or {}).get("results", []):
+            mid = int(m["id"])
+            if can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier) and mid not in ex_yu_tmdb_candidates and not is_future_release(m.get("release_date") or ""):
+                ex_yu_tmdb_candidates[mid] = m
 
     def process_ex_yu_tmdb(m):
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             return
         mid = int(m["id"])
         with state_lock:
@@ -1248,7 +1274,7 @@ def sync_ex_yu_movies(
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts, min_aspect_tier=min_req_tier)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, phase_deadline_ts, min_aspect_tier=min_req_tier)
         if match:
             best_ident, best_file, best_mins = match
             is_anim = 16 in (details.get("genre_ids") or [])
@@ -1262,8 +1288,9 @@ def sync_ex_yu_movies(
                 with state_lock:
                     added_ex_yu[0] += 1
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        list(pool.map(process_ex_yu_tmdb, ex_yu_tmdb_candidates.values()))
+    run_batched_with_deadline(
+        ex_yu_tmdb_candidates.values(), process_ex_yu_tmdb, phase_deadline_ts, max_workers=10, batch_size=30
+    )
 
     print(f"  Dodano {added_ex_yu[0]} novih Ex-Yu filmova i crtića.", flush=True)
 
@@ -1274,18 +1301,18 @@ def search_tmdb_cult_and_genres(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
-    deadline_ts,
+    phase_deadline_ts,
     all_movie_rows=None
 ):
     print("3/4 Ciljana pretraga kultnih klasika, animiranih filmova i TMDB žanrova...", flush=True)
-    if time.monotonic() > deadline_ts:
+    if time.monotonic() > phase_deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
 
     candidates = {}
 
     def fetch_seed(seed_title):
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             return []
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
@@ -1298,7 +1325,7 @@ def search_tmdb_cult_and_genres(
                     candidates[mid] = (m, None)
 
     for tmdb_genre_id, hr_genre_label, min_votes in TMDB_DISCOVER_GENRE_SEEDS:
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             break
         for page in range(1, 4):
             data = safe_get(
@@ -1327,17 +1354,17 @@ def search_tmdb_cult_and_genres(
     time_limit_hit = [False]
 
     def process_candidate(item):
-        if time.monotonic() > deadline_ts:
+        if time.monotonic() > phase_deadline_ts:
             with state_lock:
                 if not time_limit_hit[0]:
                     time_limit_hit[0] = True
-                    print("  ⏱ Dostignut sigurnosni vremenski limit u koraku 3/4 — uredan završetak...", flush=True)
+                    print("  ⏱ Dostignut sigurnosni vremenski limit u koraku 3/4 — prijelaz na korak 4/4...", flush=True)
             return
         m, hint_genre = item
         mid = int(m["id"])
         with state_lock:
             checked[0] += 1
-            if checked[0] % 150 == 0:
+            if checked[0] % 120 == 0:
                 print(f"  ... Provjereno {checked[0]}/{total_cands} TMDB kandidata (dodano {added[0]})...", flush=True)
             if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier):
                 return
@@ -1353,7 +1380,7 @@ def search_tmdb_cult_and_genres(
 
         with state_lock:
             exclude_snapshot = set(existing_archive_ids)
-        match = find_best_archive_movie_match(details, year, exclude_snapshot, deadline_ts, min_aspect_tier=min_req_tier)
+        match = find_best_archive_movie_match(details, year, exclude_snapshot, phase_deadline_ts, min_aspect_tier=min_req_tier)
         if match:
             best_ident, best_file, best_mins = match
             pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
@@ -1365,10 +1392,9 @@ def search_tmdb_cult_and_genres(
                 with state_lock:
                     added[0] += 1
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = [pool.submit(process_candidate, item) for item in candidates.values()]
-        for fut in as_completed(futures):
-            fut.result()
+    run_batched_with_deadline(
+        candidates.values(), process_candidate, phase_deadline_ts, max_workers=10, batch_size=35
+    )
 
     print(f"  Dodano {added[0]} kultnih i žanrovskih filmova.", flush=True)
 
@@ -1382,7 +1408,7 @@ def mine_archive_collections(
     deadline_ts,
     all_movie_rows=None
 ):
-    print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija (paketi po 50)...", flush=True)
+    print("4/4 Rudarenje glavnih i žanrovskih Archive.org filmskih kolekcija (paketi po 40)...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
@@ -1636,10 +1662,13 @@ def mine_archive_collections(
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
             for fut in as_completed(futures):
-                fut.result()
+                try:
+                    fut.result()
+                except Exception:
+                    pass
 
         print(
-            f"  ✓ Paket #{batch_num} (50) završen: dodano {batch_added[0]} filmova (ukupno dodano: {total_added[0]}).",
+            f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {batch_added[0]} filmova (ukupno dodano: {total_added[0]}).",
             flush=True
         )
 
@@ -1669,22 +1698,30 @@ def run_movies_sync():
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
+
+    phase1_deadline = min(deadline_ts, time.monotonic() + PHASE1_AUDIT_MAX_SECONDS)
     audit_and_repair_existing_movies(
         all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, deadline_ts
+        tmdb_version_counts, tmdb_best_tier, phase1_deadline
     )
+
     sync_curated_movie_exceptions(
         all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier
     )
+
+    phase2_deadline = min(deadline_ts, time.monotonic() + PHASE2_EXYU_MAX_SECONDS)
     sync_ex_yu_movies(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
+        tmdb_version_counts, tmdb_best_tier, phase2_deadline, all_movie_rows=all_movie_rows
     )
+
+    phase3_deadline = min(deadline_ts, time.monotonic() + PHASE3_CULT_MAX_SECONDS)
     search_tmdb_cult_and_genres(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
+        tmdb_version_counts, tmdb_best_tier, phase3_deadline, all_movie_rows=all_movie_rows
     )
+
     mine_archive_collections(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
         tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
