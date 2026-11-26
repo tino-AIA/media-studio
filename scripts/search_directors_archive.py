@@ -25,29 +25,30 @@ from sync_common import (
 DEFAULT_XLSX_PATH = "directors.xlsx"
 DEFAULT_CSV_FALLBACK = "directors_traži.csv"
 TARGET_SHEET_NAME = "traži"
+USE_LOCAL_TABLE_IF_EXISTS = False
 
-# Ako nema lokalne datoteke directors.xlsx / directors_traži.csv, koristi ovih 15 redatelja
-FALLBACK_DIRECTORS = [
-    {"#": 1, "Redatelj": "Martin Scorsese", "Država": "SAD", "Ključni filmovi (od 1970.)": "Taksist, Dobri momci, Razjareni bik"},
-    {"#": 2, "Redatelj": "Steven Spielberg", "Država": "SAD", "Ključni filmovi (od 1970.)": "Ralje, Schindlerova lista, Jurski park"},
-    {"#": 3, "Redatelj": "Quentin Tarantino", "Država": "SAD", "Ključni filmovi (od 1970.)": "Pakleni šund, Nemilosrdni gadovi, Kill Bill"},
-    {"#": 4, "Redatelj": "Stanley Kubrick", "Država": "SAD / UK", "Ključni filmovi (od 1970.)": "Paklena naranča, Isijavanje, Barry Lyndon"},
-    {"#": 5, "Redatelj": "Christopher Nolan", "Država": "UK / SAD", "Ključni filmovi (od 1970.)": "Početak, Vitez tame, Oppenheimer"},
-    {"#": 6, "Redatelj": "Ridley Scott", "Država": "UK", "Ključni filmovi (od 1970.)": "Osmi putnik, Istrebljivač, Gladijator"},
-    {"#": 7, "Redatelj": "Braća Coen (Joel i Ethan)", "Država": "SAD", "Ključni filmovi (od 1970.)": "Fargo, Nema zemlje za starce, Veliki Lebowski"},
-    {"#": 8, "Redatelj": "Pedro Almodóvar", "Država": "Španjolska", "Ključni filmovi (od 1970.)": "Sve o mojoj majci, Pričaj s njom, Volver"},
-    {"#": 9, "Redatelj": "Paul Thomas Anderson", "Država": "SAD", "Ključni filmovi (od 1970.)": "Bit će krvi, Kralj pornića, Magnolija"},
-    {"#": 10, "Redatelj": "Bong Joon-ho", "Država": "Južna Koreja", "Ključni filmovi (od 1970.)": "Parazit, Sjećanja na umorstvo, Domaćin"},
-    {"#": 11, "Redatelj": "Denis Villeneuve", "Država": "Kanada", "Ključni filmovi (od 1970.)": "Dolazak, Blade Runner 2049, Dina (I i II)"},
-    {"#": 12, "Redatelj": "James Cameron", "Država": "Kanada / SAD", "Ključni filmovi (od 1970.)": "Terminator 2, Titanic, Avatar"},
-    {"#": 13, "Redatelj": "Michael Haneke", "Država": "Austrija", "Ključni filmovi (od 1970.)": "Bijela vrpca, Ljubav, Pijanistica"},
-    {"#": 14, "Redatelj": "Abbas Kiarostami", "Država": "Iran", "Ključni filmovi (od 1970.)": "Okus trešnje, Gdje je kuća mog prijatelja?"},
-    {"#": 15, "Redatelj": "Alfonso Cuarón", "Država": "Meksiko", "Ključni filmovi (od 1970.)": "Roma, Gravitacija, Djeca čovječanstva"},
+NEW_DIRECTORS = [
+    {"#": 1, "Redatelj": "Tim Burton", "Država": "SAD", "Ključni filmovi (od 1970.)": "Edward Škaroruki, Batman, Bubimir"},
+    {"#": 2, "Redatelj": "Wes Anderson", "Država": "SAD", "Ključni filmovi (od 1970.)": "Hotel Grand Budapest, Obitelj čudaka, Kraljevstvo izlazećeg mjeseca"},
+    {"#": 3, "Redatelj": "Spike Lee", "Država": "SAD", "Ključni filmovi (od 1970.)": "Učini pravu stvar, Malcolm X, Crni član Ku Klux Klana"},
+    {"#": 4, "Redatelj": "David Fincher", "Država": "SAD", "Ključni filmovi (od 1970.)": "Klub boraca, Sedam, Društvena mreža"},
+    {"#": 5, "Redatelj": "Guillermo del Toro", "Država": "Meksiko", "Ključni filmovi (od 1970.)": "Panov labirint, Oblik vode, Hellboy"},
+    {"#": 6, "Redatelj": "Jerry Bruckheimer", "Država": "SAD", "Ključni filmovi (od 1970.)": "Top Gun, Pirati s Kariba, Policajac s Beverly Hillsa"},
+    {"#": 7, "Redatelj": "Peter Jackson", "Država": "Novi Zeland", "Ključni filmovi (od 1970.)": "Gospodar prstenova, King Kong, Nebeska stvorenja"},
+    {"#": 8, "Redatelj": "Robert Zemeckis", "Država": "SAD", "Ključni filmovi (od 1970.)": "Povratak u budućnost, Forrest Gump, Brodolom života"},
+    {"#": 9, "Redatelj": "Russo braća (Anthony i Joe Russo)", "Država": "SAD", "Ključni filmovi (od 1970.)": "Osvetnici: Završnica, Osvetnici: Rat beskonačnosti, Kapetan Amerika: Ratnik zime"},
 ]
 
 DIRECTOR_ALIASES = {
-    "braća coen (joel i ethan)": ["Joel Coen", "Ethan Coen"],
-    "braca coen (joel i ethan)": ["Joel Coen", "Ethan Coen"],
+    "russo braća (anthony i joe russo)": ["Anthony Russo", "Joe Russo"],
+    "russo braca (anthony i joe russo)": ["Anthony Russo", "Joe Russo"],
+    "braća russo": ["Anthony Russo", "Joe Russo"],
+    "braca russo": ["Anthony Russo", "Joe Russo"],
+}
+
+# Autori koji su primarno producenti (na TMDB-u su njihovi filmovi pod job == "Producer")
+PRODUCER_ONLY_AUTHORS = {
+    "jerry bruckheimer",
 }
 
 JUNK_FILTER_RE = re.compile(
@@ -61,14 +62,18 @@ def resolve_tmdb_person_queries(director_label):
     alias_hits = DIRECTOR_ALIASES.get(cleaned.lower())
     if alias_hits:
         return alias_hits
-    # Ukloni zagrade ako postoje
     no_parens = re.sub(r"\([^)]*\)", "", cleaned).strip()
     return [no_parens] if no_parens else [cleaned]
 
 
 def fetch_director_filmography_tmdb(director_label):
-    """Dohvaća sve dugometražne filmove (job == Director) za redatelja s TMDB-a."""
+    """Dohvaća sve dugometražne filmove za redatelja (ili producenta) s TMDB-a."""
     queries = resolve_tmdb_person_queries(director_label)
+    is_producer = director_label.strip().lower() in PRODUCER_ONLY_AUTHORS
+    allowed_jobs = {"Producer", "Executive Producer"} if is_producer else {"Director"}
+    preferred_dept = "Production" if is_producer else "Directing"
+    min_votes = 40 if is_producer else 10
+
     movies_by_id = {}
 
     for person_name in queries:
@@ -80,9 +85,8 @@ def fetch_director_filmography_tmdb(director_label):
         if not hits:
             continue
 
-        # Odaberi osobu iz odjela Directing s najvećom popularnošću
-        directing_hits = [h for h in hits if h.get("known_for_department") == "Directing"]
-        chosen_person = (directing_hits or hits)[0]
+        dept_hits = [h for h in hits if h.get("known_for_department") == preferred_dept]
+        chosen_person = (dept_hits or hits)[0]
         person_id = chosen_person.get("id")
         if not person_id:
             continue
@@ -98,25 +102,24 @@ def fetch_director_filmography_tmdb(director_label):
 
         hr_title_map = {}
         for c in (credits_hr or {}).get("crew") or []:
-            if c.get("job") == "Director" and c.get("id"):
+            if c.get("job") in allowed_jobs and c.get("id"):
                 hr_title_map[int(c["id"])] = (c.get("title") or "").strip()
 
         for c in (credits_en or {}).get("crew") or []:
-            if c.get("job") != "Director":
+            if c.get("job") not in allowed_jobs:
                 continue
             mid = int(c.get("id") or 0)
             if mid <= 0 or mid in movies_by_id:
                 continue
 
             genre_ids = c.get("genre_ids") or []
-            # Preskoči dokumentarce (99) i TV specijale bez glasova
             if 99 in genre_ids:
                 continue
             rel_date = str(c.get("release_date") or "")
             year = extract_year_from_text(rel_date)
             if year <= 0 or year > 2026:
                 continue
-            if int(c.get("vote_count") or 0) < 10:
+            if int(c.get("vote_count") or 0) < min_votes:
                 continue
 
             en_title = (c.get("title") or "").strip()
@@ -167,7 +170,7 @@ def format_video_quality_badge(video_info):
 
 
 def search_movie_on_archive(movie_meta, director_label):
-    """Pretražuje Archive.org za konkretan film redatelja i vraća najbolji video zapis + kvalitetu."""
+    """Pretražuje Archive.org za konkretan film autora i vraća najbolji video zapis + kvalitetu."""
     en_title = movie_meta["en_title"]
     orig_title = movie_meta["orig_title"]
     hr_title = movie_meta["hr_title"]
@@ -216,7 +219,6 @@ def search_movie_on_archive(movie_meta, director_label):
     if not docs_by_id:
         return None
 
-    # Dohvati TMDB trajanje filma tek kad postoje kandidati na Archive.org
     tmdb_details = safe_get(
         f"{TMDB_BASE}/movie/{movie_meta['tmdb_id']}",
         {"api_key": TMDB_API_KEY, "language": "en-US"},
@@ -286,15 +288,15 @@ def search_movie_on_archive(movie_meta, director_label):
 
 
 def load_directors_from_table(xlsx_path=DEFAULT_XLSX_PATH, csv_path=DEFAULT_CSV_FALLBACK):
-    if os.path.exists(xlsx_path):
-        try:
-            df = pd.read_excel(xlsx_path, sheet_name=TARGET_SHEET_NAME)
-            return df
-        except Exception as e:
-            print(f"[Upozorenje] Ne mogu učitati list '{TARGET_SHEET_NAME}' iz {xlsx_path}: {e}", flush=True)
-    if os.path.exists(csv_path):
-        return pd.read_csv(csv_path)
-    return pd.DataFrame(FALLBACK_DIRECTORS)
+    if USE_LOCAL_TABLE_IF_EXISTS:
+        if os.path.exists(xlsx_path):
+            try:
+                return pd.read_excel(xlsx_path, sheet_name=TARGET_SHEET_NAME)
+            except Exception as e:
+                print(f"[Upozorenje] Ne mogu učitati list '{TARGET_SHEET_NAME}' iz {xlsx_path}: {e}", flush=True)
+        if os.path.exists(csv_path):
+            return pd.read_csv(csv_path)
+    return pd.DataFrame(NEW_DIRECTORS)
 
 
 def save_results_to_excel(xlsx_path, df_trazi, summary_rows, detailed_rows):
@@ -328,11 +330,10 @@ def save_results_to_excel(xlsx_path, df_trazi, summary_rows, detailed_rows):
             df_out.to_excel(writer, sheet_name=TARGET_SHEET_NAME, index=False)
             df_details.to_excel(writer, sheet_name="Pronađeni_filmovi", index=False)
 
-    # Prilagodi širinu stupaca i prijelom teksta u Excelu
     wb = openpyxl.load_workbook(xlsx_path)
     if TARGET_SHEET_NAME in wb.sheetnames:
         ws = wb[TARGET_SHEET_NAME]
-        col_widths = {"A": 6, "B": 28, "C": 16, "D": 38, "E": 15, "F": 22, "G": 65, "H": 55}
+        col_widths = {"A": 6, "B": 32, "C": 16, "D": 42, "E": 15, "F": 22, "G": 65, "H": 55}
         for col_letter, width in col_widths.items():
             ws.column_dimensions[col_letter].width = width
         for row in ws.iter_rows(min_row=2):
@@ -340,7 +341,7 @@ def save_results_to_excel(xlsx_path, df_trazi, summary_rows, detailed_rows):
                 cell.alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
     if "Pronađeni_filmovi" in wb.sheetnames:
         ws2 = wb["Pronađeni_filmovi"]
-        for col_letter, width in {"A": 26, "B": 32, "C": 32, "D": 10, "E": 14, "F": 32, "G": 45, "H": 55}.items():
+        for col_letter, width in {"A": 30, "B": 32, "C": 32, "D": 10, "E": 14, "F": 32, "G": 45, "H": 55}.items():
             ws2.column_dimensions[col_letter].width = width
     wb.save(xlsx_path)
 
@@ -364,7 +365,7 @@ def run_directors_archive_search():
         if not director_name or director_name.lower() == "nan":
             continue
 
-        print(f"\n🎬 Obrada redatelja: {director_name}...", flush=True)
+        print(f"\n🎬 Obrada autora: {director_name}...", flush=True)
         filmography = fetch_director_filmography_tmdb(director_name)
         print(f"   TMDB filmografija (igrani filmovi): {len(filmography)} naslova", flush=True)
 
