@@ -948,10 +948,10 @@ private fun extractAwardsFromTextHr(text: String): String {
     val awardKeywords = listOf(
         "oscar", "academy award", "zlatna palma", "palme d'or", "zlatni lav", "golden lion",
         "zlatni medvjed", "golden bear", "zlatna arena", "vladimir nazor", "emmy",
-        "bafta", "zlatni globus", "golden globe", "saturn", "nagrada", "nagradu",
-        "nagrađen", "nagrađena", "nominiran", "nominirana", "award"
+        "bafta", "zlatni globus", "golden globe", "saturn", "nagradu",
+        "nagrađen", "nagrađena", "nominiran", "nominirana", "osvojio je", "osvojila je"
     )
-    val roleLikeWords = listOf(" kao ", " glas ", " uloga ", " uloge ", " sinkroniz")
+    val roleLikeWords = listOf(" kao ", " glas ", " uloga ", " uloge ", " sinkroniz", "je jedna od nagrada", "dodjeljuje akademija")
 
     val hits = cleaned.split(Regex("(?<=[.!?])\\s+"))
         .map { it.trim() }
@@ -1192,7 +1192,7 @@ private suspend fun buildStructuredSheet(
         .ifBlank { dbDescHr }
         .ifBlank { archiveDescHr }
 
-    val combinedMetaSource = listOf(synopsisHr, wikiHr, dbDescHr, archiveDescHr)
+    val combinedMetaSource = listOf(wikiHr, dbDescHr)
         .filter { it.isNotBlank() }
         .joinToString("\n")
 
@@ -1200,10 +1200,10 @@ private suspend fun buildStructuredSheet(
     if (directorHr.isBlank() && tmdbDetails.director.isNotBlank()) {
         directorHr = tmdbDetails.director
     }
-    var castHr = tmdbDetails.cast.ifBlank { extractCastFromTextHr(combinedMetaSource) }
-    var awardsHr = extractAwardsFromTextHr(combinedMetaSource)
-    var studioHr = extractStudioFromTextHr(title, identifier, combinedMetaSource, genresList)
-    var tourHr = extractTourFromTextHr(title, combinedMetaSource)
+    val castHr = tmdbDetails.cast.ifBlank { extractCastFromTextHr(combinedMetaSource) }
+    val awardsHr = extractAwardsFromTextHr(wikiHr)
+    val studioHr = extractStudioFromTextHr(title, identifier, combinedMetaSource, genresList)
+    val tourHr = extractTourFromTextHr(title, combinedMetaSource)
     var activeHr = extractBandActiveFromTextHr(combinedMetaSource)
     var membersHr = extractBandMembersFromTextHr(combinedMetaSource)
 
@@ -1297,17 +1297,27 @@ private suspend fun queryWikipediaExtract(lang: String, titleQuery: String, intr
     ""
 }
 
-private suspend fun searchWikipediaTitle(lang: String, searchQuery: String): String = withContext(Dispatchers.IO) {
+private suspend fun searchWikipediaTitle(lang: String, searchQuery: String, expectedWords: Set<String> = emptySet()): String = withContext(Dispatchers.IO) {
     try {
         val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-        val url = URL("https://$lang.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&srlimit=1&format=json")
+        val url = URL("https://$lang.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&srlimit=3&format=json")
         val conn = url.openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
         val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-        val results = json.optJSONObject("query")?.optJSONArray("search")
-        results?.optJSONObject(0)?.optString("title", "")?.trim().orEmpty()
+        val results = json.optJSONObject("query")?.optJSONArray("search") ?: return@withContext ""
+        for (i in 0 until results.length()) {
+            val hitTitle = results.optJSONObject(i)?.optString("title", "")?.trim().orEmpty()
+            if (hitTitle.isBlank()) continue
+            if (expectedWords.isNotEmpty()) {
+                val hitWords = hitTitle.lowercase().replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+                    .split(Regex("\\s+")).filter { it.length >= 3 }.toSet()
+                if ((expectedWords intersect hitWords).isEmpty()) continue
+            }
+            return@withContext hitTitle
+        }
+        ""
     } catch (_: Exception) {
         ""
     }
@@ -1332,8 +1342,10 @@ private suspend fun fetchMoviePlotHr(titlesToTry: List<String>, year: Int): Stri
     for (raw in titlesToTry.take(2)) {
         val clean = raw.replace(Regex("\\(\\d{4}\\)"), "").trim()
         if (clean.length < 3) continue
-        val searchTerm = if (year > 0) "$clean $year film" else "$clean film"
-        val foundTitle = searchWikipediaTitle("hr", searchTerm)
+        val expectedWords = clean.lowercase().replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+            .split(Regex("\\s+")).filter { it.length >= 3 }.toSet()
+        val searchTerm = if (year > 0) "\"$clean\" $year film" else "\"$clean\" film"
+        val foundTitle = searchWikipediaTitle("hr", searchTerm, expectedWords)
         if (foundTitle.isNotBlank()) {
             val extract = queryWikipediaExtract("hr", foundTitle, introOnly = true)
             if (extract.isNotEmpty()) return@withContext extract.take(1000)
