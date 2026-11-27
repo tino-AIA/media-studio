@@ -178,6 +178,13 @@ DUNE_1984_MARKER_RE = re.compile(
     r"(?i)\b(?:1984|lynch|redux|fanedit|complete[\s._-]*saga|alternative[\s._-]*edition)\b"
 )
 
+# Prepoznavanje 18+ kolekcija (Vivamax, Kekko Kamen, pinku, softcore / erotski naslovi)
+ADULT_18_PLUS_COLLECTION_RE = re.compile(
+    r"(?i)(?:\bvivamax\b|\bkekko[\s._-]*kamen\b|\bkekko[\s._-]*camen\b|\bpinku\b|"
+    r"\bschool[\s._-]*of[\s._-]*the[\s._-]*holy[\s._-]*beast\b|\bškola[\s._-]*besramnika\b|"
+    r"\bsoftcore\b|\berotic\b|\bhentai\b|\badult[\s._-]*movie\b|\b18\+\b)"
+)
+
 EX_YU_LANGS = getattr(sc, "EX_YU_ORIGINAL_LANGS", {"hr", "sr", "sh", "bs", "sl", "mk"})
 _GENRES_ACCEPTS_ORIG_LANG = "orig_lang" in inspect.signature(determine_primary_genres).parameters
 
@@ -224,6 +231,18 @@ def extract_clean_film_year_from_filename(text):
     s = re.sub(r"(?i)\b(?:1080p|720p|480p|2160p|x264|x265|h264|h265)\b", " ", s)
     m = re.search(r"(?:^|[\s._(\[-])(19\d{2}|20\d{2})(?:$|[\s._)\]-])", s)
     return int(m.group(1)) if m else 0
+
+
+def is_18_plus_item(*texts):
+    blob = " ".join(str(t) for t in texts if t)
+    return bool(ADULT_18_PLUS_COLLECTION_RE.search(blob) or contains_hentai_or_adult(blob))
+
+
+def apply_18_plus_tag_if_needed(genres, *texts, orig_lang=""):
+    if is_18_plus_item(*texts) or str(orig_lang or "").lower() == "tl":
+        clean = [g for g in genres if not str(g).startswith("18+")]
+        return ["18+"] + clean[:2]
+    return genres
 
 
 def is_explicit_junk_item(ident, raw_title, extra_text=""):
@@ -461,7 +480,8 @@ def save_verified_movie_row(
     existing_archive_ids,
     tmdb_version_counts,
     tmdb_best_tier,
-    size_mb=0
+    size_mb=0,
+    force_18_plus=False
 ):
     mid = int(details["tmdb_id"])
     if is_mismatched_modern_dune(mid, arch_id, stream_url, details["hr_title"]):
@@ -495,6 +515,15 @@ def save_verified_movie_row(
             seen_title_years.add(ty_key)
 
     genres = resolve_movie_genres(details, details["hr_title"])
+    orig_lang = details.get("original_language", "")
+    genres = apply_18_plus_tag_if_needed(
+        genres, arch_id, stream_url, details["hr_title"], details["orig_title"],
+        orig_lang=orig_lang
+    )
+    if (force_18_plus or details.get("adult")) and "18+" not in genres:
+        genres = ["18+"] + genres[:2]
+
+    is_18_plus = any(str(g).startswith("18+") for g in genres)
     adjusted_pop = pop_score + (400.0 if cand_tier == 2 else (-300.0 if cand_tier == 0 else 0.0))
     row = {
         "archive_id": arch_id,
@@ -509,13 +538,13 @@ def save_verified_movie_row(
         "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}",
         "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
         "stream_url": stream_url,
-        "is_featured": details["vote_average"] >= 7.8 and 16 not in details["genre_ids"],
+        "is_featured": (not is_18_plus) and details["vote_average"] >= 7.8 and 16 not in details["genre_ids"],
         "is_valid": True,
         "tmdb_runtime": details["runtime"],
         "archive_runtime": arch_mins
     }
     supabase_upsert("catalog_items", [row], "archive_id")
-    ver_tag = " [2. verzija]" if current_count >= 1 else ""
+    ver_tag = " [18+]" if is_18_plus else (" [2. verzija]" if current_count >= 1 else "")
     print(f"  + Film (User Uploads){ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
     return True
 
@@ -594,7 +623,7 @@ def run_community_media_sync():
             record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             skipped_pre += 1
             continue
-        if contains_hentai_or_adult(ident, raw_title) or contains_blocked_regional_or_arabic(ident, raw_title):
+        if contains_blocked_regional_or_arabic(ident, raw_title) and not is_18_plus_item(ident, raw_title):
             record_rejected_archive_id(ident, raw_title, doc.get("year"), existing_archive_ids)
             skipped_pre += 1
             continue
@@ -607,7 +636,6 @@ def run_community_media_sync():
 
     flush_rejected_buffer(force=True)
     remaining_pool.sort(key=lambda e: (0 if e[2] > 0 else 1, -float(e[0].get("downloads") or 0)))
-    # Ograniči na top 800 kandidata po pokretanju tako da faza 2/2 uvijek dobije svoj dio vremena
     remaining_pool = remaining_pool[:800]
     print(f"  Pronađeno {len(remaining_pool)} novih kandidata s filmskim oznakama (preskočeno {skipped_pre} postojećih/šuma).", flush=True)
 
@@ -634,6 +662,7 @@ def run_community_media_sync():
 
             cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
             special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
+            adult_flag = is_18_plus_item(ident, raw_title)
 
             results = []
             for cand_q in title_candidates[:2]:
@@ -642,13 +671,13 @@ def run_community_media_sync():
                 if parsed_y > 0:
                     res_y = safe_get(
                         f"{TMDB_BASE}/search/movie",
-                        params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "false"}
+                        params={"api_key": TMDB_API_KEY, "query": cand_q, "year": parsed_y, "language": "hr-HR", "include_adult": "true"}
                     )
                     results = (res_y or {}).get("results", [])
                 if not results:
                     res_any = safe_get(
                         f"{TMDB_BASE}/search/movie",
-                        params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "false"}
+                        params={"api_key": TMDB_API_KEY, "query": cand_q, "language": "hr-HR", "include_adult": "true"}
                     )
                     results = (res_any or {}).get("results", [])
                 if results:
@@ -719,6 +748,10 @@ def run_community_media_sync():
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 return
 
+            adult_flag = adult_flag or is_18_plus_item(
+                ident, raw_title, best["filename"], details["orig_title"], details["hr_title"]
+            ) or str(details.get("original_language") or "").lower() == "tl"
+
             require_credits = has_multiple_tmdb_versions(details["orig_title"])
             ok, _ = validate_movie_match(
                 ident,
@@ -740,7 +773,8 @@ def run_community_media_sync():
             if save_verified_movie_row(
                 ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
                 seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                tmdb_version_counts, tmdb_best_tier, size_mb=best["size_mb"]
+                tmdb_version_counts, tmdb_best_tier, size_mb=best["size_mb"],
+                force_18_plus=adult_flag
             ):
                 with state_lock:
                     batch_added[0] += 1
@@ -799,6 +833,11 @@ def run_community_media_sync():
         if not videos or len(videos) > MAX_VIDEOS_PER_BUNDLE * 2:
             record_rejected_archive_id(f"bundle_checked:{b_id}", b_id, 0, existing_archive_ids)
             continue
+        bundle_title_meta = arch_md.get("title") or b_id
+        if isinstance(bundle_title_meta, list):
+            bundle_title_meta = " ".join(str(x) for x in bundle_title_meta)
+        bundle_is_18_plus = is_18_plus_item(b_id, bundle_title_meta)
+
         deduped = {}
         for v in videos:
             fname = v.get("filename") or ""
@@ -818,7 +857,7 @@ def run_community_media_sync():
         for v, clean_t, parsed_y in deduped.values():
             if time.monotonic() > deadline_ts:
                 break
-            params = {"api_key": TMDB_API_KEY, "query": clean_t, "language": "hr-HR", "include_adult": "false"}
+            params = {"api_key": TMDB_API_KEY, "query": clean_t, "language": "hr-HR", "include_adult": "true"}
             if parsed_y > 0:
                 params["year"] = parsed_y
             res = safe_get(f"{TMDB_BASE}/search/movie", params=params)
@@ -832,6 +871,21 @@ def run_community_media_sync():
             details = get_tmdb_movie_details(mid)
             if not details or not details["poster_path"]:
                 continue
+
+            orig_lang = str(details.get("original_language") or "").lower()
+            entry_is_18_plus = (
+                bundle_is_18_plus
+                or orig_lang == "tl"
+                or is_18_plus_item(b_id, v.get("filename") or "", clean_t, details["hr_title"], details["orig_title"])
+            )
+
+            # Blokirane jezike i strane sinkronizacije izbacujemo, OSIM ako pripadaju 18+ kolekcijama (npr. Vivamax tl / Kekko Kamen ja)
+            if not entry_is_18_plus:
+                if contains_blocked_regional_or_arabic(details["orig_title"], details["hr_title"], orig_lang=orig_lang):
+                    continue
+                if is_foreign_dub_without_english(arch_md, b_id, v.get("filename") or "", orig_lang):
+                    continue
+
             arch_mins = int(v.get("duration_mins") or 0)
             if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=False, size_mb=v.get("size_mb", 0)):
                 continue
@@ -842,7 +896,8 @@ def run_community_media_sync():
             if save_verified_movie_row(
                 cat_id, details, rel_year, v["stream_url"], arch_mins, pop_score,
                 seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                tmdb_version_counts, tmdb_best_tier, size_mb=v.get("size_mb", 0)
+                tmdb_version_counts, tmdb_best_tier, size_mb=v.get("size_mb", 0),
+                force_18_plus=entry_is_18_plus
             ):
                 bundle_added_total += 1
         record_rejected_archive_id(f"bundle_checked:{b_id}", b_id, 0, existing_archive_ids)
