@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -9,7 +10,6 @@ from sync_common import safe_get
 ROOT_ID = "movies"
 OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive_movies_layers.md")
 
-# Očite grane na Layer 1 koje odmah odbacujemo (vijesti, sport, igrice, predavanja, NASA, religija)
 EXCLUDED_ROOT_BRANCHES = {
     "tvarchive",
     "tvnews",
@@ -32,10 +32,17 @@ EXCLUDED_ROOT_BRANCHES = {
     "broadcast_ready",
 }
 
-# Iznimke unutar odbačenih grana koje ipak želimo mapirati (npr. Community Media Archive unutar News & Public Affairs)
 FORCE_INCLUDE_SUBNODES = {
     "newsandpublicaffairs": ["community_media"],
     "television": ["televisionmovies", "classic_tv", "childrenstelevision"],
+}
+
+# Grane koje su prevelike ravne kante (ne širimo stotine korisničkih podkolekcija ispod njih)
+DO_NOT_EXPAND_SUBCOLLECTIONS = {
+    "community_media",
+    "classic_tv",
+    "childrenstelevision",
+    "additional_collections_video",
 }
 
 NOISE_SUBNODE_RE = re.compile(
@@ -46,7 +53,7 @@ NOISE_SUBNODE_RE = re.compile(
 
 
 def count_video_items(collection_id):
-    """Vraća točan broj stavki (mediatype:movies) unutar zadanog čvora/mape."""
+    """Vraća točan broj stavki (mediatype:movies) unutar zadanog čvora."""
     data = safe_get(
         "https://archive.org/advancedsearch.php",
         params={
@@ -54,13 +61,15 @@ def count_video_items(collection_id):
             "rows": 0,
             "output": "json",
         },
-        timeout=12,
+        timeout=6,
     )
     return int((data or {}).get("response", {}).get("numFound") or 0)
 
 
-def get_direct_subcollections(parent_id, rows=150):
+def get_direct_subcollections(parent_id, rows=100):
     """Dohvaća neposrednu djecu (mediatype:collection) za zadani čvor."""
+    if parent_id.lower() in DO_NOT_EXPAND_SUBCOLLECTIONS:
+        return []
     data = safe_get(
         "https://archive.org/advancedsearch.php",
         params={
@@ -71,7 +80,7 @@ def get_direct_subcollections(parent_id, rows=150):
             "page": 1,
             "output": "json",
         },
-        timeout=15,
+        timeout=8,
     )
     docs = (data or {}).get("response", {}).get("docs", [])
     results = []
@@ -96,7 +105,6 @@ def get_direct_subcollections(parent_id, rows=150):
 
 
 def fetch_node_metadata(col_id):
-    """Dohvaća naziv i broj video zapisa za pojedini čvor."""
     data = safe_get(
         "https://archive.org/advancedsearch.php",
         params={
@@ -105,7 +113,7 @@ def fetch_node_metadata(col_id):
             "rows": 1,
             "output": "json",
         },
-        timeout=10,
+        timeout=6,
     )
     docs = (data or {}).get("response", {}).get("docs", [])
     title = col_id
@@ -123,10 +131,11 @@ def fetch_node_metadata(col_id):
 
 
 def build_hierarchical_movie_map():
+    t0 = time.monotonic()
     print("1/4 Dohvaćanje korijena (Layer 1: /details/movies)...", flush=True)
     root_video_count = count_video_items(ROOT_ID)
-    raw_l1 = get_direct_subcollections(ROOT_ID, rows=150)
-    l1_all = [x for x in raw_l1 if x["is_direct"]] or raw_l1[:60]
+    raw_l1 = get_direct_subcollections(ROOT_ID, rows=120)
+    l1_all = [x for x in raw_l1 if x["is_direct"]] or raw_l1[:50]
 
     approved_l1 = []
     excluded_l1 = []
@@ -142,19 +151,17 @@ def build_hierarchical_movie_map():
         else:
             approved_l1.append(node)
 
-    # Dodaj iznimke (npr. Community Media Archive iz News & Public Affairs) u odobreni popis
-    for parent_key, child_ids in FORCE_INCLUDE_SUBNODES.items():
+    for _, child_ids in FORCE_INCLUDE_SUBNODES.items():
         for cid in child_ids:
             if cid.lower() not in seen_ids:
                 seen_ids.add(cid.lower())
                 approved_l1.append(fetch_node_metadata(cid))
 
-    print(f"2/4 Širenje odobrenih grana u dubinu (Layer 1.x -> 1.x.y -> 1.x.y.z)...", flush=True)
+    print("2/4 Širenje odobrenih grana u dubinu (Layer 1.x -> 1.x.y -> 1.x.y.z)...", flush=True)
 
-    # Razina 1.x -> 1.x.y (Layer 2)
     l2_by_parent = {}
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        for parent, children in zip(approved_l1, pool.map(lambda n: get_direct_subcollections(n["id"], rows=100), approved_l1)):
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for parent, children in zip(approved_l1, pool.map(lambda n: get_direct_subcollections(n["id"], rows=80), approved_l1)):
             valid_children = []
             for c in children:
                 low = c["id"].lower()
@@ -168,11 +175,10 @@ def build_hierarchical_movie_map():
 
     all_l2 = [c for sublist in l2_by_parent.values() for c in sublist]
 
-    # Razina 1.x.y -> 1.x.y.z (Layer 3)
     l3_by_parent = {}
     if all_l2:
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            for parent, children in zip(all_l2, pool.map(lambda n: get_direct_subcollections(n["id"], rows=80), all_l2)):
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for parent, children in zip(all_l2[:80], pool.map(lambda n: get_direct_subcollections(n["id"], rows=50), all_l2[:80])):
                 valid_children = []
                 for c in children:
                     low = c["id"].lower()
@@ -186,38 +192,20 @@ def build_hierarchical_movie_map():
 
     all_l3 = [c for sublist in l3_by_parent.values() for c in sublist]
 
-    # Razina 1.x.y.z -> 1.x.y.z.w (Layer 4 za duboke grane)
-    l4_by_parent = {}
-    if all_l3:
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            for parent, children in zip(all_l3[:150], pool.map(lambda n: get_direct_subcollections(n["id"], rows=50), all_l3[:150])):
-                valid_children = []
-                for c in children:
-                    low = c["id"].lower()
-                    if not c["is_direct"] or low in seen_ids:
-                        continue
-                    if NOISE_SUBNODE_RE.search(f"{c['id']} {c['title']}"):
-                        continue
-                    seen_ids.add(low)
-                    valid_children.append(c)
-                l4_by_parent[parent["id"]] = valid_children
-
-    all_l4 = [c for sublist in l4_by_parent.values() for c in sublist]
-
-    # 3/4 Brojanje video stavki (mediatype:movies) u svakom mapiranom čvoru
-    all_nodes = approved_l1 + all_l2 + all_l3 + all_l4
-    print(f"3/4 Brojanje video stavki za {len(all_nodes)} mapiranih čvorova...", flush=True)
+    all_nodes = approved_l1 + all_l2 + all_l3
+    print(f"3/4 Brojanje video stavki za {len(all_nodes)} mapiranih čvorova (umjereno da se izbjegne rate-limit)...", flush=True)
     video_counts = {}
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        for node, cnt in zip(all_nodes, pool.map(lambda n: count_video_items(n["id"]), all_nodes)):
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for idx, (node, cnt) in enumerate(zip(all_nodes, pool.map(lambda n: count_video_items(n["id"]), all_nodes)), start=1):
             video_counts[node["id"]] = cnt
+            if idx % 25 == 0:
+                print(f"  ... Izbrojano {idx}/{len(all_nodes)} čvorova ({time.monotonic() - t0:.0f}s)...", flush=True)
 
-    # 4/4 Generiranje preglednog hijerarhijskog izvještaja
     lines = [
         "# Hijerarhijska mapa `/details/movies` s brojem video stavki po slojevima",
         "",
         f"- **Layer 1 (Korijen `movies`)**: ukupno `{root_video_count:,}` video stavki",
-        f"- **Odobrene grane (Layer 1.x)**: `{len(approved_l1)}` | **Layer 1.x.y**: `{len(all_l2)}` | **Layer 1.x.y.z**: `{len(all_l3)}` | **Layer 4**: `{len(all_l4)}`",
+        f"- **Odobrene grane (Layer 1.x)**: `{len(approved_l1)}` | **Layer 1.x.y**: `{len(all_l2)}` | **Layer 1.x.y.z**: `{len(all_l3)}`",
         "",
         "## Odbačene grane na Layer 1 (neće se skenirati)",
     ]
@@ -239,15 +227,12 @@ def build_hierarchical_movie_map():
             for i3, n3 in enumerate(l3_by_parent.get(n2["id"], []), start=1):
                 c3 = video_counts.get(n3["id"], 0)
                 lines.append(f"    - **[1.{i1}.{i2}.{i3}] {n3['title']}** (`{n3['id']}`) — **{c3:,} video stavki**")
-                for i4, n4 in enumerate(l4_by_parent.get(n3["id"], []), start=1):
-                    c4 = video_counts.get(n4["id"], 0)
-                    lines.append(f"      - **[1.{i1}.{i2}.{i3}.{i4}] {n4['title']}** (`{n4['id']}`) — **{c4:,} video stavki**")
         lines.append("")
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"4/4 Gotovo! Karta spremljena u: {OUTPUT_FILE}", flush=True)
+    print(f"4/4 Gotovo za {time.monotonic() - t0:.1f}s! Karta spremljena u: {OUTPUT_FILE}", flush=True)
 
 
 if __name__ == "__main__":
