@@ -118,6 +118,32 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
         flush_rejected_buffer(force=False)
 
 
+def queue_series_candidate_for_tv_sync(ident, raw_title):
+    base_ident = str(ident or "").split(",tmdb-")[0].strip()
+    if not base_ident or base_ident.startswith("http") or base_ident.startswith("tv_queue:"):
+        return
+    clean_t, parsed_y = clean_filename_to_title(str(raw_title or base_ident), fallback_to_stem=True)
+    row = {
+        "archive_id": f"tv_queue:{base_ident}",
+        "tmdb_id": 0,
+        "title": str(clean_t or raw_title or base_ident)[:180],
+        "media_type": "series",
+        "genres": [],
+        "release_year": int(parsed_y or 0),
+        "rating": 0.0,
+        "popularity_score": 5000.0,
+        "description_hr": base_ident,
+        "poster_url": "",
+        "backdrop_url": "",
+        "stream_url": "",
+        "is_featured": False,
+        "is_valid": False,
+        "tmdb_runtime": 0,
+        "archive_runtime": 0,
+    }
+    supabase_upsert("catalog_items", [row], "archive_id")
+
+
 # ==============================================================================
 # HIJERARHIJSKO STABLO IZ archive_movies_layers_2.md (pročišćeno bez TV/glazbe/šuma)
 # ==============================================================================
@@ -1057,6 +1083,8 @@ def audit_and_repair_existing_movies(
                 continue
             if TV_NEWS_OR_SPORTS_ID_RE.search(ident) or STRICT_EPISODE_RE.search(s_url):
                 continue
+            if re.search(r"(?i)\b(?:complete[\s._-]*series|season[\s._-]*\d+|s\d{1,2}e\d{1,3})\b", f"{ident} {title}"):
+                continue
             if is_explicit_junk_item(ident, title, s_url):
                 continue
             supabase_patch_row("catalog_items", r["id"], {"is_valid": True})
@@ -1112,8 +1140,16 @@ def audit_and_repair_existing_movies(
             mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjen ne-filmski zapis: {title} ({ident})")
             return
 
-        if TV_NEWS_OR_SPORTS_ID_RE.search(base_ident) or STRICT_EPISODE_RE.search(stream_url):
-            mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena TV emisija/serija iz filmova: {title} ({ident})")
+        is_series_marker = bool(
+            STRICT_EPISODE_RE.search(stream_url)
+            or re.search(r"(?i)\b(?:complete[\s._-]*series|season[\s._-]*\d+|s\d{1,2}e\d{1,3})\b", f"{base_ident} {title}")
+        )
+        if TV_NEWS_OR_SPORTS_ID_RE.search(base_ident) or is_series_marker:
+            if is_series_marker and not TV_NEWS_OR_SPORTS_ID_RE.search(base_ident):
+                queue_series_candidate_for_tv_sync(base_ident, title)
+                mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena serija iz filmova (proslijeđeno u serije): {title} ({ident})")
+            else:
+                mark_row_invalid(row, tmdb_id, f"  ✕ Uklonjena TV emisija/sport iz filmova: {title} ({ident})")
             return
 
         if rel_year > 0 and stream_url:
@@ -1657,6 +1693,8 @@ def mine_direct_movies_from_branches(
             is_anim = 16 in (details.get("genre_ids") or [])
             videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
             if not videos or is_episodic_or_multi_movie_container(videos):
+                if videos and STRICT_EPISODE_RE.search(" ".join(v.get("filename") or "" for v in videos)):
+                    queue_series_candidate_for_tv_sync(ident, raw_title)
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_video_file")
                 return
