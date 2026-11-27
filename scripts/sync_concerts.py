@@ -1,17 +1,20 @@
 import os
+import random
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import sync_common as sc
 from sync_common import (
     clean_filename_to_title,
     compute_aspect_tier,
     contains_blocked_regional_or_arabic,
     contains_hentai_or_adult,
-    extract_year_from_text,
     fetch_existing_catalog_state,
     get_archive_item_details,
     is_foreign_dub_without_english,
@@ -25,12 +28,21 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-MAX_CONCERTS_SYNC_SECONDS = 165 * 60
-MAX_VHS_UPGRADE_CHECKS_PER_RUN = 45
+_HTTP_SESSION = requests.Session()
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+_HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
+_HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
+if hasattr(sc, "session"):
+    sc.session = _HTTP_SESSION
+
+MAX_CONCERTS_SYNC_SECONDS = 48 * 60
+MAX_VHS_UPGRADE_CHECKS_PER_RUN = 25
+MAX_CONCERT_CANDIDATES_PER_RUN = 600
 
 CONCERT_JUNK_RE = re.compile(
     r"(?i)(?:\b(?:trailer|teaser|sample|interview|review|reaction|karaoke|cover\s+band|"
-    r"tribute\s+band|lesson|tutorial|unboxing|promo|commercial|podcast|audio\s+only)\b|"
+    r"tribute\s+band|lesson|tutorial|unboxing|promo|commercial|podcast|audio\s+only|"
+    r"electric\s+sheep|vj\s+loop|burlesque)\b|"
     r"making[\s._-]+of|behind[\s._-]+the[\s._-]+scenes)"
 )
 
@@ -252,7 +264,6 @@ def classify_concert_genre(title, description="", subject="", hint_genre=None):
 
 
 def build_concert_state_maps(all_concert_rows):
-    """Mapira postojeće valjane koncerte po normaliziranom naslovu i najvišem tieru kvalitete (0, 1, 2)."""
     best_tier_by_norm = {}
     rows_by_norm = {}
     for row in all_concert_rows:
@@ -274,7 +285,6 @@ def build_concert_state_maps(all_concert_rows):
 
 
 def retire_vhs_concert_rows(norm_c, keep_arch_id, rows_by_norm):
-    """Deaktivira stare VHS / 4:3 koncerte za isti naslov nakon što je spremljena bolja verzija."""
     to_retire = []
     with state_lock:
         for row in rows_by_norm.get(norm_c, []):
@@ -296,7 +306,6 @@ def retire_vhs_concert_rows(norm_c, keep_arch_id, rows_by_norm):
 
 
 def find_better_concert_on_archive(title, year, exclude_ids, deadline_ts):
-    """Traži HD / widescreen / DVD verziju (tier >= 1) umjesto postojećeg VHS ripa."""
     if time.monotonic() > deadline_ts:
         return None
     clean_q = re.sub(r"[^\w\s]", " ", str(title)).strip()
@@ -374,7 +383,6 @@ def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, 
     valid_rows = [r for r in all_concert_rows if r.get("is_valid", True)]
     print(f"1/2 Provjera kvalitete i zamjena VHS ripova za {len(valid_rows)} postojećih koncerata...", flush=True)
 
-    # 1. Ukloni postojeće VHS duplikate tamo gdje već u bazi postoji bolja verzija istog koncerta
     dup_retired = 0
     for norm_c, r_list in list(rows_by_norm.items()):
         if best_tier_by_norm.get(norm_c, 0) > 0 and len(r_list) > 1:
@@ -387,14 +395,14 @@ def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, 
             if better_row:
                 dup_retired += retire_vhs_concert_rows(norm_c, better_row.get("archive_id") or "", rows_by_norm)
 
-    # 2. Ciljana potraga bolje verzije za postojeće VHS koncerte
-    vhs_candidates = [
+    vhs_pool = [
         r for r in valid_rows
         if r.get("is_valid", True)
         and estimate_concert_quality_tier(
             r.get("archive_id") or "", r.get("stream_url") or "", r.get("title") or ""
         ) == 0
-    ][:MAX_VHS_UPGRADE_CHECKS_PER_RUN]
+    ]
+    vhs_candidates = random.sample(vhs_pool, k=min(MAX_VHS_UPGRADE_CHECKS_PER_RUN, len(vhs_pool))) if vhs_pool else []
 
     upgraded_count = [0]
     if vhs_candidates and time.monotonic() < deadline_ts:
@@ -465,7 +473,7 @@ def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, 
 def run_concerts_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_CONCERTS_SYNC_SECONDS
-    print("=== [KONCERTI] Pokretanje sinkronizacije koncerata (prioritet HD/16:9 + zamjena VHS ripova) ===", flush=True)
+    print("=== [KONCERTI] Pokretanje hijerarhijske sinkronizacije koncerata (HD/16:9 + zamjena VHS ripova) ===", flush=True)
 
     existing_archive_ids, _, _, all_concert_rows = fetch_existing_catalog_state("concert")
     best_tier_by_norm, rows_by_norm = build_concert_state_maps(all_concert_rows)
@@ -475,25 +483,37 @@ def run_concerts_sync():
         all_concert_rows, existing_archive_ids, best_tier_by_norm, rows_by_norm, deadline_ts
     )
 
-    print("2/2 Pretraga novih cjelovitih koncerata (HD kolekcije + izvođači + VHS arhiva)...", flush=True)
+    print("2/2 Pretraga novih cjelovitih koncerata iz hijerarhije stabla i korisničkih uploadova...", flush=True)
     candidate_docs = {}
+
+    # Koncertni čvorovi s hijerarhijske karte (archive_movies_layers_2.md)
     collection_queries = [
-        ("mediatype:movies AND collection:live_music_video AND -subject:trailer AND -subject:interview AND -subject:news", 6, None),
-        ("mediatype:movies AND collection:concerts AND -subject:trailer AND -subject:interview AND -subject:news", 8, None),
-        ("mediatype:movies AND collection:vhsconcerts_music AND -subject:trailer AND -subject:interview AND -subject:news", 10, None),
+        ("mediatype:movies AND collection:live_music_video AND -subject:trailer AND -subject:interview AND -subject:news", 4, None),
+        ("mediatype:movies AND collection:concerts AND -subject:trailer AND -subject:interview AND -subject:news", 5, None),
+        ("mediatype:movies AND collection:vhsconcerts_music AND -subject:trailer AND -subject:interview AND -subject:news", 6, None), # [1.6.13] 3,856
+        ("mediatype:movies AND collection:harry-styles-concert-videos AND -subject:trailer", 3, "Pop glazba"), # [1.2.32] 634
+        ("mediatype:movies AND collection:moonalicevideo AND -subject:trailer", 2, "Rock i Metal"),           # [1.2.36] 191
+        ("mediatype:movies AND collection:goldenrod-festival-archive AND -subject:trailer", 2, "Rock i Metal"), # [1.2.41] 169
+        ("mediatype:movies AND collection:quarantine-happy-hour-music AND -subject:trailer", 2, "Pop glazba"), # [1.2.39] 460
+        ("mediatype:movies AND collection:12minuteslive AND -subject:trailer", 2, "Rock i Metal"),            # [1.2.29] 113
+        ("mediatype:movies AND collection:access-to-bluegrass AND -subject:trailer", 2, "Klasika i Jazz"),    # [1.2.54] 288
+        ('mediatype:movies AND collection:artsandmusicvideos AND title:(concert OR live OR tour) AND -subject:trailer', 4, None), # [1.2] 35,984
+        ('mediatype:movies AND collection:opensource_movies AND item_size:[350000000 TO 150000000000] AND title:(concert OR "live at" OR "live in" OR wembley OR "world tour") AND title:(1080p OR 720p OR bluray OR dvd) AND -subject:trailer', 3, None),
+        ('mediatype:movies AND collection:additional_collections_video AND item_size:[350000000 TO 150000000000] AND title:(concert OR "live at" OR "live in" OR wembley OR "world tour") AND -subject:trailer', 3, None),
     ]
 
     for q, max_pages, hint in collection_queries:
         if time.monotonic() > deadline_ts:
             break
-        for page in range(1, max_pages + 1):
+        pages = list(range(1, max_pages + 1)) + [random.randint(max_pages + 1, max_pages + 5)]
+        for page in pages:
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
                     "q": q,
                     "fl[]": ["identifier", "title", "description", "subject", "downloads"],
                     "sort[]": "downloads desc",
-                    "rows": 200,
+                    "rows": 120,
                     "page": page,
                     "output": "json"
                 }
@@ -524,6 +544,8 @@ def run_concerts_sync():
             seen_seed_names.add(al)
             artist_tasks.append((artist.strip(), "Klasika i Jazz"))
 
+    sampled_artists = random.sample(artist_tasks, k=min(140, len(artist_tasks)))
+
     def search_artist_concerts(task):
         if time.monotonic() > deadline_ts:
             return ([], task[1])
@@ -539,20 +561,19 @@ def run_concerts_sync():
                 "q": q,
                 "fl[]": ["identifier", "title", "description", "subject", "downloads"],
                 "sort[]": "downloads desc",
-                "rows": 14,
+                "rows": 12,
                 "output": "json"
             }
         )
         return ((data or {}).get("response", {}).get("docs", []), hint_genre)
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        for docs, hint_genre in pool.map(search_artist_concerts, artist_tasks):
+    with ThreadPoolExecutor(max_workers=14) as pool:
+        for docs, hint_genre in pool.map(search_artist_concerts, sampled_artists):
             for doc in docs:
                 ident = doc.get("identifier")
                 if ident and ident not in existing_archive_ids and ident not in candidate_docs:
                     candidate_docs[ident] = (doc, hint_genre)
 
-    # Sortiraj kandidate tako da HD / widescreen / Blu-ray uploadi uvijek imaju prednost ispred VHS ripova
     prioritized_candidates = sorted(
         candidate_docs.values(),
         key=lambda item: (
@@ -563,9 +584,9 @@ def run_concerts_sync():
             ),
             -float(item[0].get("downloads") or 0)
         )
-    )
+    )[:MAX_CONCERT_CANDIDATES_PER_RUN]
 
-    print(f"  Pronađeno {len(prioritized_candidates)} novih kandidata koncerata za provjeru (sortirano po kvaliteti)...", flush=True)
+    print(f"  Provjera {len(prioritized_candidates)} novih kandidata koncerata (sortirano po kvaliteti)...", flush=True)
     added_counter = [0]
 
     def process_concert_doc(item):
@@ -608,7 +629,6 @@ def run_concerts_sync():
             if ident in existing_archive_ids:
                 return
             current_tier = best_tier_by_norm.get(norm_c, -1)
-            # Ako koncert već postoji i nije VHS (tier > 0), ili novi kandidat nije bolji od VHS-a, preskoči
             if current_tier > 0 or (current_tier == 0 and est_tier == 0):
                 return
 
@@ -670,7 +690,7 @@ def run_concerts_sync():
         with state_lock:
             added_counter[0] += 1
             count_now = added_counter[0]
-        if count_now % 50 == 0 or had_only_vhs:
+        if count_now % 25 == 0 or had_only_vhs:
             tag = " [zamjena za VHS]" if had_only_vhs else ""
             print(f"  + Koncert{tag} (#{count_now}): {clean_t} -> {genre_label}", flush=True)
 
