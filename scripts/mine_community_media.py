@@ -46,8 +46,8 @@ _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 if hasattr(sc, "session"):
     sc.session = _HTTP_SESSION
 
-MAX_CM_SYNC_SECONDS = 42 * 60
-PHASE1_DIRECT_MAX_SECONDS = 31 * 60
+MAX_CM_SYNC_SECONDS = 36 * 60
+PHASE1_DIRECT_MAX_SECONDS = 25 * 60
 BATCH_SIZE_CANDIDATES = 50
 MIN_REMAINING_SECONDS = 90
 
@@ -101,6 +101,13 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
         flush_rejected_buffer(force=False)
 
 
+# Pravi korisnički bazeni s milijunima uploadova:
+# [1.1] Community Video (opensource_movies: 2.74M) + [1.4] Additional Collections - Video (1.91M)
+USER_UPLOAD_COLLECTIONS = [
+    "opensource_movies",
+    "additional_collections_video",
+]
+
 DECADE_RANGES = [
     (1930, 1959),
     (1960, 1969),
@@ -112,11 +119,11 @@ DECADE_RANGES = [
     (2020, 2026),
 ]
 
-# Ciljani upiti izravno nad ravnom mapom community_media (3.36M stavki)
-CM_DIRECT_MOVIE_QUERIES = [
-    'collection:community_media AND mediatype:movies AND item_size:[400000000 TO 150000000000] AND title:(1080p OR 720p OR bluray OR "blu-ray" OR dvdrip OR webrip OR remastered OR restored)',
-    'collection:community_media AND mediatype:movies AND item_size:[350000000 TO 150000000000] AND title:("full movie" OR vhs OR dvd OR criterion OR uncut OR extended OR "director\'s cut")',
-    'collection:community_media AND mediatype:movies AND item_size:[400000000 TO 150000000000] AND subject:(movie OR movies OR "feature film" OR cinema OR noir OR horror OR western OR "sci-fi")',
+# Obavezni filmski signali u upitima kako bismo odmah preskočili amaterske/privatne snimke
+FILM_SIGNAL_CLAUSES = [
+    'title:(1080p OR 720p OR bluray OR "blu-ray" OR bdrip OR brrip OR dvdrip OR webrip OR remastered OR restored)',
+    'title:("full movie" OR vhs OR criterion OR uncut OR extended OR "director\'s cut" OR colorized)',
+    'description:("directed by" OR starring OR "feature film" OR "motion picture")',
 ]
 
 CM_NOISE_RE = re.compile(
@@ -509,37 +516,41 @@ def save_verified_movie_row(
     }
     supabase_upsert("catalog_items", [row], "archive_id")
     ver_tag = " [2. verzija]" if current_count >= 1 else ""
-    print(f"  + Film (Community Media){ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
+    print(f"  + Film (User Uploads){ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
     return True
 
 
 def run_community_media_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_CM_SYNC_SECONDS
-    print("=== [COMMUNITY MEDIA] Izravno rudarenje ravne mape community_media (3.36M stavki) ===", flush=True)
+    print("=== [USER UPLOADS] Rudarenje korisničkih filmskih uploadova (opensource_movies + additional_collections_video) ===", flush=True)
 
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
 
-    # 1/2 Skeniranje pojedinačnih dugometražnih filmova izravno unutar collection:community_media
-    print("1/2 Pretraga pojedinačnih dugometražnih filmova unutar community_media (paketi po 50)...", flush=True)
+    # 1/2 Ciljana pretraga dugometražnih filmova s pozitivnim filmskim signalima
+    print("1/2 Pretraga pojedinačnih filmova s filmskim oznakama (paketi po 50)...", flush=True)
     tasks = []
-    for base_q in CM_DIRECT_MOVIE_QUERIES:
-        for sort_order in ("downloads desc", "addeddate desc"):
-            for p in range(1, 5):
-                tasks.append((base_q, sort_order, p, 120))
+    sampled_decades = random.sample(DECADE_RANGES, k=3)
 
-    sampled_decades = random.sample(DECADE_RANGES, k=4)
-    for y_from, y_to in sampled_decades:
-        dec_q = (
-            f'collection:community_media AND mediatype:movies AND year:[{y_from} TO {y_to}] '
-            f'AND item_size:[380000000 TO 150000000000] '
-            f'AND -subject:news AND -subject:trailer AND -subject:sports'
-        )
-        for p in range(1, 5):
-            tasks.append((dec_q, "downloads desc", p, 120))
-        tasks.append((dec_q, "addeddate desc", 1, 120))
+    for col in USER_UPLOAD_COLLECTIONS:
+        for sig in FILM_SIGNAL_CLAUSES:
+            q = (
+                f'collection:{col} AND mediatype:movies AND item_size:[350000000 TO 150000000000] '
+                f'AND {sig} AND -subject:news AND -subject:trailer AND -subject:sports'
+            )
+            page_pick = random.randint(1, 6)
+            tasks.append((q, "downloads desc", page_pick, 100))
+            tasks.append((q, "addeddate desc", random.randint(1, 3), 100))
+
+        for y_from, y_to in sampled_decades:
+            dec_q = (
+                f'collection:{col} AND mediatype:movies AND year:[{y_from} TO {y_to}] '
+                f'AND item_size:[400000000 TO 150000000000] '
+                f'AND {FILM_SIGNAL_CLAUSES[0]} AND -subject:news AND -subject:trailer'
+            )
+            tasks.append((dec_q, "downloads desc", random.randint(1, 5), 100))
 
     random.shuffle(tasks)
     archive_docs = {}
@@ -596,7 +607,9 @@ def run_community_media_sync():
 
     flush_rejected_buffer(force=True)
     remaining_pool.sort(key=lambda e: (0 if e[2] > 0 else 1, -float(e[0].get("downloads") or 0)))
-    print(f"  Pronađeno {len(remaining_pool)} novih kandidata u community_media (preskočeno {skipped_pre} postojećih/šuma).", flush=True)
+    # Ograniči na top 800 kandidata po pokretanju tako da faza 2/2 uvijek dobije svoj dio vremena
+    remaining_pool = remaining_pool[:800]
+    print(f"  Pronađeno {len(remaining_pool)} novih kandidata s filmskim oznakama (preskočeno {skipped_pre} postojećih/šuma).", flush=True)
 
     phase1_deadline = min(deadline_ts, time.monotonic() + PHASE1_DIRECT_MAX_SECONDS)
     total_added = [0]
@@ -747,21 +760,21 @@ def run_community_media_sync():
         if phase1_deadline - time.monotonic() < MIN_REMAINING_SECONDS:
             break
 
-    # 2/2 Ugniježđeni multi-file paketi izravno unutar community_media
-    print("2/2 Provjera multi-file paketa unutar community_media...", flush=True)
+    # 2/2 Ugniježđeni multi-file paketi unutar opensource_movies i additional_collections_video
+    print("2/2 Provjera multi-file paketa unutar korisničkih bazena...", flush=True)
     bundle_ids = []
-    q_bundles = (
-        'collection:community_media AND mediatype:movies '
-        'AND (format:"ISO Image" OR title:(iso OR dvd OR pack OR collection OR trilogy OR boxset OR movies OR films)) '
-        'AND item_size:[4500000000 TO 150000000000] '
-        'AND -subject:"tv series" AND -subject:news AND -subject:sports'
-    )
-    for sort_order in ("downloads desc", "addeddate desc"):
+    for col in USER_UPLOAD_COLLECTIONS:
         if time.monotonic() > deadline_ts or len(bundle_ids) >= MAX_BUNDLES_PER_RUN:
             break
+        q_bundles = (
+            f'collection:{col} AND mediatype:movies '
+            f'AND (format:"ISO Image" OR title:(iso OR dvd OR pack OR collection OR trilogy OR boxset OR movies OR films)) '
+            f'AND item_size:[4500000000 TO 150000000000] '
+            f'AND -subject:"tv series" AND -subject:news AND -subject:sports'
+        )
         data = safe_get(
             "https://archive.org/advancedsearch.php",
-            params={"q": q_bundles, "fl[]": ["identifier", "title"], "sort[]": sort_order, "rows": 40, "page": random.randint(1, 4), "output": "json"},
+            params={"q": q_bundles, "fl[]": ["identifier", "title"], "sort[]": "downloads desc", "rows": 35, "page": random.randint(1, 5), "output": "json"},
             timeout=12,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
@@ -837,7 +850,7 @@ def run_community_media_sync():
     flush_rejected_buffer(force=True)
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
     print(
-        f"=== [COMMUNITY MEDIA] Završeno za {elapsed_mins:.1f} min! "
+        f"=== [USER UPLOADS] Završeno za {elapsed_mins:.1f} min! "
         f"Dodano {total_added[0]} pojedinačnih + {bundle_added_total} iz paketa. "
         f"Ukupno filmova u katalogu: {len(seen_tmdb_ids)} ===",
         flush=True,
