@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Što sinkronizirati (all, authors, movies, series_cartoons, concerts, directors_search, franchises_search, export_layers)'
+        description: 'Što sinkronizirati (all, authors, movies, community_media_search, series_cartoons, concerts, directors_search, franchises_search, export_layers)'
         required: true
         default: 'all'
         type: choice
@@ -14,6 +14,7 @@ on:
           - all
           - authors
           - movies
+          - community_media_search
           - series_cartoons
           - concerts
           - directors_search
@@ -63,6 +64,26 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/sync_movies.py
+
+  sync-community-media:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'community_media_search'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Sync Community Media User Collections
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/mine_community_media.py
 
   sync-series-cartoons:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'all' || github.event.inputs.target == 'series_cartoons'
@@ -186,7 +207,7 @@ jobs:
 
   keep-repo-alive:
     if: always()
-    needs: [sync-authors, sync-movies, sync-series-cartoons, sync-concerts, search-directors-archive, search-franchises-archive, export-archive-layers]
+    needs: [sync-authors, sync-movies, sync-community-media, sync-series-cartoons, sync-concerts, search-directors-archive, search-franchises-archive, export-archive-layers]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
