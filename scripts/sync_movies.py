@@ -82,6 +82,13 @@ def flush_rejected_buffer(force=False):
 def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
     if not ident or ident.startswith("http"):
         return
+    if isinstance(rel_year, list):
+        rel_year = rel_year[0] if rel_year else 0
+    try:
+        clean_year = int(str(rel_year)[:4]) if rel_year else 0
+    except (ValueError, TypeError):
+        clean_year = 0
+
     should_queue = False
     with state_lock:
         if ident not in existing_archive_ids:
@@ -94,7 +101,7 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
             "title": str(title or ident)[:180],
             "media_type": "movie",
             "genres": [],
-            "release_year": int(rel_year or 0),
+            "release_year": clean_year,
             "rating": 0.0,
             "popularity_score": -1000.0,
             "description_hr": "",
@@ -1439,7 +1446,6 @@ def mine_direct_movies_from_branches(
             extra_sub_cols.append((ident, 2))
 
     all_nodes = list(APPROVED_HIERARCHY_NODES) + extra_sub_cols
-    # Uzimamo rotirajući uzorak od 18 čvorova po runu da ne preopteretimo Archive.org API
     collections_to_scan = random.sample(all_nodes, k=min(18, len(all_nodes)))
     archive_docs = {}
 
@@ -1484,7 +1490,6 @@ def mine_direct_movies_from_branches(
 
     random.shuffle(tasks)
 
-    # Umjeren paralelizam (max_workers=4) da Archive.org nikad ne uključi rate-limit
     with ThreadPoolExecutor(max_workers=4) as pool:
         for docs in pool.map(fetch_query_docs, tasks):
             for doc in docs:
