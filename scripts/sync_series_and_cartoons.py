@@ -1,12 +1,16 @@
 import os
+import random
 import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import sync_common as sc
 from sync_common import (
     RELEASE_TAG_PATTERN,
     SPAM_OR_FAKE_KEYWORDS,
@@ -34,17 +38,44 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-MAX_SYNC_DURATION_SECONDS = 195 * 60
+_HTTP_SESSION = requests.Session()
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+_HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
+_HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
+if hasattr(sc, "session"):
+    sc.session = _HTTP_SESSION
 
+MAX_SYNC_DURATION_SECONDS = 55 * 60
+MAX_REFRESH_SERIES_PER_RUN = 120
+MAX_NEW_SERIES_CANDIDATES_PER_RUN = 320
+
+# Svi TV i animirani čvorovi iz hijerarhijske karte (archive_movies_layers_2.md)
 ARCHIVE_TV_COLLECTIONS = [
-    "classic_tv",
-    "classic_tv_1990s",
-    "classic_tv_1980s",
-    "classic_tv_1970s",
-    "classic_tv_1960s",
-    "television_inbox",
-    "televisionmovies",
-    "animationandcartoons",
+    ("classic_tv", 4),                # [1.14] 11,023 stavki
+    ("childrenstelevision", 4),       # [1.15] 7,561 stavki
+    ("vhstvshows", 4),                # [1.6.6] 10,449 stavki
+    ("vhskids", 4),                   # [1.6.2] 12,554 stavki
+    ("tvprograms", 2),                # [1.9] 1,028 stavki
+    ("television_inbox", 3),          # [1.5.1] 122,757 stavki
+    ("anime", 3),                     # [1.7] 37,235 stavki
+    ("animepacks", 3),                # [1.7.2] 590 stavki
+    ("anime-series", 3),              # [1.7.3] 559 stavki
+    ("anime_miscellaneous", 3),       # [1.7.1] 32,754 stavki
+    ("animationandcartoons", 3),      # [1.8] 16,366 stavki
+    ("saturdaymorningcartoons", 2),   # [1.11] 1,705 stavki
+    ("opensource_movies", 2),         # [1.1] korisničke serije (S01 / Season 1)
+    ("additional_collections_video", 2), # [1.4] dodatne kolekcije serija
+]
+
+# Čvorovi za kratkometražne crtiće iz hijerarhijske karte
+SHORT_CARTOON_COLLECTIONS = [
+    "more_animation",                 # [1.8.1] 1,182 stavki
+    "classic_cartoons",               # [1.8.2] 81 stavka
+    "vintage_cartoons",               # [1.8.3] 481 stavka
+    "animation_unsorted",             # [1.8.5] 530 stavki
+    "russiananimationcartoons",       # [1.8.9] 594 stavki
+    "saturdaymorningcartoons",        # [1.11] 1,705 stavki
+    "animationandcartoons",           # [1.8] 16,366 stavki
 ]
 
 TMDB_TV_GENRE_MAP = {
@@ -311,7 +342,7 @@ def parse_season_and_episodes(item_title, filename, total_seasons_hint=0):
 
     for pat in [
         r"(?i)\bS(\d{1,2})\s*[-_.]?\s*E(\d{1,3})\b",
-        r"(?i)\b(\d{1,2})x(\d{1,3})\b",
+        r"(?i)\b(\d{1,2})x(?!264\b|265\b|480\b|540\b|576\b|720\b|1080\b)(\d{1,3})\b",
         r"(?i)Season\s*(\d{1,2}).*?(?:Episode|Ep\.?|E)\s*(\d{1,3})\b",
         r"(?i)Sezona\s*(\d{1,2}).*?(?:Epizoda|Ep\.?|E)\s*(\d{1,3})\b",
         r"(?i)Series\s*(\d{1,2}).*?(?:Episode|Ep\.?|E)\s*(\d{1,3})\b"
@@ -764,7 +795,6 @@ def format_series_display_title(hr_name, orig_name, year):
 
 
 def audit_and_restore_short_cartoons(all_movie_rows, deadline_ts):
-    """Vraća greškom skrivene kratkometražne i Ex-Yu crtiće (tmdb_id <= 0) u katalog ako imaju valjan stream."""
     cartoon_rows = [
         r for r in all_movie_rows
         if int(r.get("tmdb_id") or 0) <= 0
@@ -801,11 +831,12 @@ def audit_and_restore_short_cartoons(all_movie_rows, deadline_ts):
 
 
 def refresh_incomplete_series(existing_series_rows, deadline_ts):
-    candidates = [
+    all_candidates = [
         r for r in existing_series_rows
         if (r.get("tmdb_id") or 0) > 0
     ]
-    print(f"2/4 Provjera jezika, sezona i opisa za {len(candidates)} postojećih serija...", flush=True)
+    candidates = random.sample(all_candidates, k=min(MAX_REFRESH_SERIES_PER_RUN, len(all_candidates)))
+    print(f"2/4 Provjera jezika, sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
     updated_count = [0]
 
     def check_and_replenish(row):
@@ -932,6 +963,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         "chip 'n' dale", "minnie mouse", "daisy duck"
     }
     ex_yu_set = set(EX_YU_SHORT_CARTOON_QUERIES)
+    col_clause = " OR ".join(f"collection:{c}" for c in SHORT_CARTOON_COLLECTIONS)
 
     candidate_docs = {}
     for cartoon_query in CLASSIC_SHORT_CARTOON_QUERIES:
@@ -943,9 +975,9 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         if is_ex_yu_q:
             query = f'title:"{cartoon_query}" AND mediatype:(movies OR web) AND -subject:trailer AND -subject:news'
         elif is_disney_q:
-            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons OR collection:opensource_movies OR collection:community_media) AND -subject:trailer'
+            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR {col_clause} OR collection:opensource_movies) AND -subject:trailer'
         else:
-            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR collection:animationandcartoons OR collection:classic_cartoons) AND -subject:trailer'
+            query = f'title:"{cartoon_query}" AND mediatype:movies AND (subject:animation OR subject:cartoon OR {col_clause}) AND -subject:trailer'
 
         data = safe_get(
             "https://archive.org/advancedsearch.php",
@@ -961,6 +993,26 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
             ident = doc.get("identifier")
             if ident and ident not in existing_archive_ids and ident not in candidate_docs:
                 candidate_docs[ident] = (doc, is_disney_q, is_ex_yu_q)
+
+    # Dodatno povlačenje izravno iz kratkih animiranih grana s karte ([1.8.1] more_animation, [1.8.3] vintage_cartoons...)
+    for short_col in ["more_animation", "vintage_cartoons", "classic_cartoons", "saturdaymorningcartoons"]:
+        if time.monotonic() > deadline_ts:
+            break
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": f"collection:{short_col} AND mediatype:movies AND -subject:trailer",
+                "fl[]": ["identifier", "title", "year", "downloads", "description"],
+                "sort[]": random.choice(["downloads desc", "addeddate desc"]),
+                "rows": 60,
+                "page": random.randint(1, 4),
+                "output": "json"
+            }
+        )
+        for doc in (data or {}).get("response", {}).get("docs", []):
+            ident = doc.get("identifier")
+            if ident and ident not in existing_archive_ids and ident not in candidate_docs:
+                candidate_docs[ident] = (doc, False, False)
 
     def process_short_doc(item):
         if time.monotonic() > deadline_ts:
@@ -1050,7 +1102,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
 
 
 def sync_all_series(seen_tmdb_series, deadline_ts):
-    print("3/4 Duboka TMDB pretraga svih žanrova serija...", flush=True)
+    print("3/4 Rudarenje TV i anime kolekcija iz hijerarhijske karte...", flush=True)
     candidate_shows = {}
     priority_ids = set()
 
@@ -1064,20 +1116,24 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
                 matches.append(item)
         return matches
 
-    print("4/4 Rudarenje TV kolekcija na Archive.org...", flush=True)
     discovered_cores = {}
-    for col in ARCHIVE_TV_COLLECTIONS:
+    for col, max_pages in ARCHIVE_TV_COLLECTIONS:
         if time.monotonic() > deadline_ts:
             break
-        query = f"mediatype:movies AND collection:{col} AND -subject:trailer AND -subject:news"
-        for page in [1, 2, 3]:
+        if col in ("opensource_movies", "additional_collections_video"):
+            query = f'mediatype:movies AND collection:{col} AND (title:"Season 1" OR title:"S01E01" OR title:"Complete Series") AND -subject:trailer AND -subject:news'
+        else:
+            query = f"mediatype:movies AND collection:{col} AND -subject:trailer AND -subject:news"
+
+        pages_to_check = list(range(1, max_pages + 1)) + [random.randint(max_pages + 1, max_pages + 6)]
+        for page in pages_to_check:
             data = safe_get(
                 "https://archive.org/advancedsearch.php",
                 params={
                     "q": query,
                     "fl[]": ["identifier", "title", "downloads"],
                     "sort[]": "downloads desc",
-                    "rows": 150,
+                    "rows": 120,
                     "page": page,
                     "output": "json"
                 }
@@ -1093,45 +1149,48 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
                 if len(core) >= 3 and core not in discovered_cores:
                     discovered_cores[core] = str(raw_t)
 
+    print(f"  Otkriveno {len(discovered_cores)} jedinstvenih TV/anime naslova u Archive.org granama.", flush=True)
+
     with ThreadPoolExecutor(max_workers=12) as pool:
-        for hits in pool.map(fetch_tv_seeds_all_versions, list(discovered_cores.keys())):
+        for hits in pool.map(fetch_tv_seeds_all_versions, list(discovered_cores.keys())[:250]):
             for hit in hits:
                 if hit and hit["id"] not in seen_tmdb_series:
                     candidate_shows[hit["id"]] = hit
                     priority_ids.add(hit["id"])
 
+    sampled_tv_seeds = random.sample(CLASSIC_TV_SEED_TITLES, k=min(120, len(CLASSIC_TV_SEED_TITLES)))
     with ThreadPoolExecutor(max_workers=12) as pool:
-        for hits in pool.map(fetch_tv_seeds_all_versions, CLASSIC_TV_SEED_TITLES):
+        for hits in pool.map(fetch_tv_seeds_all_versions, sampled_tv_seeds):
             for hit in hits:
                 if hit and hit["id"] not in seen_tmdb_series:
                     candidate_shows[hit["id"]] = hit
                     priority_ids.add(hit["id"])
 
     for endpoint in ["tv/popular", "tv/top_rated"]:
-        for page in range(1, 8):
-            data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
-            for s in (data or {}).get("results", []):
-                if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
-                    candidate_shows[s["id"]] = s
+        page = random.randint(1, 6)
+        data = safe_get(f"{TMDB_BASE}/{endpoint}", {"api_key": TMDB_API_KEY, "language": "hr-HR", "page": page})
+        for s in (data or {}).get("results", []):
+            if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
+                candidate_shows[s["id"]] = s
 
-    for tv_genre in TMDB_TV_DISCOVER_GENRE_IDS:
-        for page in range(1, 5):
-            data = safe_get(
-                f"{TMDB_BASE}/discover/tv",
-                {
-                    "api_key": TMDB_API_KEY,
-                    "language": "hr-HR",
-                    "with_genres": tv_genre,
-                    "first_air_date.gte": "1960-01-01",
-                    "first_air_date.lte": "1999-12-31",
-                    "vote_count.gte": 15,
-                    "sort_by": "popularity.desc",
-                    "page": page
-                }
-            )
-            for s in (data or {}).get("results", []):
-                if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
-                    candidate_shows[s["id"]] = s
+    for tv_genre in random.sample(TMDB_TV_DISCOVER_GENRE_IDS, k=5):
+        page = random.randint(1, 4)
+        data = safe_get(
+            f"{TMDB_BASE}/discover/tv",
+            {
+                "api_key": TMDB_API_KEY,
+                "language": "hr-HR",
+                "with_genres": tv_genre,
+                "first_air_date.gte": "1960-01-01",
+                "first_air_date.lte": "2015-12-31",
+                "vote_count.gte": 15,
+                "sort_by": "popularity.desc",
+                "page": page
+            }
+        )
+        for s in (data or {}).get("results", []):
+            if s["id"] not in seen_tmdb_series and s["id"] not in candidate_shows:
+                candidate_shows[s["id"]] = s
 
     ordered_candidates = sorted(
         candidate_shows.items(),
@@ -1139,10 +1198,10 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
             0 if item[0] in priority_ids else 1,
             -float(item[1].get("popularity") or 0.0)
         )
-    )
+    )[:MAX_NEW_SERIES_CANDIDATES_PER_RUN]
 
     total_candidates = len(ordered_candidates)
-    print(f"  Ukupno {total_candidates} novih serija za provjeru na Archive.org...", flush=True)
+    print(f"4/4 Provjera top {total_candidates} novih serija na Archive.org...", flush=True)
 
     checked_counter = [0]
     added_series_counter = [0]
@@ -1170,7 +1229,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
         with state_lock:
             checked_counter[0] += 1
             c_now = checked_counter[0]
-            if c_now % 100 == 0:
+            if c_now % 50 == 0:
                 print(f"  ... Provjereno {c_now}/{total_candidates} kandidata (dodano {added_series_counter[0]} serija)...", flush=True)
             if tv_id in seen_tmdb_series:
                 return None
@@ -1248,7 +1307,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
 def run_series_and_cartoons_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_SYNC_DURATION_SECONDS
-    print("=== [SERIJE I CRTIĆI] Pokretanje sinkronizacije serija, Ex-Yu i klasičnih crtića ===", flush=True)
+    print("=== [SERIJE I CRTIĆI] Pokretanje hijerarhijske sinkronizacije serija, Ex-Yu i klasičnih crtića ===", flush=True)
     existing_archive_ids, _, _, all_movie_rows = fetch_existing_catalog_state("movie")
     _, seen_tmdb_series, _, existing_series_rows = fetch_existing_catalog_state("series")
     print(f"  U bazi već postoji {len(seen_tmdb_series)} potvrđenih serija.", flush=True)
