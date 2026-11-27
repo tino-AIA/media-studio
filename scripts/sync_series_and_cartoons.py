@@ -49,33 +49,32 @@ MAX_SYNC_DURATION_SECONDS = 55 * 60
 MAX_REFRESH_SERIES_PER_RUN = 120
 MAX_NEW_SERIES_CANDIDATES_PER_RUN = 320
 
-# Svi TV i animirani čvorovi iz hijerarhijske karte (archive_movies_layers_2.md)
+# Svi TV i animirani čvorovi iz hijerarhijske karte
 ARCHIVE_TV_COLLECTIONS = [
-    ("classic_tv", 4),                # [1.14] 11,023 stavki
-    ("childrenstelevision", 4),       # [1.15] 7,561 stavki
-    ("vhstvshows", 4),                # [1.6.6] 10,449 stavki
-    ("vhskids", 4),                   # [1.6.2] 12,554 stavki
-    ("tvprograms", 2),                # [1.9] 1,028 stavki
-    ("television_inbox", 3),          # [1.5.1] 122,757 stavki
-    ("anime", 3),                     # [1.7] 37,235 stavki
-    ("animepacks", 3),                # [1.7.2] 590 stavki
-    ("anime-series", 3),              # [1.7.3] 559 stavki
-    ("anime_miscellaneous", 3),       # [1.7.1] 32,754 stavki
-    ("animationandcartoons", 3),      # [1.8] 16,366 stavki
-    ("saturdaymorningcartoons", 2),   # [1.11] 1,705 stavki
-    ("opensource_movies", 2),         # [1.1] korisničke serije (S01 / Season 1)
-    ("additional_collections_video", 2), # [1.4] dodatne kolekcije serija
+    ("classic_tv", 4),
+    ("childrenstelevision", 4),
+    ("vhstvshows", 4),
+    ("vhskids", 4),
+    ("tvprograms", 2),
+    ("television_inbox", 3),
+    ("anime", 3),
+    ("animepacks", 3),
+    ("anime-series", 3),
+    ("anime_miscellaneous", 3),
+    ("animationandcartoons", 3),
+    ("saturdaymorningcartoons", 2),
+    ("opensource_movies", 2),
+    ("additional_collections_video", 2),
 ]
 
-# Čvorovi za kratkometražne crtiće iz hijerarhijske karte
 SHORT_CARTOON_COLLECTIONS = [
-    "more_animation",                 # [1.8.1] 1,182 stavki
-    "classic_cartoons",               # [1.8.2] 81 stavka
-    "vintage_cartoons",               # [1.8.3] 481 stavka
-    "animation_unsorted",             # [1.8.5] 530 stavki
-    "russiananimationcartoons",       # [1.8.9] 594 stavki
-    "saturdaymorningcartoons",        # [1.11] 1,705 stavki
-    "animationandcartoons",           # [1.8] 16,366 stavki
+    "more_animation",
+    "classic_cartoons",
+    "vintage_cartoons",
+    "animation_unsorted",
+    "russiananimationcartoons",
+    "saturdaymorningcartoons",
+    "animationandcartoons",
 ]
 
 TMDB_TV_GENRE_MAP = {
@@ -833,7 +832,7 @@ def audit_and_restore_short_cartoons(all_movie_rows, deadline_ts):
 def refresh_incomplete_series(existing_series_rows, deadline_ts):
     all_candidates = [
         r for r in existing_series_rows
-        if (r.get("tmdb_id") or 0) > 0
+        if (r.get("tmdb_id") or 0) > 0 and not str(r.get("archive_id") or "").startswith("tv_queue")
     ]
     candidates = random.sample(all_candidates, k=min(MAX_REFRESH_SERIES_PER_RUN, len(all_candidates)))
     print(f"2/4 Provjera jezika, sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
@@ -994,7 +993,6 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
             if ident and ident not in existing_archive_ids and ident not in candidate_docs:
                 candidate_docs[ident] = (doc, is_disney_q, is_ex_yu_q)
 
-    # Dodatno povlačenje izravno iz kratkih animiranih grana s karte ([1.8.1] more_animation, [1.8.3] vintage_cartoons...)
     for short_col in ["more_animation", "vintage_cartoons", "classic_cartoons", "saturdaymorningcartoons"]:
         if time.monotonic() > deadline_ts:
             break
@@ -1101,7 +1099,22 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
     print(f"  Dodano {added_counter[0]} novih Disney, Ex-Yu i klasičnih crtića.", flush=True)
 
 
-def sync_all_series(seen_tmdb_series, deadline_ts):
+def pop_queued_series_from_movies(existing_series_rows):
+    queued_cores = {}
+    queued_row_ids = []
+    for r in existing_series_rows:
+        aid = str(r.get("archive_id") or "")
+        if not aid.startswith("tv_queue:"):
+            continue
+        queued_row_ids.append(r["id"])
+        raw_t = str(r.get("title") or "").strip()
+        core = extract_series_core_title(raw_t)
+        if len(core) >= 2 and core not in queued_cores:
+            queued_cores[core] = raw_t
+    return queued_cores, queued_row_ids
+
+
+def sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=None):
     print("3/4 Rudarenje TV i anime kolekcija iz hijerarhijske karte...", flush=True)
     candidate_shows = {}
     priority_ids = set()
@@ -1115,6 +1128,23 @@ def sync_all_series(seen_tmdb_series, deadline_ts):
             if idx == 0 or (target_norm and cand_norm == target_norm):
                 matches.append(item)
         return matches
+
+    # Preuzmi serije koje je filmska skripta izbacila iz filmova i poslala u red čekanja
+    queued_cores, queued_row_ids = pop_queued_series_from_movies(existing_series_rows or [])
+    if queued_cores:
+        print(
+            f"  Preuzeto {len(queued_cores)} serija iz filmskog reda čekanja (tv_queue): "
+            f"{', '.join(list(queued_cores.values())[:10])}",
+            flush=True
+        )
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for hits in pool.map(fetch_tv_seeds_all_versions, list(queued_cores.keys())):
+                for hit in hits:
+                    if hit and hit["id"] not in seen_tmdb_series:
+                        candidate_shows[hit["id"]] = hit
+                        priority_ids.add(hit["id"])
+        for q_id in queued_row_ids:
+            supabase_patch_row("catalog_items", q_id, {"archive_id": f"tv_queue_done:{q_id}"})
 
     discovered_cores = {}
     for col, max_pages in ARCHIVE_TV_COLLECTIONS:
@@ -1314,7 +1344,7 @@ def run_series_and_cartoons_sync():
     audit_and_restore_short_cartoons(all_movie_rows, deadline_ts)
     sync_short_cartoons(existing_archive_ids, deadline_ts)
     refresh_incomplete_series(existing_series_rows, deadline_ts)
-    sync_all_series(seen_tmdb_series, deadline_ts)
+    sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=existing_series_rows)
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
     print(f"=== [SERIJE I CRTIĆI] Završeno za {elapsed_mins:.1f} min! Ukupno serija u katalogu: {len(seen_tmdb_series)} ===", flush=True)
 
