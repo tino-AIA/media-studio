@@ -47,11 +47,11 @@ if hasattr(sc, "session"):
     sc.session = _HTTP_SESSION
 
 MAX_CM_SYNC_SECONDS = 42 * 60
+PHASE1_DIRECT_MAX_SECONDS = 31 * 60
 BATCH_SIZE_CANDIDATES = 50
 MIN_REMAINING_SECONDS = 90
 
-MAX_USER_COLLECTIONS_PER_RUN = 30
-MAX_BUNDLES_PER_RUN = 20
+MAX_BUNDLES_PER_RUN = 25
 MAX_VIDEOS_PER_BUNDLE = 75
 MAX_VERSIONS_PER_MOVIE = 2
 
@@ -101,21 +101,31 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
         flush_rejected_buffer(force=False)
 
 
-# Ključne riječi koje otkrivaju osobne filmske/VHS/DVD kolekcije unutar community_media
-CM_MOVIE_COLLECTION_QUERIES = [
-    'collection:community_media AND mediatype:collection AND title:(movie OR movies OR film OR films OR cinema)',
-    'collection:community_media AND mediatype:collection AND title:(vhs OR dvd OR bluray OR "blu-ray" OR laserdisc OR Criterion)',
-    'collection:community_media AND mediatype:collection AND title:(classic OR classics OR noir OR "sci-fi" OR scifi OR horror OR western OR thriller OR comedy)',
-    'collection:community_media AND mediatype:collection AND title:(remastered OR restored OR 1080p OR 720p OR cartoon OR cartoons OR animation)',
-    'collection:community_media AND mediatype:collection AND description:(movies OR "feature film" OR "feature films" OR cinema OR vhs)',
+DECADE_RANGES = [
+    (1930, 1959),
+    (1960, 1969),
+    (1970, 1979),
+    (1980, 1989),
+    (1990, 1999),
+    (2000, 2009),
+    (2010, 2019),
+    (2020, 2026),
 ]
 
-CM_NOISE_COLLECTION_RE = re.compile(
+# Ciljani upiti izravno nad ravnom mapom community_media (3.36M stavki)
+CM_DIRECT_MOVIE_QUERIES = [
+    'collection:community_media AND mediatype:movies AND item_size:[400000000 TO 150000000000] AND title:(1080p OR 720p OR bluray OR "blu-ray" OR dvdrip OR webrip OR remastered OR restored)',
+    'collection:community_media AND mediatype:movies AND item_size:[350000000 TO 150000000000] AND title:("full movie" OR vhs OR dvd OR criterion OR uncut OR extended OR "director\'s cut")',
+    'collection:community_media AND mediatype:movies AND item_size:[400000000 TO 150000000000] AND subject:(movie OR movies OR "feature film" OR cinema OR noir OR horror OR western OR "sci-fi")',
+]
+
+CM_NOISE_RE = re.compile(
     r"(?i)(?:news|cnn|fox[\s._-]*news|msnbc|cspan|election|parliament|senate|council|city[\s._-]*of|"
+    r"board[\s._-]*of|commissioners|zoning|planning[\s._-]*board|town[\s._-]*hall|public[\s._-]*hearing|"
     r"government|municipal|peg[\s._-]*tv|public[\s._-]*access|community[\s._-]*tv|channel\s*\d+|"
-    r"twitch|tiktok|vlog|podcast|sermon|church|prayer|ministry|bible|gospel|mosque|temple|"
-    r"university|college|school|lecture|course|seminar|graduation|commencement|"
-    r"olympic|championship|tournament|sports|football|basketball|baseball|hockey|soccer|"
+    r"twitch|tiktok|vlog|podcast|sermon|church|prayer|ministry|worship|bible|gospel|mosque|temple|"
+    r"university|college|high[\s._-]*school|school[\s._-]*board|lecture|course|seminar|graduation|commencement|"
+    r"olympic|championship|tournament|sports|football|basketball|baseball|hockey|soccer|wrestling|"
     r"commercial|gameplay|speedrun|walkthrough|foia|radars|police|sheriff|fire[\s._-]*dept)"
 )
 
@@ -213,6 +223,8 @@ def is_explicit_junk_item(ident, raw_title, extra_text=""):
     blob = f"{ident} {raw_title} {extra_text}"
     if EX_YU_DETECTION_KEYWORDS and any(kw in blob.lower() for kw in EX_YU_DETECTION_KEYWORDS):
         return False
+    if CM_NOISE_RE.search(blob):
+        return True
     if STRICT_EPISODE_RE.search(blob) or TV_NEWS_OR_SPORTS_ID_RE.search(str(ident or "")) or TV_NEWS_OR_SPORTS_ID_RE.search(str(raw_title or "")):
         return True
     return bool(EXPLICIT_JUNK_RE.search(blob))
@@ -501,97 +513,57 @@ def save_verified_movie_row(
     return True
 
 
-def discover_community_media_movie_collections(existing_archive_ids, deadline_ts):
-    """Otkriva osobne korisničke kolekcije filmova unutar community_media."""
-    discovered = []
-    seen = set()
-
-    queries = list(CM_MOVIE_COLLECTION_QUERIES)
-    random.shuffle(queries)
-
-    for q in queries:
-        if time.monotonic() > deadline_ts or len(discovered) >= MAX_USER_COLLECTIONS_PER_RUN:
-            break
-        sort_choice = random.choice(["downloads desc", "addeddate desc", "publicdate desc"])
-        page_choice = random.randint(1, 4)
-        data = safe_get(
-            "https://archive.org/advancedsearch.php",
-            params={
-                "q": q,
-                "fl[]": ["identifier", "title", "downloads"],
-                "sort[]": sort_choice,
-                "rows": 40,
-                "page": page_choice,
-                "output": "json",
-            },
-            timeout=12,
-        )
-        for doc in (data or {}).get("response", {}).get("docs", []):
-            ident = (doc.get("identifier") or "").strip()
-            if not ident or ident.lower() == "community_media" or ident in seen:
-                continue
-            if f"cm_col_checked:{ident}" in existing_archive_ids:
-                continue
-            raw_t = doc.get("title") or ident
-            if isinstance(raw_t, list):
-                raw_t = raw_t[0]
-            if CM_NOISE_COLLECTION_RE.search(f"{ident} {raw_t}"):
-                record_rejected_archive_id(f"cm_col_checked:{ident}", raw_t, 0, existing_archive_ids)
-                continue
-            seen.add(ident)
-            discovered.append((ident, str(raw_t)))
-            if len(discovered) >= MAX_USER_COLLECTIONS_PER_RUN:
-                break
-
-    flush_rejected_buffer(force=True)
-    return discovered
-
-
 def run_community_media_sync():
     start_ts = time.monotonic()
     deadline_ts = start_ts + MAX_CM_SYNC_SECONDS
-    print("=== [COMMUNITY MEDIA] Pokretanje rudarenja osobnih filmskih kolekcija unutar community_media ===", flush=True)
+    print("=== [COMMUNITY MEDIA] Izravno rudarenje ravne mape community_media (3.36M stavki) ===", flush=True)
 
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
     tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
 
-    print("1/3 Otkrivanje korisničkih filmskih kolekcija unutar community_media...", flush=True)
-    user_collections = discover_community_media_movie_collections(existing_archive_ids, deadline_ts)
-    print(f"  Pronađeno {len(user_collections)} novih osobnih filmskih kolekcija za pretragu.", flush=True)
+    # 1/2 Skeniranje pojedinačnih dugometražnih filmova izravno unutar collection:community_media
+    print("1/2 Pretraga pojedinačnih dugometražnih filmova unutar community_media (paketi po 50)...", flush=True)
+    tasks = []
+    for base_q in CM_DIRECT_MOVIE_QUERIES:
+        for sort_order in ("downloads desc", "addeddate desc"):
+            for p in range(1, 5):
+                tasks.append((base_q, sort_order, p, 120))
 
-    if not user_collections:
-        print("=== [COMMUNITY MEDIA] Nema novih kolekcija u ovom ciklusu. ===", flush=True)
-        return
+    sampled_decades = random.sample(DECADE_RANGES, k=4)
+    for y_from, y_to in sampled_decades:
+        dec_q = (
+            f'collection:community_media AND mediatype:movies AND year:[{y_from} TO {y_to}] '
+            f'AND item_size:[380000000 TO 150000000000] '
+            f'AND -subject:news AND -subject:trailer AND -subject:sports'
+        )
+        for p in range(1, 5):
+            tasks.append((dec_q, "downloads desc", p, 120))
+        tasks.append((dec_q, "addeddate desc", 1, 120))
 
-    # 2/3 Pojedinačni filmovi iz otkrivenih korisničkih kolekcija
-    print("2/3 Skeniranje pojedinačnih filmova unutar otkrivenih korisničkih kolekcija...", flush=True)
+    random.shuffle(tasks)
     archive_docs = {}
 
-    def fetch_col_items(col_tuple):
-        col_id, _ = col_tuple
+    def fetch_docs(task_item):
         if time.monotonic() > deadline_ts:
             return []
-        q = f'mediatype:movies AND collection:{col_id} AND -subject:trailer AND -subject:news AND -subject:"video games"'
-        out = []
-        for sort_order in ("downloads desc", "addeddate desc"):
-            data = safe_get(
-                "https://archive.org/advancedsearch.php",
-                params={
-                    "q": q,
-                    "fl[]": ["identifier", "title", "year", "downloads"],
-                    "sort[]": sort_order,
-                    "rows": 100,
-                    "page": 1,
-                    "output": "json",
-                },
-                timeout=10,
-            )
-            out.extend((data or {}).get("response", {}).get("docs", []))
-        return out
+        q, sort_order, page, rows_cnt = task_item
+        data = safe_get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": q,
+                "fl[]": ["identifier", "title", "year", "downloads"],
+                "sort[]": sort_order,
+                "rows": rows_cnt,
+                "page": page,
+                "output": "json",
+            },
+            timeout=12,
+        )
+        return (data or {}).get("response", {}).get("docs", [])
 
     with ThreadPoolExecutor(max_workers=10) as pool:
-        for docs in pool.map(fetch_col_items, user_collections):
+        for docs in pool.map(fetch_docs, tasks):
             for doc in docs:
                 ident = doc.get("identifier")
                 if ident and ident not in existing_archive_ids and ident not in archive_docs:
@@ -624,21 +596,22 @@ def run_community_media_sync():
 
     flush_rejected_buffer(force=True)
     remaining_pool.sort(key=lambda e: (0 if e[2] > 0 else 1, -float(e[0].get("downloads") or 0)))
-    print(f"  Pronađeno {len(remaining_pool)} novih kandidata (preskočeno {skipped_pre} postojećih/odbačenih).", flush=True)
+    print(f"  Pronađeno {len(remaining_pool)} novih kandidata u community_media (preskočeno {skipped_pre} postojećih/šuma).", flush=True)
 
-    phase2_deadline = min(deadline_ts, time.monotonic() + 26 * 60)
+    phase1_deadline = min(deadline_ts, time.monotonic() + PHASE1_DIRECT_MAX_SECONDS)
     total_added = [0]
     cursor = 0
     batch_num = 0
 
-    while cursor < len(remaining_pool) and time.monotonic() < phase2_deadline:
+    while cursor < len(remaining_pool) and time.monotonic() < phase1_deadline:
         batch_num += 1
         batch_slice = remaining_pool[cursor:cursor + BATCH_SIZE_CANDIDATES]
         cursor += len(batch_slice)
+        print(f"  ▶ Paket #{batch_num}: obrada {len(batch_slice)} kandidata (preostalo: {len(remaining_pool) - cursor})...", flush=True)
         batch_added = [0]
 
         def process_doc(entry):
-            if time.monotonic() > phase2_deadline:
+            if time.monotonic() > phase1_deadline:
                 return
             doc, title_candidates, parsed_y = entry
             ident = doc.get("identifier") or ""
@@ -651,7 +624,7 @@ def run_community_media_sync():
 
             results = []
             for cand_q in title_candidates[:2]:
-                if time.monotonic() > phase2_deadline:
+                if time.monotonic() > phase1_deadline:
                     return
                 if parsed_y > 0:
                     res_y = safe_get(
@@ -771,31 +744,39 @@ def run_community_media_sync():
         flush_rejected_buffer(force=True)
         print(f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {batch_added[0]} filmova.", flush=True)
 
-        if phase2_deadline - time.monotonic() < MIN_REMAINING_SECONDS:
+        if phase1_deadline - time.monotonic() < MIN_REMAINING_SECONDS:
             break
 
-    # 3/3 Multi-file paketi unutar tih korisničkih kolekcija
-    print("3/3 Provjera multi-file paketa unutar otkrivenih korisničkih kolekcija...", flush=True)
+    # 2/2 Ugniježđeni multi-file paketi izravno unutar community_media
+    print("2/2 Provjera multi-file paketa unutar community_media...", flush=True)
     bundle_ids = []
-    for col_id, _ in user_collections:
+    q_bundles = (
+        'collection:community_media AND mediatype:movies '
+        'AND (format:"ISO Image" OR title:(iso OR dvd OR pack OR collection OR trilogy OR boxset OR movies OR films)) '
+        'AND item_size:[4500000000 TO 150000000000] '
+        'AND -subject:"tv series" AND -subject:news AND -subject:sports'
+    )
+    for sort_order in ("downloads desc", "addeddate desc"):
         if time.monotonic() > deadline_ts or len(bundle_ids) >= MAX_BUNDLES_PER_RUN:
             break
-        q = (
-            f'mediatype:movies AND collection:{col_id} '
-            f'AND (format:"ISO Image" OR item_size:[4500000000 TO 150000000000]) '
-            f'AND -subject:"tv series" AND -subject:news'
-        )
         data = safe_get(
             "https://archive.org/advancedsearch.php",
-            params={"q": q, "fl[]": ["identifier", "title"], "rows": 15, "output": "json"},
-            timeout=10,
+            params={"q": q_bundles, "fl[]": ["identifier", "title"], "sort[]": sort_order, "rows": 40, "page": random.randint(1, 4), "output": "json"},
+            timeout=12,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
             b_id = (doc.get("identifier") or "").strip()
-            if b_id and b_id not in existing_archive_ids and f"bundle_checked:{b_id}" not in existing_archive_ids:
-                bundle_ids.append(b_id)
-                if len(bundle_ids) >= MAX_BUNDLES_PER_RUN:
-                    break
+            raw_t = doc.get("title") or b_id
+            if isinstance(raw_t, list):
+                raw_t = raw_t[0]
+            if not b_id or b_id in existing_archive_ids or f"bundle_checked:{b_id}" in existing_archive_ids:
+                continue
+            if CM_NOISE_RE.search(f"{b_id} {raw_t}") or is_explicit_junk_item(b_id, raw_t):
+                record_rejected_archive_id(f"bundle_checked:{b_id}", raw_t, 0, existing_archive_ids)
+                continue
+            bundle_ids.append(b_id)
+            if len(bundle_ids) >= MAX_BUNDLES_PER_RUN:
+                break
 
     bundle_added_total = 0
     for b_id in bundle_ids:
@@ -852,10 +833,6 @@ def run_community_media_sync():
             ):
                 bundle_added_total += 1
         record_rejected_archive_id(f"bundle_checked:{b_id}", b_id, 0, existing_archive_ids)
-
-    # Zapiši obrađene korisničke kolekcije da se ne ponavljaju
-    for col_id, col_title in user_collections:
-        record_rejected_archive_id(f"cm_col_checked:{col_id}", col_title, 0, existing_archive_ids)
 
     flush_rejected_buffer(force=True)
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
