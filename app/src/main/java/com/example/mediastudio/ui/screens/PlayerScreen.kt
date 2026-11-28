@@ -1868,7 +1868,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    // 1. Prvo ucitaj sve verzije i fallback_url iz Supabase kataloga (ukljucujuci MP4 rezervu za epizode i filmove)
+    // 1. Učitaj sve verzije i fallback_url iz Supabase kataloga (uključujući MP4 rezervu za epizode i filmove)
     if (sbItem != null) {
         if (sbItem.mediaType == "series") {
             val matchedEp = sbItem.episodes.firstOrNull { ep ->
@@ -1924,8 +1924,9 @@ private suspend fun loadAllMovieVersions(
     )
     val translatedEn = translateTitleToEnglish(cleanLocalized)
     val targetMovieWords = normalizeTitleWordsForMatch(translatedEn.ifBlank { cleanLocalized })
-    val isAuthorOrMultiCollection = Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b")
+    val isAuthorOrMultiCollection = Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology|trilogy|quadrilogy|pack|boxset|box\\s*set)\\b")
         .containsMatchIn(cleanArchiveId)
+    var detectedMultiMovieBundle = isAuthorOrMultiCollection
 
     if (cleanArchiveId.isNotBlank() && !cleanArchiveId.startsWith("http") && !cleanArchiveId.startsWith("tmdb-tv-")) {
         try {
@@ -1933,23 +1934,33 @@ private suspend fun loadAllMovieVersions(
             val md = metaJson.optJSONObject("metadata")
             val itemMetaTitle = md?.opt("title")?.toString().orEmpty()
             val itemIsCollection = isAuthorOrMultiCollection ||
-                Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b").containsMatchIn(itemMetaTitle)
+                Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology|trilogy|quadrilogy|pack|boxset|box\\s*set)\\b").containsMatchIn(itemMetaTitle)
             val itemLangBlob = "$cleanArchiveId $itemMetaTitle ${md?.opt("language")?.toString().orEmpty()}"
 
             val files = metaJson.optJSONArray("files")
             if (files != null) {
                 var maxItemRuntimeSecs = detectedPrimaryRuntimeSecs
+                val distinctFeatureStems = mutableSetOf<String>()
                 for (i in 0 until files.length()) {
                     val f = files.optJSONObject(i) ?: continue
                     val name = f.optString("name")
                     val lower = name.lowercase(Locale.ROOT)
                     if (!lower.endsWith(".mp4") && !lower.endsWith(".mkv") && !lower.endsWith(".avi")) continue
                     if (UNWANTED_CLIP_REGEX.containsMatchIn(lower)) continue
+                    val sizeB = f.optString("size").toLongOrNull() ?: 0L
+                    if (sizeB >= 250_000_000L) {
+                        val stem = lower.substringAfterLast("/").substringBeforeLast(".")
+                            .replace(Regex("(?i)\\.(ia|1080p|720p|480p|x264|x265|bluray|webrip|dvdrip).*$"), "")
+                            .trim()
+                        if (stem.isNotEmpty()) distinctFeatureStems.add(stem)
+                    }
                     val lSecs = f.optString("length").toDoubleOrNull()?.toInt() ?: 0
                     if (lSecs > maxItemRuntimeSecs) {
                         maxItemRuntimeSecs = lSecs
                     }
                 }
+                detectedMultiMovieBundle = itemIsCollection || (!episodeCtx.isSeries && distinctFeatureStems.size >= 4)
+
                 if (maxItemRuntimeSecs > detectedPrimaryRuntimeSecs) {
                     detectedPrimaryRuntimeSecs = maxItemRuntimeSecs
                 }
@@ -1986,7 +1997,7 @@ private suspend fun loadAllMovieVersions(
                         } else if (!isCurrentFile) {
                             continue
                         }
-                    } else if (itemIsCollection) {
+                    } else if (detectedMultiMovieBundle) {
                         val fileCleanTitle = cleanMovieTitleForSubtitleSearch(name.substringAfterLast("/").substringBeforeLast("."))
                         val matchesByTitle = titlesMatchStrictly(targetMovieWords, fileCleanTitle)
                         if (!matchesByTitle && !isCurrentFile) continue
@@ -2021,7 +2032,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    if (!isAuthorOrMultiCollection && !episodeCtx.isSeries && !cleanArchiveId.startsWith("tmdb-tv-")) {
+    if (!detectedMultiMovieBundle && collected.isEmpty() && !episodeCtx.isSeries && !cleanArchiveId.startsWith("tmdb-tv-")) {
         try {
             for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
                 if (UNWANTED_CLIP_REGEX.containsMatchIn("${q.label} ${q.url}")) continue
