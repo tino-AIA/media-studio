@@ -727,10 +727,14 @@ def aggregate_series_from_archive(
             if total_expected_rt > 0 and (dur < int(total_expected_rt * 0.65) or dur > int(total_expected_rt * 1.80)):
                 continue
 
-        is_mp4 = cand["filename"].lower().endswith(".mp4")
+        # MP4 uvijek ima apsolutnu prednost nad MKV-om jer preglednici ne dekodiraju AC3/EAC3/DTS zvuk u MKV-u
+        fn_lower = cand["filename"].lower()
+        is_mp4 = fn_lower.endswith((".mp4", ".m4v"))
+        is_mkv = fn_lower.endswith(".mkv")
+        browser_audio_bonus = 25000.0 if is_mp4 else (-15000.0 if is_mkv else 0.0)
         aspect_bonus = cand.get("aspect_tier", 1) * 3000.0
-        orig_bonus = 2000.0 if (not cand["is_derivative"] and is_mp4) else (1500.0 if not cand["is_derivative"] else 500.0)
-        quality_score = cand["size_mb"] + aspect_bonus + orig_bonus
+        orig_bonus = 2000.0 if (not cand["is_derivative"] and is_mp4) else (500.0 if is_mp4 else 0.0)
+        quality_score = min(cand["size_mb"], 2500.0) + browser_audio_bonus + aspect_bonus + orig_bonus
         per_ep_dur = int(round(dur / float(len(valid_keys)))) if dur > 0 else 0
 
         for key in valid_keys:
@@ -786,6 +790,14 @@ def series_has_foreign_dub_episodes(row):
     return False
 
 
+def series_has_mkv_episodes(row):
+    urls_to_check = [row.get("stream_url") or ""]
+    for ep in (row.get("episodes") or [])[:15]:
+        if isinstance(ep, dict) and ep.get("url"):
+            urls_to_check.append(ep["url"])
+    return any(str(u).lower().split("?")[0].endswith(".mkv") for u in urls_to_check if u)
+
+
 def format_series_display_title(hr_name, orig_name, year):
     clean_base = re.sub(r"\s*\(\s*(19\d{2}|20\d{2})\s*\)\s*$", "", str(hr_name or orig_name)).strip()
     if year > 0 and has_multiple_tmdb_tv_versions(orig_name):
@@ -834,8 +846,10 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
         r for r in existing_series_rows
         if (r.get("tmdb_id") or 0) > 0 and not str(r.get("archive_id") or "").startswith("tv_queue")
     ]
-    candidates = random.sample(all_candidates, k=min(MAX_REFRESH_SERIES_PER_RUN, len(all_candidates)))
-    print(f"2/4 Provjera jezika, sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
+    mkv_rows = [r for r in all_candidates if series_has_mkv_episodes(r)]
+    other_rows = [r for r in all_candidates if not series_has_mkv_episodes(r)]
+    candidates = mkv_rows[:60] + random.sample(other_rows, k=min(max(0, MAX_REFRESH_SERIES_PER_RUN - len(mkv_rows[:60])), len(other_rows)))
+    print(f"2/4 Provjera jezika, zvuka (MP4), sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
     updated_count = [0]
 
     def check_and_replenish(row):
@@ -846,6 +860,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
             return None
 
         has_dub = series_has_foreign_dub_episodes(row)
+        has_mkv = series_has_mkv_episodes(row)
         raw_eps = row.get("episodes") or []
         existing_map = {}
         season_counts = {}
@@ -887,7 +902,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
                 missing_seasons.append(s_no)
 
         merged_map = dict(existing_map)
-        if has_dub or missing_seasons:
+        if has_dub or has_mkv or missing_seasons:
             fresh_episodes = aggregate_series_from_archive(
                 tmdb_id,
                 orig_name,
@@ -898,7 +913,10 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
             )
             for ep in fresh_episodes:
                 key = (int(ep["season"]), int(ep["episode"]))
-                if key not in merged_map and verify_stream_url_playable(ep["url"]):
+                old_ep = merged_map.get(key)
+                old_is_mkv = bool(old_ep and str(old_ep.get("url") or "").lower().split("?")[0].endswith(".mkv"))
+                new_is_mp4 = str(ep.get("url") or "").lower().split("?")[0].endswith((".mp4", ".m4v"))
+                if (key not in merged_map or (old_is_mkv and new_is_mp4)) and verify_stream_url_playable(ep["url"]):
                     merged_map[key] = ep
 
         seasons_to_validate = sorted({s for (s, _) in merged_map.keys()} | {1})
@@ -924,11 +942,11 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
                 return f"  ✕ Skrivena nepotpuna serija (nedostaje cijela 1. sezona): {desired_title}"
             return None
 
-        old_keys = [(int(e.get("season") or 0), int(e.get("episode") or 0)) for e in raw_eps if isinstance(e, dict)]
-        new_keys = [(int(e["season"]), int(e["episode"])) for e in valid_consecutive_eps]
+        old_sig = [(int(e.get("season") or 0), int(e.get("episode") or 0), str(e.get("url") or "")) for e in raw_eps if isinstance(e, dict)]
+        new_sig = [(int(e["season"]), int(e["episode"]), str(e.get("url") or "")) for e in valid_consecutive_eps]
         was_invalid = not row.get("is_valid", True)
 
-        if was_invalid or old_keys != new_keys or meta_patch:
+        if was_invalid or old_sig != new_sig or meta_patch:
             seasons_now = len({ep["season"] for ep in valid_consecutive_eps})
             patch_payload = dict(meta_patch)
             patch_payload["episodes"] = valid_consecutive_eps
@@ -1129,7 +1147,6 @@ def sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=None):
                 matches.append(item)
         return matches
 
-    # Preuzmi serije koje je filmska skripta izbacila iz filmova i poslala u red čekanja
     queued_cores, queued_row_ids = pop_queued_series_from_movies(existing_series_rows or [])
     if queued_cores:
         print(
