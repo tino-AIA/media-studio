@@ -52,6 +52,7 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.mediastudio.data.api.ArchiveMetadataModule
+import com.example.mediastudio.data.api.SupabaseCatalogItem
 import com.example.mediastudio.data.api.SupabaseRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -267,7 +268,7 @@ fun PlayerScreen(
             var pool = availableVersions
             if (pool.size <= 1) {
                 val cleanId = extractArchiveItemId(identifier, activeStreamUrl.ifBlank { directVideoUrl })
-                val sbItem = SupabaseRepository.getCatalogItem(identifier)
+                val sbItem = resolveSupabaseItemForPlayback(identifier, activeStreamUrl.ifBlank { directVideoUrl })
                 val epCtx = parseEpisodeContext(identifier, movieTitle, activeStreamUrl.ifBlank { directVideoUrl }, sbItem?.mediaType)
                 val discovered = loadAllMovieVersions(
                     cleanArchiveId = cleanId,
@@ -276,7 +277,8 @@ fun PlayerScreen(
                     movieYear = resolvedMovieYear,
                     expectedRuntimeMins = sbItem?.tmdbRuntime ?: 0,
                     episodeCtx = epCtx,
-                    searchAlternativeItems = !isConcertTitleOrId(identifier, movieTitle)
+                    searchAlternativeItems = !isConcertTitleOrId(identifier, movieTitle),
+                    sbItem = sbItem
                 )
                 if (discovered.isNotEmpty()) {
                     pool = discovered
@@ -446,7 +448,7 @@ fun PlayerScreen(
         val safeCacheSlug = subtitleDbKey.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(90)
         val localCacheFile = File(context.cacheDir, "sub_hr_v5_$safeCacheSlug.json")
 
-        val sbMeta = SupabaseRepository.getCatalogItem(identifier)
+        val sbMeta = resolveSupabaseItemForPlayback(identifier, directVideoUrl)
         resolvedMediaType = sbMeta?.mediaType
         val titleEmbeddedYear = Regex("\\(\\s*(19\\d{2}|20\\d{2})\\s*\\)").find(movieTitle)?.groupValues?.get(1).orEmpty()
         val effectiveYear = movieYear.ifBlank {
@@ -485,10 +487,11 @@ fun PlayerScreen(
         startStreamDirect(initialUrl, 0L)
 
         launch {
-            delay(1800L)
+            delay(1200L)
             val concertMode = isConcertTitleOrId(identifier, movieTitle)
-            val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, sbMeta?.mediaType)
-            val expectedRuntimeMins = sbMeta?.tmdbRuntime?.takeIf { it > 0 } ?: 0
+            val resolvedSbItem = resolveSupabaseItemForPlayback(identifier, activeStreamUrl.ifBlank { directVideoUrl })
+            val episodeCtx = parseEpisodeContext(identifier, movieTitle, directVideoUrl, resolvedSbItem?.mediaType)
+            val expectedRuntimeMins = resolvedSbItem?.tmdbRuntime?.takeIf { it > 0 } ?: 0
 
             val discoveredVersions = loadAllMovieVersions(
                 cleanArchiveId = cleanArchiveId,
@@ -497,7 +500,8 @@ fun PlayerScreen(
                 movieYear = effectiveYear,
                 expectedRuntimeMins = expectedRuntimeMins,
                 episodeCtx = episodeCtx,
-                searchAlternativeItems = !concertMode
+                searchAlternativeItems = !concertMode,
+                sbItem = resolvedSbItem
             )
 
             if (discoveredVersions.isNotEmpty()) {
@@ -1200,7 +1204,7 @@ fun PlayerScreen(
                                     isLoadingSubtitles = true
                                     coroutineScope.launch {
                                         val cleanId = extractArchiveItemId(identifier, directVideoUrl)
-                                        val sbItem = SupabaseRepository.getCatalogItem(identifier)
+                                        val sbItem = resolveSupabaseItemForPlayback(identifier, directVideoUrl)
                                         val archiveOnly = isConcertTitleOrId(identifier, movieTitle)
                                         subtitleList = searchAllSubtitles(
                                             rawIdentifier = identifier,
@@ -1552,6 +1556,26 @@ fun PlayerScreen(
     }
 }
 
+private suspend fun resolveSupabaseItemForPlayback(
+    identifier: String,
+    streamUrl: String
+): SupabaseCatalogItem? {
+    val byId = SupabaseRepository.getCatalogItem(identifier)
+    val byUrl = if (byId == null && streamUrl.isNotBlank()) {
+        SupabaseRepository.findCatalogItemByStreamUrl(streamUrl)
+    } else {
+        null
+    }
+    val item = byId ?: byUrl ?: return null
+    if (item.mediaType == "series" && item.episodes.isEmpty()) {
+        val loadedEps = SupabaseRepository.loadSeriesEpisodes(item.archiveId)
+        if (loadedEps.isNotEmpty()) {
+            return item.copy(episodes = loadedEps)
+        }
+    }
+    return item
+}
+
 private fun scoreVersionSmoothness(labelOrName: String, height: Int, sizeBytes: Long, isDeriv: Boolean): Long {
     val sizeMb = sizeBytes / (1024L * 1024L)
     var score = 0L
@@ -1826,7 +1850,8 @@ private suspend fun loadAllMovieVersions(
     movieYear: String,
     expectedRuntimeMins: Int,
     episodeCtx: ParsedEpisodeContext,
-    searchAlternativeItems: Boolean
+    searchAlternativeItems: Boolean,
+    sbItem: SupabaseCatalogItem? = null
 ): List<PlayerVersionOption> = withContext(Dispatchers.IO) {
     val collected = mutableListOf<PlayerVersionOption>()
     val seenUrls = mutableSetOf<String>()
@@ -1843,6 +1868,57 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
+    // 1. Prvo ucitaj sve verzije i fallback_url iz Supabase kataloga (ukljucujuci MP4 rezervu za epizode i filmove)
+    if (sbItem != null) {
+        if (sbItem.mediaType == "series") {
+            val matchedEp = sbItem.episodes.firstOrNull { ep ->
+                urlsMatchArchiveFile(ep.url, currentUrl) ||
+                    (ep.fallbackUrl.isNotBlank() && urlsMatchArchiveFile(ep.fallbackUrl, currentUrl)) ||
+                    (episodeCtx.season > 0 && episodeCtx.episode > 0 && ep.season == episodeCtx.season && ep.episode == episodeCtx.episode)
+            }
+            if (matchedEp != null) {
+                if (matchedEp.url.isNotBlank()) {
+                    val isMp4 = matchedEp.url.substringBefore("?").endsWith(".mp4", ignoreCase = true)
+                    addUniqueVersion(
+                        PlayerVersionOption(
+                            label = buildVersionDisplayLabel(matchedEp.url, 0, 0, 0L, 0, if (isMp4) "MP4" else "1080p MKV"),
+                            url = matchedEp.url,
+                            languageRank = 0,
+                            smoothnessScore = if (isMp4) 550L else 600L
+                        )
+                    )
+                }
+                if (matchedEp.fallbackUrl.isNotBlank()) {
+                    addUniqueVersion(
+                        PlayerVersionOption(
+                            label = buildVersionDisplayLabel(matchedEp.fallbackUrl, 0, 0, 0L, 0, "MP4 Kompatibilna"),
+                            url = matchedEp.fallbackUrl,
+                            languageRank = 0,
+                            smoothnessScore = 520L
+                        )
+                    )
+                }
+            }
+        } else if (sbItem.tmdbId > 0) {
+            val sameTmdbRows = SupabaseRepository.getCatalogItems().filter {
+                it.isValid && it.mediaType == sbItem.mediaType && it.tmdbId == sbItem.tmdbId && it.streamUrl.isNotBlank()
+            }
+            for (row in sameTmdbRows) {
+                val isMp4Row = row.archiveId.endsWith(",mp4", ignoreCase = true) ||
+                    row.streamUrl.substringBefore("?").endsWith(".mp4", ignoreCase = true)
+                val rank = classifyVersionLanguageRank("${row.archiveId} ${row.streamUrl}")
+                addUniqueVersion(
+                    PlayerVersionOption(
+                        label = buildVersionDisplayLabel(row.streamUrl, 0, 0, 0L, rank, if (isMp4Row) "MP4" else "MKV"),
+                        url = row.streamUrl,
+                        languageRank = rank,
+                        smoothnessScore = if (isMp4Row) 540L else 580L
+                    )
+                )
+            }
+        }
+    }
+
     val cleanLocalized = cleanMovieTitleForSubtitleSearch(
         if (episodeCtx.isSeries) episodeCtx.seriesTitle else movieTitle
     )
@@ -1851,7 +1927,7 @@ private suspend fun loadAllMovieVersions(
     val isAuthorOrMultiCollection = Regex("(?i)\\b(filmography|complete\\s+films|collection|anthology)\\b")
         .containsMatchIn(cleanArchiveId)
 
-    if (cleanArchiveId.isNotBlank() && !cleanArchiveId.startsWith("http")) {
+    if (cleanArchiveId.isNotBlank() && !cleanArchiveId.startsWith("http") && !cleanArchiveId.startsWith("tmdb-tv-")) {
         try {
             val metaJson = JSONObject(URL("https://archive.org/metadata/$cleanArchiveId").readText())
             val md = metaJson.optJSONObject("metadata")
@@ -1945,7 +2021,7 @@ private suspend fun loadAllMovieVersions(
         }
     }
 
-    if (!isAuthorOrMultiCollection && !episodeCtx.isSeries) {
+    if (!isAuthorOrMultiCollection && !episodeCtx.isSeries && !cleanArchiveId.startsWith("tmdb-tv-")) {
         try {
             for (q in ArchiveMetadataModule.fetchAvailableQualities(cleanArchiveId)) {
                 if (UNWANTED_CLIP_REGEX.containsMatchIn("${q.label} ${q.url}")) continue
@@ -2890,7 +2966,7 @@ private suspend fun searchAllSubtitles(
         }
     }
 
-    if (archiveItemId.isNotBlank() && !archiveItemId.startsWith("http")) {
+    if (archiveItemId.isNotBlank() && !archiveItemId.startsWith("http") && !archiveItemId.startsWith("tmdb-tv-")) {
         try {
             val metaJson = JSONObject(URL("https://archive.org/metadata/$archiveItemId").readText())
             val md = metaJson.optJSONObject("metadata")
