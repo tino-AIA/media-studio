@@ -5,13 +5,13 @@ import re
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from urllib.parse import unquote
 
 import requests
 import requests.api
 
-socket.setdefaulttimeout(8)
+socket.setdefaulttimeout(6)
 
 _ORIG_SESSION_REQUEST = requests.Session.request
 _ORIG_API_REQUEST = requests.api.request
@@ -19,15 +19,15 @@ _ORIG_API_REQUEST = requests.api.request
 
 def _enforced_timeout_request(self, method, url, *args, **kwargs):
     t = kwargs.get("timeout")
-    if t is None or (isinstance(t, (int, float)) and t > 8):
-        kwargs["timeout"] = (4, 6)
+    if t is None or (isinstance(t, (int, float)) and t > 6):
+        kwargs["timeout"] = (3, 4)
     return _ORIG_SESSION_REQUEST(self, method, url, *args, **kwargs)
 
 
 def _enforced_api_request(method, url, **kwargs):
     t = kwargs.get("timeout")
-    if t is None or (isinstance(t, (int, float)) and t > 8):
-        kwargs["timeout"] = (4, 6)
+    if t is None or (isinstance(t, (int, float)) and t > 6):
+        kwargs["timeout"] = (3, 4)
     return _ORIG_API_REQUEST(method, url, **kwargs)
 
 
@@ -67,9 +67,9 @@ from sync_common import (
     verify_stream_url_playable,
 )
 
-# Recikliranje HTTP/TLS konekcija (Keep-Alive)
+# Recikliranje HTTP/TLS konekcija (Keep-Alive) bez ponavljanja sporih zahtjeva
 _HTTP_SESSION = requests.Session()
-_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=1)
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
 _HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
 _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 
@@ -102,7 +102,7 @@ def fast_verify_stream_playable(url):
     if "archive.org/download/" in low and (low.endswith(".mp4") or low.endswith(".m4v")):
         return True
     try:
-        resp = _HTTP_SESSION.head(url, allow_redirects=True, timeout=(3, 5))
+        resp = _HTTP_SESSION.head(url, allow_redirects=True, timeout=(3, 4))
         if resp.status_code in (200, 206):
             ct = (resp.headers.get("Content-Type") or "").lower()
             if "text/html" in ct:
@@ -603,7 +603,6 @@ def can_accept_movie_candidate(
     count = tmdb_version_counts.get(mid, 0)
     if count == 0:
         return True
-    # Ako film u bazi ima samo MKV verzije, dopusti MP4 kopiju kao audio-kompatibilnu rezervu (do 3. mjesta)
     if is_mp4_fallback and tmdb_has_mp4 is not None and not tmdb_has_mp4.get(mid, False):
         return count < (MAX_VERSIONS_PER_MOVIE + 1)
 
@@ -703,7 +702,7 @@ def fetch_child_collections(parent_col_id, rows=60):
             "page": 1,
             "output": "json",
         },
-        timeout=8,
+        timeout=6,
     )
     children = []
     for doc in (data or {}).get("response", {}).get("docs", []):
@@ -865,7 +864,7 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
-def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batch_size=15, batch_timeout=25):
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=6, batch_size=15, batch_timeout=25):
     item_list = list(items)
     for start_idx in range(0, len(item_list), batch_size):
         if time.monotonic() > deadline_ts:
@@ -873,8 +872,17 @@ def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batc
         chunk = item_list[start_idx:start_idx + batch_size]
         pool = ThreadPoolExecutor(max_workers=max_workers)
         futures = [pool.submit(worker_fn, x) for x in chunk]
-        wait(futures, timeout=min(batch_timeout, max(1.0, deadline_ts - time.monotonic())))
-        pool.shutdown(wait=False, cancel_futures=True)
+        try:
+            for fut in as_completed(futures, timeout=min(batch_timeout, max(1.5, deadline_ts - time.monotonic()))):
+                try:
+                    fut.result(timeout=1)
+                except Exception:
+                    pass
+        except Exception:
+            for f in futures:
+                f.cancel()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
     return time.monotonic() > deadline_ts
 
 
@@ -1311,7 +1319,7 @@ def audit_and_repair_existing_movies(
 
         arch_md = {}
         if not is_author_promoted and base_ident:
-            md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=6)
+            md_res = safe_get(f"https://archive.org/metadata/{base_ident}/metadata", timeout=5)
             arch_md = (md_res or {}).get("result") or {}
 
         details = get_tmdb_movie_details(tmdb_id) if tmdb_id > 0 else None
@@ -1380,7 +1388,7 @@ def audit_and_repair_existing_movies(
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=5, batch_size=25, batch_timeout=25)
+    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=6, batch_size=25, batch_timeout=25)
 
     for row in sample_rows:
         if not row.get("is_valid", True):
@@ -1449,7 +1457,7 @@ def audit_and_repair_existing_movies(
                 with state_lock:
                     hd_upgraded_count[0] += 1
 
-        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=4, batch_size=10, batch_timeout=25)
+        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=5, batch_size=10, batch_timeout=25)
 
     print(
         f"  Provjera završena: {rematched_count[0]} ispravljeno na pravi film, "
@@ -1549,7 +1557,6 @@ def save_verified_movie_row(
     ver_tag = " [MP4 verzija]" if is_mp4_fallback else (" [zamjena za VHS]" if retired_vhs > 0 else (" [2. verzija]" if current_count >= 1 else ""))
     print(f"  + Film{ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
 
-    # Ako je glavna verzija MKV, automatski spremi i MP4 kopiju (ako postoji) kao rezervnu verziju
     if not is_mp4_stream and mp4_alt_file and mp4_alt_file.get("stream_url"):
         mp4_arch_id = f"{arch_id},mp4"
         save_verified_movie_row(
@@ -1616,7 +1623,7 @@ def mine_direct_movies_from_branches(
                 "page": page,
                 "output": "json"
             },
-            timeout=8,
+            timeout=6,
         )
         return (data or {}).get("response", {}).get("docs", [])
 
@@ -1642,7 +1649,7 @@ def mine_direct_movies_from_branches(
 
     random.shuffle(tasks)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         for docs in pool.map(fetch_query_docs, tasks):
             for doc in docs:
                 ident = doc.get("identifier")
@@ -1864,7 +1871,7 @@ def mine_direct_movies_from_branches(
             with state_lock:
                 total_added[0] += 1
 
-    shared_pool = ThreadPoolExecutor(max_workers=6)
+    shared_pool = ThreadPoolExecutor(max_workers=10)
     try:
         while cursor < len(remaining_pool) and time.monotonic() < deadline_ts:
             batch_num += 1
@@ -1877,14 +1884,17 @@ def mine_direct_movies_from_branches(
 
             before_cnt = total_added[0]
             futures = [shared_pool.submit(process_archive_doc, entry) for entry in batch_slice]
-            done, not_done = wait(futures, timeout=min(30, max(1.0, deadline_ts - time.monotonic())))
-
-            # Ako je ijedna dretva zapela duže od 30s, odbaci stari pool bez čekanja i otvori svježi
-            if not_done:
-                for f in not_done:
+            try:
+                for fut in as_completed(futures, timeout=min(35, max(2.0, deadline_ts - time.monotonic()))):
+                    try:
+                        fut.result(timeout=1)
+                    except Exception:
+                        pass
+            except Exception:
+                for f in futures:
                     f.cancel()
                 shared_pool.shutdown(wait=False, cancel_futures=True)
-                shared_pool = ThreadPoolExecutor(max_workers=6)
+                shared_pool = ThreadPoolExecutor(max_workers=10)
 
             flush_rejected_buffer(force=True)
             added_in_batch = total_added[0] - before_cnt
@@ -1943,7 +1953,7 @@ def sync_ex_yu_and_cult_movies(
                 "page": random.randint(1, 3),
                 "output": "json"
             },
-            timeout=8,
+            timeout=6,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = doc.get("identifier")
@@ -2097,7 +2107,7 @@ def sync_ex_yu_and_cult_movies(
         ex_yu_list = list(ex_yu_docs.values())[:60]
         print(f"  Provjera {len(ex_yu_list)} Ex-Yu Archive kandidata...", flush=True)
         run_batched_with_deadline(
-            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
+            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=6, batch_size=15, batch_timeout=25
         )
         flush_rejected_buffer(force=True)
 
@@ -2115,7 +2125,7 @@ def sync_ex_yu_and_cult_movies(
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         for res_list in pool.map(fetch_seed, sampled_seeds):
             for m in res_list:
                 mid = int(m["id"])
@@ -2184,7 +2194,7 @@ def sync_ex_yu_and_cult_movies(
                     added_tmdb[0] += 1
 
     run_batched_with_deadline(
-        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
+        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=6, batch_size=15, batch_timeout=25
     )
 
     print(f"  Dodano {added_ex_yu[0]} Ex-Yu i {added_tmdb[0]} kultnih/žanrovskih filmova.", flush=True)
@@ -2219,7 +2229,7 @@ def discover_layered_multi_file_bundles(sub_layers, existing_archive_ids, deadli
                 "page": random.randint(1, 3),
                 "output": "json",
             },
-            timeout=8,
+            timeout=6,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = (doc.get("identifier") or "").strip()
@@ -2440,7 +2450,7 @@ def sync_multi_file_movie_bundles(
                     added_total[0] += 1
 
         timed_out = run_batched_with_deadline(
-            sorted_entries, process_bundle_entry, deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
+            sorted_entries, process_bundle_entry, deadline_ts, max_workers=6, batch_size=15, batch_timeout=25
         )
         print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
         if not is_pinned and not timed_out:
