@@ -284,6 +284,17 @@ fun PlayerScreen(
                 }
             }
 
+            val isAudioFallback = reasonLabel.contains("audio", ignoreCase = true)
+            val audioSafeCandidates = if (isAudioFallback) {
+                pool.filter { opt ->
+                    !urlsMatchArchiveFile(opt.url, activeStreamUrl) &&
+                        opt.url !in triedAlternativeUrls &&
+                        opt.url.substringBefore("?").endsWith(".mp4", ignoreCase = true)
+                }
+            } else {
+                emptyList()
+            }
+
             val lighterCandidates = if (reasonLabel.contains("Zastoj", ignoreCase = true)) {
                 pool.filter { opt ->
                     !urlsMatchArchiveFile(opt.url, activeStreamUrl) &&
@@ -294,7 +305,8 @@ fun PlayerScreen(
                 emptyList()
             }
 
-            val candidate = lighterCandidates.firstOrNull()?.url
+            val candidate = audioSafeCandidates.firstOrNull()?.url
+                ?: lighterCandidates.firstOrNull()?.url
                 ?: pool.firstOrNull { opt ->
                     !urlsMatchArchiveFile(opt.url, activeStreamUrl) && opt.url !in triedAlternativeUrls
                 }?.url
@@ -313,7 +325,11 @@ fun PlayerScreen(
                 stallCountForCurrentStream = 0
                 streamAttemptToken++
                 startStreamDirect(candidate, resumePos)
-                quickHudMessage = "⚡ $reasonLabel — prebačeno na lakšu/bržu kopiju"
+                quickHudMessage = if (isAudioFallback) {
+                    "🔊 $reasonLabel — prebačeno na MP4 verziju"
+                } else {
+                    "⚡ $reasonLabel — prebačeno na lakšu/bržu kopiju"
+                }
                 quickHudTick++
             } else {
                 exhaustedAllFallbacks = true
@@ -817,6 +833,17 @@ fun PlayerScreen(
                 val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                 val totalAudioTracks = audioGroups.sumOf { it.length }
                 hasMultipleAudioTracks = totalAudioTracks > 1
+
+                val hasPlayableAudioTrack = audioGroups.any { group ->
+                    (0 until group.length).any { idx ->
+                        group.isTrackSupported(idx) && group.isTrackSelected(idx)
+                    }
+                }
+
+                if (totalAudioTracks > 0 && !hasPlayableAudioTrack && !exhaustedAllFallbacks) {
+                    switchToFallbackStream("Nepodržan audio kodek (MKV)")
+                    return
+                }
 
                 if (totalAudioTracks > 1 && !hasNotifiedMultiAudio) {
                     hasNotifiedMultiAudio = true
@@ -1835,7 +1862,6 @@ private suspend fun loadAllMovieVersions(
 
             val files = metaJson.optJSONArray("files")
             if (files != null) {
-                // Prvo odredi stvarno trajanje glavnog filma unutar ovog Archive.org itema (radi filtriranja bonus diskova/dodataka)
                 var maxItemRuntimeSecs = detectedPrimaryRuntimeSecs
                 for (i in 0 until files.length()) {
                     val f = files.optJSONObject(i) ?: continue
