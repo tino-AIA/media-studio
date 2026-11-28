@@ -1,11 +1,36 @@
 import os
 import random
 import re
+import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+import requests.api
+
+socket.setdefaulttimeout(8)
+
+_ORIG_SESSION_REQUEST = requests.Session.request
+_ORIG_API_REQUEST = requests.api.request
+
+
+def _enforced_timeout_request(self, method, url, *args, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 8):
+        kwargs["timeout"] = (4, 6)
+    return _ORIG_SESSION_REQUEST(self, method, url, *args, **kwargs)
+
+
+def _enforced_api_request(method, url, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 8):
+        kwargs["timeout"] = (4, 6)
+    return _ORIG_API_REQUEST(method, url, **kwargs)
+
+
+requests.Session.request = _enforced_timeout_request
+requests.api.request = _enforced_api_request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -19,6 +44,7 @@ from sync_common import (
     get_archive_item_details,
     is_foreign_dub_without_english,
     normalize_for_exact_title_compare,
+    pick_best_mp4_alternative,
     pick_best_video_file,
     safe_get,
     state_lock,
@@ -29,7 +55,7 @@ from sync_common import (
 )
 
 _HTTP_SESSION = requests.Session()
-_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=1)
 _HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
 _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 if hasattr(sc, "session"):
@@ -291,7 +317,7 @@ def retire_vhs_concert_rows(norm_c, keep_arch_id, rows_by_norm):
             if not row.get("is_valid", True):
                 continue
             r_ident = row.get("archive_id") or ""
-            if not r_ident or r_ident == keep_arch_id:
+            if not r_ident or r_ident == keep_arch_id or r_ident.startswith(f"{keep_arch_id},"):
                 continue
             r_tier = estimate_concert_quality_tier(r_ident, row.get("stream_url") or "", row.get("title") or "")
             if r_tier == 0:
@@ -303,6 +329,66 @@ def retire_vhs_concert_rows(norm_c, keep_arch_id, rows_by_norm):
         print(f"  🗑 Uklonjen stari VHS koncert nakon pronalaska bolje verzije: {r_title} ({r_ident})", flush=True)
 
     return len(to_retire)
+
+
+def save_concert_with_optional_mp4_fallback(
+    ident,
+    title,
+    genre_label,
+    rel_year,
+    pop_score,
+    hr_desc,
+    best_file,
+    mp4_alt_file,
+    existing_archive_ids
+):
+    rows_to_upsert = [
+        {
+            "archive_id": ident,
+            "title": title,
+            "media_type": "concert",
+            "genres": [genre_label],
+            "release_year": rel_year,
+            "popularity_score": pop_score,
+            "description_hr": hr_desc,
+            "poster_url": f"https://archive.org/services/img/{ident}",
+            "stream_url": best_file["stream_url"],
+            "is_featured": False,
+            "is_valid": True,
+            "tmdb_runtime": 0,
+            "archive_runtime": best_file.get("duration_mins", 0),
+        }
+    ]
+
+    is_mkv = best_file.get("filename", "").lower().endswith(".mkv")
+    mp4_arch_id = f"{ident},mp4"
+    if is_mkv and mp4_alt_file and mp4_alt_file.get("stream_url"):
+        can_add_mp4 = False
+        with state_lock:
+            if mp4_arch_id not in existing_archive_ids:
+                existing_archive_ids.add(mp4_arch_id)
+                can_add_mp4 = True
+        if can_add_mp4:
+            rows_to_upsert.append(
+                {
+                    "archive_id": mp4_arch_id,
+                    "title": title,
+                    "media_type": "concert",
+                    "genres": [genre_label],
+                    "release_year": rel_year,
+                    "popularity_score": pop_score - 150.0,
+                    "description_hr": hr_desc,
+                    "poster_url": f"https://archive.org/services/img/{ident}",
+                    "stream_url": mp4_alt_file["stream_url"],
+                    "is_featured": False,
+                    "is_valid": True,
+                    "tmdb_runtime": 0,
+                    "archive_runtime": mp4_alt_file.get("duration_mins") or best_file.get("duration_mins", 0),
+                }
+            )
+
+    supabase_upsert("catalog_items", rows_to_upsert, "archive_id")
+    return rows_to_upsert
 
 
 def find_better_concert_on_archive(title, year, exclude_ids, deadline_ts):
@@ -353,6 +439,7 @@ def find_better_concert_on_archive(title, year, exclude_ids, deadline_ts):
         if not videos:
             continue
         best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
         if is_foreign_dub_without_english(arch_md, ident, best["filename"], orig_lang="en"):
             continue
         dur = best["duration_mins"]
@@ -368,15 +455,15 @@ def find_better_concert_on_archive(title, year, exclude_ids, deadline_ts):
 
         if verify_stream_url_playable(best["stream_url"]):
             downloads = float(doc.get("downloads") or 0)
-            candidates.append((tier, best["size_mb"], downloads, ident, best, dur))
+            candidates.append((tier, best["size_mb"], downloads, ident, best, dur, mp4_alt))
             if tier == 2:
                 break
 
     if not candidates:
         return None
     candidates.sort(key=lambda x: (-x[0], -x[1], -x[2]))
-    _, _, _, best_ident, best_file, best_dur = candidates[0]
-    return best_ident, best_file, best_dur
+    _, _, _, best_ident, best_file, best_dur, best_mp4_alt = candidates[0]
+    return best_ident, best_file, best_dur, best_mp4_alt
 
 
 def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, best_tier_by_norm, rows_by_norm, deadline_ts):
@@ -426,7 +513,7 @@ def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, 
             if not match:
                 return
 
-            new_ident, new_file, new_dur = match
+            new_ident, new_file, _, mp4_alt = match
             new_tier = max(
                 new_file.get("aspect_tier", 1),
                 estimate_concert_quality_tier(new_ident, new_file["stream_url"], title)
@@ -437,24 +524,21 @@ def audit_and_upgrade_existing_concerts(all_concert_rows, existing_archive_ids, 
                 existing_archive_ids.add(new_ident)
                 best_tier_by_norm[norm_c] = new_tier
 
-            new_row = {
-                "archive_id": new_ident,
-                "title": title,
-                "media_type": "concert",
-                "genres": row.get("genres") or ["Rock i Metal"],
-                "release_year": rel_year,
-                "popularity_score": float(row.get("popularity_score") or 500.0) + (600.0 if new_tier == 2 else 300.0),
-                "description_hr": row.get("description_hr") or "",
-                "poster_url": f"https://archive.org/services/img/{new_ident}",
-                "stream_url": new_file["stream_url"],
-                "is_featured": bool(row.get("is_featured", False)),
-                "is_valid": True,
-                "tmdb_runtime": 0,
-                "archive_runtime": new_dur
-            }
-            supabase_upsert("catalog_items", [new_row], "archive_id")
+            genre_label = (row.get("genres") or ["Rock i Metal"])[0]
+            pop_score = float(row.get("popularity_score") or 500.0) + (600.0 if new_tier == 2 else 300.0)
+            saved_rows = save_concert_with_optional_mp4_fallback(
+                new_ident,
+                title,
+                genre_label,
+                rel_year,
+                pop_score,
+                row.get("description_hr") or "",
+                new_file,
+                mp4_alt,
+                existing_archive_ids
+            )
             with state_lock:
-                rows_by_norm.setdefault(norm_c, []).append(new_row)
+                rows_by_norm.setdefault(norm_c, []).extend(saved_rows)
                 upgraded_count[0] += 1
 
             retire_vhs_concert_rows(norm_c, new_ident, rows_by_norm)
@@ -486,18 +570,17 @@ def run_concerts_sync():
     print("2/2 Pretraga novih cjelovitih koncerata iz hijerarhije stabla i korisničkih uploadova...", flush=True)
     candidate_docs = {}
 
-    # Koncertni čvorovi s hijerarhijske karte (archive_movies_layers_2.md)
     collection_queries = [
         ("mediatype:movies AND collection:live_music_video AND -subject:trailer AND -subject:interview AND -subject:news", 4, None),
         ("mediatype:movies AND collection:concerts AND -subject:trailer AND -subject:interview AND -subject:news", 5, None),
-        ("mediatype:movies AND collection:vhsconcerts_music AND -subject:trailer AND -subject:interview AND -subject:news", 6, None), # [1.6.13] 3,856
-        ("mediatype:movies AND collection:harry-styles-concert-videos AND -subject:trailer", 3, "Pop glazba"), # [1.2.32] 634
-        ("mediatype:movies AND collection:moonalicevideo AND -subject:trailer", 2, "Rock i Metal"),           # [1.2.36] 191
-        ("mediatype:movies AND collection:goldenrod-festival-archive AND -subject:trailer", 2, "Rock i Metal"), # [1.2.41] 169
-        ("mediatype:movies AND collection:quarantine-happy-hour-music AND -subject:trailer", 2, "Pop glazba"), # [1.2.39] 460
-        ("mediatype:movies AND collection:12minuteslive AND -subject:trailer", 2, "Rock i Metal"),            # [1.2.29] 113
-        ("mediatype:movies AND collection:access-to-bluegrass AND -subject:trailer", 2, "Klasika i Jazz"),    # [1.2.54] 288
-        ('mediatype:movies AND collection:artsandmusicvideos AND title:(concert OR live OR tour) AND -subject:trailer', 4, None), # [1.2] 35,984
+        ("mediatype:movies AND collection:vhsconcerts_music AND -subject:trailer AND -subject:interview AND -subject:news", 6, None),
+        ("mediatype:movies AND collection:harry-styles-concert-videos AND -subject:trailer", 3, "Pop glazba"),
+        ("mediatype:movies AND collection:moonalicevideo AND -subject:trailer", 2, "Rock i Metal"),
+        ("mediatype:movies AND collection:goldenrod-festival-archive AND -subject:trailer", 2, "Rock i Metal"),
+        ("mediatype:movies AND collection:quarantine-happy-hour-music AND -subject:trailer", 2, "Pop glazba"),
+        ("mediatype:movies AND collection:12minuteslive AND -subject:trailer", 2, "Rock i Metal"),
+        ("mediatype:movies AND collection:access-to-bluegrass AND -subject:trailer", 2, "Klasika i Jazz"),
+        ('mediatype:movies AND collection:artsandmusicvideos AND title:(concert OR live OR tour) AND -subject:trailer', 4, None),
         ('mediatype:movies AND collection:opensource_movies AND item_size:[350000000 TO 150000000000] AND title:(concert OR "live at" OR "live in" OR wembley OR "world tour") AND title:(1080p OR 720p OR bluray OR dvd) AND -subject:trailer', 3, None),
         ('mediatype:movies AND collection:additional_collections_video AND item_size:[350000000 TO 150000000000] AND title:(concert OR "live at" OR "live in" OR wembley OR "world tour") AND -subject:trailer', 3, None),
     ]
@@ -567,7 +650,7 @@ def run_concerts_sync():
         )
         return ((data or {}).get("response", {}).get("docs", []), hint_genre)
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         for docs, hint_genre in pool.map(search_artist_concerts, sampled_artists):
             for doc in docs:
                 ident = doc.get("identifier")
@@ -636,6 +719,7 @@ def run_concerts_sync():
         if not videos:
             return
         best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
         if is_foreign_dub_without_english(arch_md, ident, best["filename"], orig_lang="en"):
             return
 
@@ -665,26 +749,23 @@ def run_concerts_sync():
         genre_label = classify_concert_genre(clean_t, desc, subj, hint_genre)
         hr_desc = translate_concert_description(desc)
         pop_bonus = 600.0 if final_tier == 2 else (-200.0 if final_tier == 0 else 0.0)
-        row = {
-            "archive_id": ident,
-            "title": clean_t,
-            "media_type": "concert",
-            "genres": [genre_label],
-            "release_year": parsed_y,
-            "popularity_score": float(doc.get("downloads") or 0) + pop_bonus,
-            "description_hr": hr_desc,
-            "poster_url": f"https://archive.org/services/img/{ident}",
-            "stream_url": best["stream_url"],
-            "is_featured": False,
-            "is_valid": True,
-            "tmdb_runtime": 0,
-            "archive_runtime": dur
-        }
-        supabase_upsert("catalog_items", [row], "archive_id")
+        pop_score = float(doc.get("downloads") or 0) + pop_bonus
+
+        saved_rows = save_concert_with_optional_mp4_fallback(
+            ident,
+            clean_t,
+            genre_label,
+            parsed_y,
+            pop_score,
+            hr_desc,
+            best,
+            mp4_alt,
+            existing_archive_ids
+        )
 
         if had_only_vhs:
             with state_lock:
-                rows_by_norm.setdefault(norm_c, []).append(row)
+                rows_by_norm.setdefault(norm_c, []).extend(saved_rows)
             retire_vhs_concert_rows(norm_c, ident, rows_by_norm)
 
         with state_lock:
@@ -694,7 +775,7 @@ def run_concerts_sync():
             tag = " [zamjena za VHS]" if had_only_vhs else ""
             print(f"  + Koncert{tag} (#{count_now}): {clean_t} -> {genre_label}", flush=True)
 
-    with ThreadPoolExecutor(max_workers=14) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(process_concert_doc, prioritized_candidates))
 
     elapsed_mins = (time.monotonic() - start_ts) / 60.0
