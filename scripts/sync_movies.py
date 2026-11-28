@@ -2,12 +2,15 @@ import inspect
 import os
 import random
 import re
+import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from urllib.parse import unquote
 
 import requests
+
+socket.setdefaulttimeout(12)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -785,7 +788,7 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
-def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=6, batch_size=25, batch_timeout=60):
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=6, batch_size=25, batch_timeout=45):
     item_list = list(items)
     for start_idx in range(0, len(item_list), batch_size):
         if time.monotonic() > deadline_ts:
@@ -793,12 +796,15 @@ def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=6, batc
         chunk = item_list[start_idx:start_idx + batch_size]
         pool = ThreadPoolExecutor(max_workers=max_workers)
         futures = [pool.submit(worker_fn, x) for x in chunk]
+        batch_deadline = min(deadline_ts, time.monotonic() + batch_timeout)
         try:
             for fut in as_completed(futures, timeout=batch_timeout):
                 try:
-                    fut.result()
+                    fut.result(timeout=1)
                 except Exception:
                     pass
+                if time.monotonic() > batch_deadline:
+                    break
         except FuturesTimeoutError:
             pass
         finally:
@@ -1626,9 +1632,10 @@ def mine_direct_movies_from_branches(
         )
 
         batch_added = [0]
+        batch_deadline = min(deadline_ts, time.monotonic() + BATCH_HARD_TIMEOUT_SECONDS)
 
         def process_archive_doc(entry):
-            if time.monotonic() > deadline_ts:
+            if time.monotonic() > batch_deadline:
                 return
             doc, title_candidates, parsed_y = entry
             ident = doc.get("identifier") or ""
@@ -1644,7 +1651,6 @@ def mine_direct_movies_from_branches(
             cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
             special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
 
-            # Jedan ciljani TMDB upit po kandidatu (umjesto 4 uzastopna poziva)
             cand_q = title_candidates[0]
             tmdb_params = {
                 "api_key": TMDB_API_KEY,
@@ -1700,10 +1706,16 @@ def mine_direct_movies_from_branches(
                     inc_stat("already_in_db")
                     return
 
+            if time.monotonic() > batch_deadline:
+                return
+
             details = get_tmdb_movie_details(mid)
             if not details or not details["poster_path"]:
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 inc_stat("no_tmdb_match")
+                return
+
+            if time.monotonic() > batch_deadline:
                 return
 
             is_doc = 99 in (details.get("genre_ids") or [])
@@ -1782,9 +1794,12 @@ def mine_direct_movies_from_branches(
         try:
             for fut in as_completed(futures, timeout=BATCH_HARD_TIMEOUT_SECONDS):
                 try:
-                    fut.result()
+                    fut.result(timeout=1)
                 except Exception:
                     pass
+                if time.monotonic() > batch_deadline:
+                    timed_out_batch = True
+                    break
         except FuturesTimeoutError:
             timed_out_batch = True
         finally:
