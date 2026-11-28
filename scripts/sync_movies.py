@@ -2498,3 +2498,6 @@ def run_movies_sync():
 
 if __name__ == "__main__":
     run_movies_sync()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
