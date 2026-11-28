@@ -58,9 +58,9 @@ PHASE1_AUDIT_MAX_SECONDS = 3 * 60
 PHASE2_DIRECT_MOVIES_MAX_SECONDS = 18 * 60
 PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 6 * 60
 
-BATCH_SIZE_CANDIDATES = 25
-BATCH_HARD_TIMEOUT_SECONDS = 45
-MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 60
+BATCH_SIZE_CANDIDATES = 10
+BATCH_HARD_TIMEOUT_SECONDS = 30
+MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 45
 
 MAX_VERSIONS_PER_MOVIE = 2
 MAX_AUDIT_SAMPLE_PER_RUN = 300
@@ -70,7 +70,7 @@ MAX_VIDEOS_PER_BUNDLE = 75
 TMDB_SEED_SAMPLE_PER_RUN = 40
 
 _REJECTED_BATCH_BUFFER = []
-_REJECTED_BUFFER_SIZE = 150
+_REJECTED_BUFFER_SIZE = 100
 
 
 def fast_verify_stream_playable(url):
@@ -788,7 +788,7 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
-def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=6, batch_size=25, batch_timeout=45):
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batch_size=15, batch_timeout=30):
     item_list = list(items)
     for start_idx in range(0, len(item_list), batch_size):
         if time.monotonic() > deadline_ts:
@@ -1099,32 +1099,6 @@ def audit_and_repair_existing_movies(
     tmdb_best_tier,
     phase_deadline_ts
 ):
-    restored_count = 0
-    for r in all_movie_rows:
-        if r.get("is_valid", True):
-            continue
-        mid = int(r.get("tmdb_id") or 0)
-        s_url = r.get("stream_url") or ""
-        ident = r.get("archive_id") or ""
-        title = r.get("title") or ""
-        if mid > 0 and s_url.startswith("http"):
-            if any(ident.startswith(p) for p in BAD_BUNDLE_PREFIXES) or BAD_TITLE_MARKER_RE.search(title) or BAD_TITLE_MARKER_RE.search(s_url):
-                continue
-            if TV_NEWS_OR_SPORTS_ID_RE.search(ident) or STRICT_EPISODE_RE.search(s_url):
-                continue
-            if re.search(r"(?i)\b(?:complete[\s._-]*series|season[\s._-]*\d+|s\d{1,2}e\d{1,3})\b", f"{ident} {title}"):
-                continue
-            if is_explicit_junk_item(ident, title, s_url):
-                continue
-            supabase_patch_row("catalog_items", r["id"], {"is_valid": True})
-            r["is_valid"] = True
-            seen_tmdb_ids.add(mid)
-            tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
-            restored_count += 1
-
-    if restored_count > 0:
-        print(f"  ♻ Vraćeno {restored_count} pravih filmova u katalog koji su ranije bili pogrešno skriveni.", flush=True)
-
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
     sample_rows = valid_rows[-120:]
     if len(valid_rows) > 120:
@@ -1330,7 +1304,7 @@ def audit_and_repair_existing_movies(
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=6, batch_size=50, batch_timeout=45)
+    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=5, batch_size=25, batch_timeout=30)
 
     for row in sample_rows:
         if not row.get("is_valid", True):
@@ -1397,7 +1371,7 @@ def audit_and_repair_existing_movies(
                 with state_lock:
                     hd_upgraded_count[0] += 1
 
-        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=4, batch_size=10, batch_timeout=40)
+        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=4, batch_size=10, batch_timeout=30)
 
     print(
         f"  Provjera završena: {rematched_count[0]} ispravljeno na pravi film, "
@@ -1498,7 +1472,7 @@ def mine_direct_movies_from_branches(
     deadline_ts,
     all_movie_rows=None
 ):
-    print("2/4 Prioritetno rudarenje pojedinačnih filmova iz hijerarhije stabla (paketi po 25)...", flush=True)
+    print("2/4 Prioritetno rudarenje pojedinačnih filmova iz hijerarhije stabla (paketi po 10)...", flush=True)
     if time.monotonic() > deadline_ts:
         print("  ⏱ Preskočeno zbog dostignutog vremenskog limita.", flush=True)
         return
@@ -1599,7 +1573,7 @@ def mine_direct_movies_from_branches(
     remaining_pool.sort(
         key=lambda e: (0 if e[2] > 0 else 1, -float(e[0].get("downloads") or 0))
     )
-    remaining_pool = remaining_pool[:500]
+    remaining_pool = remaining_pool[:350]
 
     print(
         f"  Ukupno {len(remaining_pool)} novih pojedinačnih kandidata u redu iz {len(collections_to_scan)} grana/podgrana "
@@ -1788,7 +1762,7 @@ def mine_direct_movies_from_branches(
                     batch_added[0] += 1
                     total_added[0] += 1
 
-        pool = ThreadPoolExecutor(max_workers=6)
+        pool = ThreadPoolExecutor(max_workers=5)
         futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
         timed_out_batch = False
         try:
@@ -2008,7 +1982,7 @@ def sync_ex_yu_and_cult_movies(
         ex_yu_list = list(ex_yu_docs.values())[:60]
         print(f"  Provjera {len(ex_yu_list)} Ex-Yu Archive kandidata...", flush=True)
         run_batched_with_deadline(
-            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=6, batch_size=20, batch_timeout=45
+            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
         )
         flush_rejected_buffer(force=True)
 
@@ -2026,7 +2000,7 @@ def sync_ex_yu_and_cult_movies(
         res = safe_get(f"{TMDB_BASE}/search/movie", {"api_key": TMDB_API_KEY, "query": seed_title, "language": "hr-HR", "include_adult": "false"})
         return (res or {}).get("results", [])[:2]
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         for res_list in pool.map(fetch_seed, sampled_seeds):
             for m in res_list:
                 mid = int(m["id"])
@@ -2056,7 +2030,7 @@ def sync_ex_yu_and_cult_movies(
                 if not contains_blocked_regional_or_arabic(m.get("original_title"), m.get("title"), orig_lang=m.get("original_language", "")):
                     candidates[mid] = (m, hr_genre_label)
 
-    cand_items = list(candidates.values())[:70]
+    cand_items = list(candidates.values())[:60]
     print(f"  Brza provjera uzorka od {len(cand_items)} TMDB kandidata na Archive.org...", flush=True)
     added_tmdb = [0]
 
@@ -2094,7 +2068,7 @@ def sync_ex_yu_and_cult_movies(
                     added_tmdb[0] += 1
 
     run_batched_with_deadline(
-        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=6, batch_size=20, batch_timeout=45
+        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
     )
 
     print(f"  Dodano {added_ex_yu[0]} Ex-Yu i {added_tmdb[0]} kultnih/žanrovskih filmova.", flush=True)
@@ -2345,7 +2319,7 @@ def sync_multi_file_movie_bundles(
                     added_total[0] += 1
 
         timed_out = run_batched_with_deadline(
-            sorted_entries, process_bundle_entry, deadline_ts, max_workers=6, batch_size=25, batch_timeout=45
+            sorted_entries, process_bundle_entry, deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
         )
         print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
         if not is_pinned and not timed_out:
