@@ -91,5 +91,5 @@ dependencies {
     // Video Player (Media3 / ExoPlayer + FFmpeg audio dekoder za AC3/EAC3/DTS u MKV-u)
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.2.1+2")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.2.1+1")
 }
