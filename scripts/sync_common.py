@@ -492,16 +492,16 @@ def compute_aspect_tier(filename, width=0, height=0):
 
 
 def pick_best_video_file(video_files):
-    """Daje prednost 16:9 / widescreen verzijama i MP4 (AAC audio kompatibilan s preglednicima) nad MKV-om."""
+    """Daje snažan prioritet 16:9 / widescreen verzijama i izvornim 1080p datotekama (.mp4 i .mkv)."""
     def sort_key(f):
         fname_lower = f["filename"].lower()
         is_deriv = f.get("is_derivative", False)
         aspect_tier = f.get("aspect_tier", compute_aspect_tier(fname_lower, f.get("width", 0), f.get("height", 0)))
         if not is_deriv and fname_lower.endswith((".mp4", ".m4v")):
             format_tier = 0
-        elif fname_lower.endswith((".mp4", ".m4v")):
+        elif not is_deriv and fname_lower.endswith(".mkv"):
             format_tier = 1
-        elif not is_deriv:
+        elif fname_lower.endswith((".mp4", ".m4v")):
             format_tier = 2
         else:
             format_tier = 3
@@ -512,6 +512,18 @@ def pick_best_video_file(video_files):
         if verify_stream_url_playable(candidate["stream_url"]):
             return candidate
     return ordered[0]
+
+
+def pick_best_mp4_alternative(video_files, exclude_url=""):
+    """Pronalazi najbolju MP4/M4V datoteku unutar istog Archive.org zapisa kao rezervnu verziju za web/fallback."""
+    mp4_candidates = [
+        f for f in video_files
+        if f.get("filename", "").lower().endswith((".mp4", ".m4v"))
+        and f.get("stream_url") != exclude_url
+    ]
+    if not mp4_candidates:
+        return None
+    return pick_best_video_file(mp4_candidates)
 
 
 def determine_primary_genres(
@@ -745,7 +757,7 @@ def _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv):
     return extracted
 
 
-def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
+def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=True):
     meta = safe_get(f"https://archive.org/metadata/{identifier}", timeout=7, max_bytes=3_500_000)
     if not meta or meta.get("is_dark") or meta.get("is_restricted"):
         return [], {}
