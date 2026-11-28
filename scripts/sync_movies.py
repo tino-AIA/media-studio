@@ -12,6 +12,18 @@ import requests
 
 socket.setdefaulttimeout(12)
 
+_ORIG_SESSION_REQUEST = requests.Session.request
+
+
+def _enforced_timeout_request(self, method, url, *args, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 10):
+        kwargs["timeout"] = (5, 10)
+    return _ORIG_SESSION_REQUEST(self, method, url, *args, **kwargs)
+
+
+requests.Session.request = _enforced_timeout_request
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sync_common as sc
@@ -92,12 +104,19 @@ def fast_verify_stream_playable(url):
 
 def flush_rejected_buffer(force=False):
     to_send = []
-    with state_lock:
+    if not state_lock.acquire(timeout=3):
+        return
+    try:
         if len(_REJECTED_BATCH_BUFFER) >= _REJECTED_BUFFER_SIZE or (force and _REJECTED_BATCH_BUFFER):
             to_send = list(_REJECTED_BATCH_BUFFER)
             _REJECTED_BATCH_BUFFER.clear()
+    finally:
+        state_lock.release()
     if to_send:
-        supabase_upsert("catalog_items", to_send, "archive_id")
+        try:
+            supabase_upsert("catalog_items", to_send, "archive_id")
+        except Exception:
+            pass
 
 
 def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
@@ -111,10 +130,15 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
         clean_year = 0
 
     should_queue = False
-    with state_lock:
+    if not state_lock.acquire(timeout=2):
+        return
+    try:
         if ident not in existing_archive_ids:
             existing_archive_ids.add(ident)
             should_queue = True
+    finally:
+        state_lock.release()
+
     if should_queue:
         row = {
             "archive_id": ident,
@@ -134,8 +158,11 @@ def record_rejected_archive_id(ident, title, rel_year, existing_archive_ids):
             "tmdb_runtime": 0,
             "archive_runtime": 0,
         }
-        with state_lock:
-            _REJECTED_BATCH_BUFFER.append(row)
+        if state_lock.acquire(timeout=2):
+            try:
+                _REJECTED_BATCH_BUFFER.append(row)
+            finally:
+                state_lock.release()
         flush_rejected_buffer(force=False)
 
 
@@ -162,7 +189,10 @@ def queue_series_candidate_for_tv_sync(ident, raw_title):
         "tmdb_runtime": 0,
         "archive_runtime": 0,
     }
-    supabase_upsert("catalog_items", [row], "archive_id")
+    try:
+        supabase_upsert("catalog_items", [row], "archive_id")
+    except Exception:
+        pass
 
 
 # ==============================================================================
@@ -576,8 +606,11 @@ def retire_vhs_rows_for_tmdb(mid, new_arch_id, rel_year, all_movie_rows, tmdb_ve
                 rows_to_retire.append((row["id"], row.get("title") or "", r_ident))
 
     for row_id, r_title, r_ident in rows_to_retire:
-        supabase_patch_row("catalog_items", row_id, {"is_valid": False})
-        print(f"  🗑 Uklonjen stari VHS/4:3 rip nakon pronalaska bolje verzije: {r_title} ({r_ident})", flush=True)
+        try:
+            supabase_patch_row("catalog_items", row_id, {"is_valid": False})
+            print(f"  🗑 Uklonjen stari VHS/4:3 rip nakon pronalaska bolje verzije: {r_title} ({r_ident})", flush=True)
+        except Exception:
+            pass
 
     return len(rows_to_retire)
 
@@ -654,8 +687,15 @@ def map_approved_movie_subtrees(deadline_ts):
     seen = {b.lower() for b in APPROVED_NODE_IDS}
     sub_layer = []
 
+    core_parents = [
+        "moviesandfilms", "feature_films", "animationandcartoons",
+        "vhsmovies", "dvdtray", "anime"
+    ]
+    other_nodes = [n for n in APPROVED_NODE_IDS if n not in core_parents]
+    parents_to_query = core_parents + random.sample(other_nodes, k=min(6, len(other_nodes)))
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=50), random.sample(APPROVED_NODE_IDS, k=min(12, len(APPROVED_NODE_IDS)))):
+        for children in pool.map(lambda cid: fetch_child_collections(cid, rows=50), parents_to_query):
             for ident, title in children:
                 low = ident.lower()
                 if low in seen:
@@ -1103,7 +1143,10 @@ def audit_and_repair_existing_movies(
     hd_upgraded_count = [0]
 
     def mark_row_invalid(row, tmdb_id, reason_msg):
-        supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+        try:
+            supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+        except Exception:
+            pass
         row["is_valid"] = False
         with state_lock:
             if tmdb_id > 0:
@@ -1492,7 +1535,7 @@ def mine_direct_movies_from_branches(
                 "page": page,
                 "output": "json"
             },
-            timeout=18,
+            timeout=15,
         )
         return (data or {}).get("response", {}).get("docs", [])
 
@@ -1752,9 +1795,12 @@ def mine_direct_movies_from_branches(
                     total_added[0] += 1
 
         pool = ThreadPoolExecutor(max_workers=5)
-        futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
-        _, not_done = wait(futures, timeout=BATCH_HARD_TIMEOUT_SECONDS)
+        futures = {pool.submit(process_archive_doc, entry): entry[0].get("identifier") for entry in batch_slice}
+        _, not_done = wait(futures.keys(), timeout=BATCH_HARD_TIMEOUT_SECONDS)
         timed_out_batch = len(not_done) > 0
+        if timed_out_batch:
+            stuck_ids = [futures[f] for f in not_done if futures.get(f)]
+            print(f"    ⚠ Spori ID-evi preskočeni nakon {BATCH_HARD_TIMEOUT_SECONDS}s: {', '.join(stuck_ids[:5])}", flush=True)
         pool.shutdown(wait=False, cancel_futures=True)
 
         flush_rejected_buffer(force=True)
