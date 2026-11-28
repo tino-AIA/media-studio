@@ -1,12 +1,37 @@
 import os
 import random
 import re
+import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import requests
+import requests.api
+
+socket.setdefaulttimeout(8)
+
+_ORIG_SESSION_REQUEST = requests.Session.request
+_ORIG_API_REQUEST = requests.api.request
+
+
+def _enforced_timeout_request(self, method, url, *args, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 8):
+        kwargs["timeout"] = (4, 6)
+    return _ORIG_SESSION_REQUEST(self, method, url, *args, **kwargs)
+
+
+def _enforced_api_request(method, url, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 8):
+        kwargs["timeout"] = (4, 6)
+    return _ORIG_API_REQUEST(method, url, **kwargs)
+
+
+requests.Session.request = _enforced_timeout_request
+requests.api.request = _enforced_api_request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -29,6 +54,7 @@ from sync_common import (
     is_ex_yu_content,
     is_foreign_dub_without_english,
     normalize_for_exact_title_compare,
+    pick_best_mp4_alternative,
     pick_best_video_file,
     safe_get,
     state_lock,
@@ -39,7 +65,7 @@ from sync_common import (
 )
 
 _HTTP_SESSION = requests.Session()
-_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=1)
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
 _HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
 _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 if hasattr(sc, "session"):
@@ -695,6 +721,7 @@ def aggregate_series_from_archive(
         return []
 
     best_by_se = {}
+    best_mp4_by_se = {}
 
     for cand in raw_candidates:
         s_num = cand["season"]
@@ -727,18 +754,23 @@ def aggregate_series_from_archive(
             if total_expected_rt > 0 and (dur < int(total_expected_rt * 0.65) or dur > int(total_expected_rt * 1.80)):
                 continue
 
-        # MP4 uvijek ima apsolutnu prednost nad MKV-om jer preglednici ne dekodiraju AC3/EAC3/DTS zvuk u MKV-u
+        # Izvorna 1080p kvaliteta (MKV i MP4) ima prednost jer ExoPlayer + FFmpeg dekodira AC3/EAC3/DTS,
+        # a najbolji MP4 sprema se i kao fallback_url unutar epizode
         fn_lower = cand["filename"].lower()
         is_mp4 = fn_lower.endswith((".mp4", ".m4v"))
-        is_mkv = fn_lower.endswith(".mkv")
-        browser_audio_bonus = 25000.0 if is_mp4 else (-15000.0 if is_mkv else 0.0)
         aspect_bonus = cand.get("aspect_tier", 1) * 3000.0
-        orig_bonus = 2000.0 if (not cand["is_derivative"] and is_mp4) else (500.0 if is_mp4 else 0.0)
-        quality_score = min(cand["size_mb"], 2500.0) + browser_audio_bonus + aspect_bonus + orig_bonus
+        orig_bonus = 2000.0 if (not cand["is_derivative"] and is_mp4) else (1600.0 if not cand["is_derivative"] else 500.0)
+        quality_score = min(cand["size_mb"], 4000.0) + aspect_bonus + orig_bonus
         per_ep_dur = int(round(dur / float(len(valid_keys)))) if dur > 0 else 0
 
         for key in valid_keys:
             official_hr_name, _, _ = episode_guide[key]
+            if is_mp4:
+                if key not in best_mp4_by_se or quality_score > best_mp4_by_se[key]["quality_score"]:
+                    best_mp4_by_se[key] = {
+                        "url": cand["stream_url"],
+                        "quality_score": quality_score
+                    }
             if key not in best_by_se or quality_score > best_by_se[key]["quality_score"]:
                 clean_file_title, _ = clean_filename_to_title(cand["filename"])
                 ep_title_clean = official_hr_name if official_hr_name else (clean_file_title or f"Epizoda {key[1]}")
@@ -754,16 +786,19 @@ def aggregate_series_from_archive(
                     "quality_score": quality_score
                 }
 
-    sorted_episodes = [
-        {
+    sorted_episodes = []
+    for key, v in sorted(best_by_se.items(), key=lambda item: (item[0][0], item[0][1])):
+        ep_entry = {
             "season": v["season"],
             "episode": v["episode"],
             "title": v["title"],
             "url": v["url"],
             "duration": v["duration"]
         }
-        for _, v in sorted(best_by_se.items(), key=lambda item: (item[0][0], item[0][1]))
-    ]
+        mp4_fb = best_mp4_by_se.get(key)
+        if mp4_fb and mp4_fb["url"] != v["url"]:
+            ep_entry["fallback_url"] = mp4_fb["url"]
+        sorted_episodes.append(ep_entry)
 
     if require_complete_s1:
         sorted_episodes = filter_consecutive_complete_seasons(sorted_episodes, aired_eps_by_season)
@@ -788,14 +823,6 @@ def series_has_foreign_dub_episodes(row):
         if u and is_foreign_dub_without_english({}, u, u, orig_lang="en"):
             return True
     return False
-
-
-def series_has_mkv_episodes(row):
-    urls_to_check = [row.get("stream_url") or ""]
-    for ep in (row.get("episodes") or [])[:15]:
-        if isinstance(ep, dict) and ep.get("url"):
-            urls_to_check.append(ep["url"])
-    return any(str(u).lower().split("?")[0].endswith(".mkv") for u in urls_to_check if u)
 
 
 def format_series_display_title(hr_name, orig_name, year):
@@ -835,7 +862,7 @@ def audit_and_restore_short_cartoons(all_movie_rows, deadline_ts):
         with state_lock:
             restored[0] += 1
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(restore_one, hidden_cartoons))
 
     print(f"  Vraćeno {restored[0]} kratkometražnih crtića u katalog.", flush=True)
@@ -846,10 +873,8 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
         r for r in existing_series_rows
         if (r.get("tmdb_id") or 0) > 0 and not str(r.get("archive_id") or "").startswith("tv_queue")
     ]
-    mkv_rows = [r for r in all_candidates if series_has_mkv_episodes(r)]
-    other_rows = [r for r in all_candidates if not series_has_mkv_episodes(r)]
-    candidates = mkv_rows[:60] + random.sample(other_rows, k=min(max(0, MAX_REFRESH_SERIES_PER_RUN - len(mkv_rows[:60])), len(other_rows)))
-    print(f"2/4 Provjera jezika, zvuka (MP4), sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
+    candidates = random.sample(all_candidates, k=min(MAX_REFRESH_SERIES_PER_RUN, len(all_candidates)))
+    print(f"2/4 Provjera jezika, sezona i opisa za uzorak od {len(candidates)}/{len(all_candidates)} postojećih serija...", flush=True)
     updated_count = [0]
 
     def check_and_replenish(row):
@@ -860,7 +885,6 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
             return None
 
         has_dub = series_has_foreign_dub_episodes(row)
-        has_mkv = series_has_mkv_episodes(row)
         raw_eps = row.get("episodes") or []
         existing_map = {}
         season_counts = {}
@@ -902,7 +926,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
                 missing_seasons.append(s_no)
 
         merged_map = dict(existing_map)
-        if has_dub or has_mkv or missing_seasons:
+        if has_dub or missing_seasons:
             fresh_episodes = aggregate_series_from_archive(
                 tmdb_id,
                 orig_name,
@@ -913,10 +937,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
             )
             for ep in fresh_episodes:
                 key = (int(ep["season"]), int(ep["episode"]))
-                old_ep = merged_map.get(key)
-                old_is_mkv = bool(old_ep and str(old_ep.get("url") or "").lower().split("?")[0].endswith(".mkv"))
-                new_is_mp4 = str(ep.get("url") or "").lower().split("?")[0].endswith((".mp4", ".m4v"))
-                if (key not in merged_map or (old_is_mkv and new_is_mp4)) and verify_stream_url_playable(ep["url"]):
+                if key not in merged_map and verify_stream_url_playable(ep["url"]):
                     merged_map[key] = ep
 
         seasons_to_validate = sorted({s for (s, _) in merged_map.keys()} | {1})
@@ -959,7 +980,7 @@ def refresh_incomplete_series(existing_series_rows, deadline_ts):
 
         return None
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(check_and_replenish, r) for r in candidates]
         for fut in as_completed(futures):
             msg = fut.result()
@@ -1060,6 +1081,7 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
         if not videos:
             return
         best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
         blob_check = f"{ident} {raw_title} {clean_t}".lower()
         is_ex_yu_item = is_ex_yu_q or is_ex_yu_content("", None, blob_check)
 
@@ -1090,28 +1112,50 @@ def sync_short_cartoons(existing_archive_ids, deadline_ts):
             )
         )
 
-        row = {
-            "archive_id": ident,
-            "tmdb_id": 0,
-            "title": clean_t,
-            "media_type": "movie",
-            "genres": genres,
-            "release_year": parsed_y,
-            "popularity_score": float(doc.get("downloads") or 0),
-            "description_hr": hr_desc,
-            "poster_url": f"https://archive.org/services/img/{ident}",
-            "stream_url": best["stream_url"],
-            "is_featured": False,
-            "is_valid": True,
-            "tmdb_runtime": dur,
-            "archive_runtime": dur
-        }
-        supabase_upsert("catalog_items", [row], "archive_id")
+        rows_to_save = [
+            {
+                "archive_id": ident,
+                "tmdb_id": 0,
+                "title": clean_t,
+                "media_type": "movie",
+                "genres": genres,
+                "release_year": parsed_y,
+                "popularity_score": float(doc.get("downloads") or 0),
+                "description_hr": hr_desc,
+                "poster_url": f"https://archive.org/services/img/{ident}",
+                "stream_url": best["stream_url"],
+                "is_featured": False,
+                "is_valid": True,
+                "tmdb_runtime": dur,
+                "archive_runtime": dur
+            }
+        ]
+        if mp4_alt and mp4_alt.get("stream_url"):
+            rows_to_save.append(
+                {
+                    "archive_id": f"{ident},mp4",
+                    "tmdb_id": 0,
+                    "title": clean_t,
+                    "media_type": "movie",
+                    "genres": genres,
+                    "release_year": parsed_y,
+                    "popularity_score": max(0.0, float(doc.get("downloads") or 0) - 150.0),
+                    "description_hr": hr_desc,
+                    "poster_url": f"https://archive.org/services/img/{ident}",
+                    "stream_url": mp4_alt["stream_url"],
+                    "is_featured": False,
+                    "is_valid": True,
+                    "tmdb_runtime": dur,
+                    "archive_runtime": mp4_alt.get("duration_mins") or dur
+                }
+            )
+        supabase_upsert("catalog_items", rows_to_save, "archive_id")
         with state_lock:
             existing_archive_ids.add(ident)
+            existing_archive_ids.add(f"{ident},mp4")
             added_counter[0] += 1
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(process_short_doc, candidate_docs.values()))
 
     print(f"  Dodano {added_counter[0]} novih Disney, Ex-Yu i klasičnih crtića.", flush=True)
@@ -1198,7 +1242,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=None):
 
     print(f"  Otkriveno {len(discovered_cores)} jedinstvenih TV/anime naslova u Archive.org granama.", flush=True)
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         for hits in pool.map(fetch_tv_seeds_all_versions, list(discovered_cores.keys())[:250]):
             for hit in hits:
                 if hit and hit["id"] not in seen_tmdb_series:
@@ -1206,7 +1250,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=None):
                     priority_ids.add(hit["id"])
 
     sampled_tv_seeds = random.sample(CLASSIC_TV_SEED_TITLES, k=min(120, len(CLASSIC_TV_SEED_TITLES)))
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         for hits in pool.map(fetch_tv_seeds_all_versions, sampled_tv_seeds):
             for hit in hits:
                 if hit and hit["id"] not in seen_tmdb_series:
@@ -1336,7 +1380,7 @@ def sync_all_series(seen_tmdb_series, deadline_ts, existing_series_rows=None):
         supabase_upsert("catalog_items", [row], "archive_id")
         return f"  + Serija: {row['title']} ({seasons_found} kompletnih sez. / {len(episodes)} ep.) -> {genres[0]}"
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(process_series, item) for item in ordered_candidates]
         for fut in as_completed(futures):
             msg = fut.result()
