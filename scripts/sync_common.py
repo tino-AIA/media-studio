@@ -177,18 +177,29 @@ TMDB_MOVIE_GENRE_MAP = {
 }
 
 
-def safe_get(url, params=None, timeout=14):
-    for attempt in range(4):
+def safe_get(url, params=None, timeout=8, max_bytes=3_000_000):
+    req_timeout = (4, min(float(timeout or 8), 8.0))
+    for attempt in range(2):
         try:
-            r = session.get(url, params=params, timeout=timeout)
-            if r.status_code == 200:
-                return r.json()
-            if r.status_code in (429, 502, 503, 504):
-                time.sleep(2.5 * (attempt + 1))
-                continue
-            return None
+            with session.get(url, params=params, timeout=req_timeout, stream=True) as r:
+                if r.status_code == 200:
+                    chunks = []
+                    total = 0
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > max_bytes:
+                            return None
+                        chunks.append(chunk)
+                    return json.loads(b"".join(chunks).decode("utf-8", errors="replace"))
+                if r.status_code in (429, 502, 503, 504) and attempt == 0:
+                    time.sleep(1.0)
+                    continue
+                return None
         except Exception:
-            time.sleep(0.8 * (attempt + 1))
+            if attempt == 0:
+                time.sleep(0.4)
     return None
 
 
@@ -203,7 +214,7 @@ def translate_to_croatian(text):
         r = session.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": "auto", "tl": "hr", "dt": "t", "q": text[:1500]},
-            timeout=8
+            timeout=(3, 5)
         )
         if r.status_code == 200:
             data = r.json()
@@ -220,13 +231,16 @@ def translate_to_croatian(text):
 def verify_stream_url_playable(url):
     if not url or not url.startswith("http"):
         return False
+    low = url.lower()
+    if "archive.org/download/" in low and low.endswith((".mp4", ".m4v")):
+        return True
     try:
         r = session.get(
             url,
             headers={"Range": "bytes=0-1"},
             allow_redirects=True,
             stream=True,
-            timeout=8
+            timeout=(3, 5)
         )
         status = r.status_code
         ctype = (r.headers.get("Content-Type") or "").lower()
@@ -254,7 +268,7 @@ def supabase_upsert(table, rows, conflict_col):
 
     url = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict_col}"
     try:
-        r = session.post(url, headers=SB_HEADERS, json=rows, timeout=25)
+        r = session.post(url, headers=SB_HEADERS, json=rows, timeout=(5, 15))
         if r.status_code in (200, 201):
             return r.json()
         print(
@@ -267,7 +281,7 @@ def supabase_upsert(table, rows, conflict_col):
     saved_rows = []
     for single in rows:
         try:
-            r_one = session.post(url, headers=SB_HEADERS, json=[single], timeout=20)
+            r_one = session.post(url, headers=SB_HEADERS, json=[single], timeout=(5, 12))
             if r_one.status_code in (200, 201):
                 saved_rows.extend(r_one.json())
             else:
@@ -289,7 +303,7 @@ def supabase_patch_row(table, row_id, payload):
         return
     url = f"{SUPABASE_URL}/rest/v1/{table}?id=eq.{row_id}"
     try:
-        r = session.patch(url, headers=SB_HEADERS, json=payload, timeout=15)
+        r = session.patch(url, headers=SB_HEADERS, json=payload, timeout=(4, 10))
         if r.status_code not in (200, 204):
             print(f"[Supabase PATCH greška {table} id={row_id}] {r.status_code}: {r.text}", flush=True)
     except Exception as e:
@@ -301,7 +315,7 @@ def supabase_delete_author_movies(author_db_id):
         return
     url = f"{SUPABASE_URL}/rest/v1/author_movies?author_id=eq.{author_db_id}"
     try:
-        session.delete(url, headers=SB_HEADERS, timeout=15)
+        session.delete(url, headers=SB_HEADERS, timeout=(4, 10))
     except Exception as e:
         print(f"[Supabase DELETE author_movies] {e}", flush=True)
 
@@ -327,7 +341,7 @@ def fetch_existing_catalog_state(media_type_filter=None):
             f"&order=id.asc"
         )
         try:
-            r = session.get(query_url, headers=headers, timeout=20)
+            r = session.get(query_url, headers=headers, timeout=(5, 15))
             if r.status_code not in (200, 206):
                 break
             batch = r.json()
@@ -399,7 +413,7 @@ def _stream_has_english_or_multi_audio_track(stream_url):
             stream_url,
             headers={"Range": "bytes=0-131071"},
             allow_redirects=True,
-            timeout=8
+            timeout=(3, 5)
         )
         if r.status_code in (200, 206) and r.content:
             head = r.content
@@ -478,17 +492,19 @@ def compute_aspect_tier(filename, width=0, height=0):
 
 
 def pick_best_video_file(video_files):
-    """Daje snažan prioritet 16:9 / widescreen verzijama, zatim izvornim .mp4/.mkv datotekama."""
+    """Daje prednost 16:9 / widescreen verzijama i MP4 (AAC audio kompatibilan s preglednicima) nad MKV-om."""
     def sort_key(f):
         fname_lower = f["filename"].lower()
         is_deriv = f.get("is_derivative", False)
         aspect_tier = f.get("aspect_tier", compute_aspect_tier(fname_lower, f.get("width", 0), f.get("height", 0)))
-        if not is_deriv and fname_lower.endswith(".mp4"):
+        if not is_deriv and fname_lower.endswith((".mp4", ".m4v")):
             format_tier = 0
-        elif not is_deriv:
+        elif fname_lower.endswith((".mp4", ".m4v")):
             format_tier = 1
-        else:
+        elif not is_deriv:
             format_tier = 2
+        else:
+            format_tier = 3
         return (-aspect_tier, format_tier, -f["size_mb"])
 
     ordered = sorted(video_files, key=sort_key)
@@ -686,7 +702,7 @@ def _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv):
     else:
         shotlist_blob = str(shotlist_raw)
 
-    allowed_exts = (".mp4", ".mkv") if allow_mkv else (".mp4",)
+    allowed_exts = (".mp4", ".m4v", ".mkv") if allow_mkv else (".mp4", ".m4v")
     dur_match = re.search(r'"duration"\s*:\s*(\d+(?:\.\d+)?)', shotlist_blob)
     shotlist_mins = parse_duration_minutes(dur_match.group(1)) if dur_match else 0
     resolved_mins = shotlist_mins or meta_runtime
@@ -730,7 +746,7 @@ def _extract_popcorn_shotlist_videos(md, meta_runtime, min_size_mb, allow_mkv):
 
 
 def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
-    meta = safe_get(f"https://archive.org/metadata/{identifier}")
+    meta = safe_get(f"https://archive.org/metadata/{identifier}", timeout=7, max_bytes=3_500_000)
     if not meta or meta.get("is_dark") or meta.get("is_restricted"):
         return [], {}
 
@@ -742,7 +758,7 @@ def get_archive_item_details(identifier, min_size_mb=35, allow_mkv=False):
     files = meta.get("files", [])
     videos = []
 
-    allowed_exts = (".mp4", ".mkv") if allow_mkv else (".mp4",)
+    allowed_exts = (".mp4", ".m4v", ".mkv") if allow_mkv else (".mp4", ".m4v")
 
     for f in files:
         fname = f.get("name", "")
