@@ -91,6 +91,8 @@ MAX_DYNAMIC_BUNDLES_PER_RUN = 15
 MAX_VIDEOS_PER_BUNDLE = 75
 TMDB_SEED_SAMPLE_PER_RUN = 40
 
+DEBUG_CANDIDATES = True
+
 _REJECTED_BATCH_BUFFER = []
 _REJECTED_BUFFER_SIZE = 100
 
@@ -1785,6 +1787,11 @@ def mine_direct_movies_from_branches(
         with state_lock:
             stats[key] += 1
 
+    def log_skip(ident, title, reason):
+        if DEBUG_CANDIDATES:
+            short_t = str(title or "")[:55]
+            print(f"    · [{reason}] {short_t} ({ident})", flush=True)
+
     def process_archive_doc(entry):
         if time.monotonic() > deadline_ts:
             return
@@ -1797,6 +1804,7 @@ def mine_direct_movies_from_branches(
         if is_explicit_junk_item(ident, raw_title):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("junk_recorded")
+            log_skip(ident, raw_title, "junk/epizoda")
             return
 
         cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
@@ -1817,6 +1825,7 @@ def mine_direct_movies_from_branches(
         if not results:
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("no_tmdb_match")
+            log_skip(ident, f"{cand_q} ({parsed_y})", "nema na TMDB")
             return
 
         cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
@@ -1845,12 +1854,14 @@ def mine_direct_movies_from_branches(
         if chosen_hit is None:
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("no_tmdb_match")
+            log_skip(ident, f"{cand_q} ({parsed_y})", "godina/naslov ne odgovara TMDB")
             return
 
         mid = int(chosen_hit["id"])
         if is_mismatched_modern_dune(mid, ident, raw_title):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("validation_rejected")
+            log_skip(ident, raw_title, "pogrešna Dina")
             return
         with state_lock:
             if not can_accept_movie_candidate(
@@ -1858,12 +1869,14 @@ def mine_direct_movies_from_branches(
                 tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=True
             ):
                 inc_stat("already_in_db")
+                log_skip(ident, f"{chosen_hit.get('title')} [tmdb:{mid}]", "već u bazi")
                 return
 
         details = get_tmdb_movie_details(mid)
         if not details or not details["poster_path"]:
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("no_tmdb_match")
+            log_skip(ident, raw_title, "TMDB bez postera")
             return
 
         is_doc = 99 in (details.get("genre_ids") or [])
@@ -1874,6 +1887,7 @@ def mine_direct_movies_from_branches(
                 queue_series_candidate_for_tv_sync(ident, raw_title)
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("no_video_file")
+            log_skip(ident, raw_title, f"nema videa >= {80 if is_anim else 160}MB ili multi-paket")
             return
         best = pick_best_video_file(videos)
         mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
@@ -1882,16 +1896,19 @@ def mine_direct_movies_from_branches(
         if is_mismatched_modern_dune(mid, ident, raw_title, best["filename"], arch_md.get("title")):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("validation_rejected")
+            log_skip(ident, best["filename"], "pogrešna Dina u datoteci")
             return
 
         if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title, best["filename"]):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("junk_recorded")
+            log_skip(ident, best["filename"], "junk datoteka")
             return
 
         if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=best["size_mb"]):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("validation_rejected")
+            log_skip(ident, f"{best['filename']} ({arch_mins}m vs {details.get('runtime', 0)}m)", "nesklad trajanja")
             return
 
         rel_year = extract_year_from_text(details["release_date"]) or parsed_y
@@ -1899,6 +1916,7 @@ def mine_direct_movies_from_branches(
         if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year, details=details):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("validation_rejected")
+            log_skip(ident, best["filename"], "nesklad naslova datoteke")
             return
 
         final_tier = max(cand_tier, best.get("aspect_tier", 1), estimate_source_quality_tier(ident, best["stream_url"], str(raw_title)))
@@ -1910,10 +1928,11 @@ def mine_direct_movies_from_branches(
                 tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=is_mp4_only_fill
             ):
                 inc_stat("already_in_db")
+                log_skip(ident, f"{details['hr_title']} [tier:{final_tier}]", "već u bazi (kvaliteta)")
                 return
 
         require_credits = has_multiple_tmdb_versions(details["orig_title"])
-        ok, _ = validate_movie_match(
+        ok, reject_reason = validate_movie_match(
             ident,
             arch_md,
             arch_mins,
@@ -1927,6 +1946,7 @@ def mine_direct_movies_from_branches(
         if not ok or not fast_verify_stream_playable(best["stream_url"]):
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             inc_stat("validation_rejected")
+            log_skip(ident, best["filename"], f"validacija/stream: {reject_reason or 'nedostupan'}")
             return
 
         downloads = float(doc.get("downloads") or 0)
@@ -1952,7 +1972,9 @@ def mine_direct_movies_from_branches(
             )
 
             before_cnt = total_added[0]
+            before_stats = dict(stats)
             futures = [shared_pool.submit(process_archive_doc, entry) for entry in batch_slice]
+            timed_out_cnt = 0
             try:
                 for fut in as_completed(futures, timeout=min(35, max(2.0, deadline_ts - time.monotonic()))):
                     try:
@@ -1960,6 +1982,7 @@ def mine_direct_movies_from_branches(
                     except Exception:
                         pass
             except Exception:
+                timed_out_cnt = sum(1 for f in futures if not f.done())
                 for f in futures:
                     f.cancel()
                 shared_pool.shutdown(wait=False, cancel_futures=True)
@@ -1967,8 +1990,14 @@ def mine_direct_movies_from_branches(
 
             flush_rejected_buffer(force=True)
             added_in_batch = total_added[0] - before_cnt
+            d_db = stats["already_in_db"] - before_stats["already_in_db"]
+            d_tmdb = stats["no_tmdb_match"] - before_stats["no_tmdb_match"]
+            d_vid = stats["no_video_file"] - before_stats["no_video_file"]
+            d_val = (stats["validation_rejected"] + stats["junk_recorded"]) - (before_stats["validation_rejected"] + before_stats["junk_recorded"])
             print(
-                f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {added_in_batch} filmova (ukupno dodano: {total_added[0]}).",
+                f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {added_in_batch} "
+                f"| u bazi: {d_db}, bez TMDB: {d_tmdb}, bez videa: {d_vid}, odbijeno: {d_val}, timeout: {timed_out_cnt} "
+                f"(ukupno dodano: {total_added[0]}).",
                 flush=True
             )
 
