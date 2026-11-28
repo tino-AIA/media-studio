@@ -16,7 +16,8 @@ data class SupabaseEpisodeItem(
     val episode: Int = 0,
     val title: String,
     val url: String,
-    val duration: String = ""
+    val duration: String = "",
+    val fallbackUrl: String = ""
 )
 
 data class SupabaseCatalogItem(
@@ -277,6 +278,10 @@ object SupabaseRepository {
             if (item.streamUrl.isNotBlank()) {
                 nextByStream[item.streamUrl] = item
             }
+            for (ep in item.episodes) {
+                if (ep.url.isNotBlank()) nextByStream[ep.url] = item
+                if (ep.fallbackUrl.isNotBlank()) nextByStream[ep.fallbackUrl] = item
+            }
             if (item.posterUrl.isNotBlank()) {
                 nextPosterById[item.archiveId] = item.posterUrl
                 if (baseId.isNotEmpty() && !nextPosterById.containsKey(baseId)) {
@@ -300,7 +305,7 @@ object SupabaseRepository {
     }
 
     private fun isFalsePositiveCatalogItem(item: SupabaseCatalogItem): Boolean {
-        val junkBlob = "${item.archiveId} ${item.streamUrl}"
+        val junkBlob = "${item.archiveId}${item.streamUrl}"
         if (JUNK_MEDIA_REGEX.containsMatchIn(junkBlob)) return true
 
         if (item.mediaType == "movie" && item.archiveRuntime > 0) {
@@ -444,7 +449,8 @@ object SupabaseRepository {
                         episode = epObj.optInt("episode", e + 1),
                         title = epObj.optString("title", "Epizoda ${e + 1}"),
                         url = epUrl,
-                        duration = epObj.optString("duration", "")
+                        duration = epObj.optString("duration", ""),
+                        fallbackUrl = epObj.optString("fallback_url", "")
                     )
                 )
             }
