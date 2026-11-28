@@ -5,7 +5,7 @@ import re
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import unquote
 
 import requests
@@ -59,7 +59,7 @@ PHASE2_DIRECT_MOVIES_MAX_SECONDS = 18 * 60
 PHASE3_CURATED_AND_EXYU_MAX_SECONDS = 6 * 60
 
 BATCH_SIZE_CANDIDATES = 10
-BATCH_HARD_TIMEOUT_SECONDS = 30
+BATCH_HARD_TIMEOUT_SECONDS = 25
 MIN_REMAINING_SECONDS_FOR_NEXT_BATCH = 45
 
 MAX_VERSIONS_PER_MOVIE = 2
@@ -788,7 +788,7 @@ CURATED_ARCHIVE_IDS = {
 }
 
 
-def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batch_size=15, batch_timeout=30):
+def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batch_size=15, batch_timeout=25):
     item_list = list(items)
     for start_idx in range(0, len(item_list), batch_size):
         if time.monotonic() > deadline_ts:
@@ -796,19 +796,8 @@ def run_batched_with_deadline(items, worker_fn, deadline_ts, max_workers=5, batc
         chunk = item_list[start_idx:start_idx + batch_size]
         pool = ThreadPoolExecutor(max_workers=max_workers)
         futures = [pool.submit(worker_fn, x) for x in chunk]
-        batch_deadline = min(deadline_ts, time.monotonic() + batch_timeout)
-        try:
-            for fut in as_completed(futures, timeout=batch_timeout):
-                try:
-                    fut.result(timeout=1)
-                except Exception:
-                    pass
-                if time.monotonic() > batch_deadline:
-                    break
-        except FuturesTimeoutError:
-            pass
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+        wait(futures, timeout=min(batch_timeout, max(1.0, deadline_ts - time.monotonic())))
+        pool.shutdown(wait=False, cancel_futures=True)
     return time.monotonic() > deadline_ts
 
 
@@ -1304,7 +1293,7 @@ def audit_and_repair_existing_movies(
                     translated_count[0] += 1
             print(f"  🌐 Preveden naslov filma: {title} -> {details['hr_title']}", flush=True)
 
-    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=5, batch_size=25, batch_timeout=30)
+    run_batched_with_deadline(sample_rows, inspect_movie_row, phase_deadline_ts, max_workers=5, batch_size=25, batch_timeout=25)
 
     for row in sample_rows:
         if not row.get("is_valid", True):
@@ -1371,7 +1360,7 @@ def audit_and_repair_existing_movies(
                 with state_lock:
                     hd_upgraded_count[0] += 1
 
-        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=4, batch_size=10, batch_timeout=30)
+        run_batched_with_deadline(vhs_candidates, try_upgrade_vhs_row, phase_deadline_ts, max_workers=4, batch_size=10, batch_timeout=25)
 
     print(
         f"  Provjera završena: {rematched_count[0]} ispravljeno na pravi film, "
@@ -1764,20 +1753,9 @@ def mine_direct_movies_from_branches(
 
         pool = ThreadPoolExecutor(max_workers=5)
         futures = [pool.submit(process_archive_doc, entry) for entry in batch_slice]
-        timed_out_batch = False
-        try:
-            for fut in as_completed(futures, timeout=BATCH_HARD_TIMEOUT_SECONDS):
-                try:
-                    fut.result(timeout=1)
-                except Exception:
-                    pass
-                if time.monotonic() > batch_deadline:
-                    timed_out_batch = True
-                    break
-        except FuturesTimeoutError:
-            timed_out_batch = True
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+        _, not_done = wait(futures, timeout=BATCH_HARD_TIMEOUT_SECONDS)
+        timed_out_batch = len(not_done) > 0
+        pool.shutdown(wait=False, cancel_futures=True)
 
         flush_rejected_buffer(force=True)
         timeout_note = " (preskočeni spori odgovori)" if timed_out_batch else ""
@@ -1982,7 +1960,7 @@ def sync_ex_yu_and_cult_movies(
         ex_yu_list = list(ex_yu_docs.values())[:60]
         print(f"  Provjera {len(ex_yu_list)} Ex-Yu Archive kandidata...", flush=True)
         run_batched_with_deadline(
-            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
+            ex_yu_list, process_ex_yu_doc, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
         )
         flush_rejected_buffer(force=True)
 
@@ -2068,7 +2046,7 @@ def sync_ex_yu_and_cult_movies(
                     added_tmdb[0] += 1
 
     run_batched_with_deadline(
-        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
+        cand_items, process_tmdb_cand, phase_deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
     )
 
     print(f"  Dodano {added_ex_yu[0]} Ex-Yu i {added_tmdb[0]} kultnih/žanrovskih filmova.", flush=True)
@@ -2319,7 +2297,7 @@ def sync_multi_file_movie_bundles(
                     added_total[0] += 1
 
         timed_out = run_batched_with_deadline(
-            sorted_entries, process_bundle_entry, deadline_ts, max_workers=5, batch_size=15, batch_timeout=30
+            sorted_entries, process_bundle_entry, deadline_ts, max_workers=5, batch_size=15, batch_timeout=25
         )
         print(f"    ✓ {bundle_ident}: dodano {bundle_added[0]} filmova.", flush=True)
         if not is_pinned and not timed_out:
