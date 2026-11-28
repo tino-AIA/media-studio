@@ -9,20 +9,30 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import unquote
 
 import requests
+import requests.api
 
-socket.setdefaulttimeout(10)
+socket.setdefaulttimeout(8)
 
 _ORIG_SESSION_REQUEST = requests.Session.request
+_ORIG_API_REQUEST = requests.api.request
 
 
 def _enforced_timeout_request(self, method, url, *args, **kwargs):
     t = kwargs.get("timeout")
     if t is None or (isinstance(t, (int, float)) and t > 8):
-        kwargs["timeout"] = (4, 7)
+        kwargs["timeout"] = (4, 6)
     return _ORIG_SESSION_REQUEST(self, method, url, *args, **kwargs)
 
 
+def _enforced_api_request(method, url, **kwargs):
+    t = kwargs.get("timeout")
+    if t is None or (isinstance(t, (int, float)) and t > 8):
+        kwargs["timeout"] = (4, 6)
+    return _ORIG_API_REQUEST(method, url, **kwargs)
+
+
 requests.Session.request = _enforced_timeout_request
+requests.api.request = _enforced_api_request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -47,6 +57,7 @@ from sync_common import (
     is_foreign_dub_without_english,
     is_future_release,
     normalize_for_exact_title_compare,
+    pick_best_mp4_alternative,
     pick_best_video_file,
     safe_get,
     state_lock,
@@ -58,7 +69,7 @@ from sync_common import (
 
 # Recikliranje HTTP/TLS konekcija (Keep-Alive)
 _HTTP_SESSION = requests.Session()
-_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=12, pool_maxsize=12, max_retries=1)
+_HTTP_ADAPTER = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=1)
 _HTTP_SESSION.mount("https://", _HTTP_ADAPTER)
 _HTTP_SESSION.mount("http://", _HTTP_ADAPTER)
 
@@ -88,7 +99,6 @@ def fast_verify_stream_playable(url):
     if not url or not str(url).startswith("http"):
         return False
     low = str(url).lower()
-    # Archive.org MP4 linkovi provjereni kroz /metadata imaju pouzdan izravni stream bez potrebe za dodatnim 302 HEAD zahtjevom
     if "archive.org/download/" in low and (low.endswith(".mp4") or low.endswith(".m4v")):
         return True
     try:
@@ -558,6 +568,7 @@ def is_special_or_remastered_edition(ident, stream_url="", title=""):
 def build_movie_version_maps(all_movie_rows):
     version_counts = {}
     best_tiers = {}
+    has_mp4_map = {}
     for row in all_movie_rows:
         if not row.get("is_valid", True):
             continue
@@ -565,6 +576,9 @@ def build_movie_version_maps(all_movie_rows):
         if mid <= 0:
             continue
         version_counts[mid] = version_counts.get(mid, 0) + 1
+        s_url = str(row.get("stream_url") or "").lower().split("?")[0]
+        if s_url.endswith((".mp4", ".m4v")):
+            has_mp4_map[mid] = True
         tier = estimate_source_quality_tier(
             row.get("archive_id") or "",
             row.get("stream_url") or "",
@@ -572,15 +586,27 @@ def build_movie_version_maps(all_movie_rows):
         )
         if tier > best_tiers.get(mid, -1):
             best_tiers[mid] = tier
-    return version_counts, best_tiers
+    return version_counts, best_tiers, has_mp4_map
 
 
-def can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, candidate_tier=None, is_special=False):
+def can_accept_movie_candidate(
+    mid,
+    tmdb_version_counts,
+    tmdb_best_tier,
+    candidate_tier=None,
+    is_special=False,
+    tmdb_has_mp4=None,
+    is_mp4_fallback=False
+):
     if mid <= 0:
         return True
     count = tmdb_version_counts.get(mid, 0)
     if count == 0:
         return True
+    # Ako film u bazi ima samo MKV verzije, dopusti MP4 kopiju kao audio-kompatibilnu rezervu (do 3. mjesta)
+    if is_mp4_fallback and tmdb_has_mp4 is not None and not tmdb_has_mp4.get(mid, False):
+        return count < (MAX_VERSIONS_PER_MOVIE + 1)
+
     current_best = tmdb_best_tier.get(mid, 1)
     if current_best == 0:
         if candidate_tier is None:
@@ -883,7 +909,8 @@ def sync_curated_movie_exceptions(
     seen_tmdb_ids,
     seen_title_years,
     tmdb_version_counts,
-    tmdb_best_tier
+    tmdb_best_tier,
+    tmdb_has_mp4
 ):
     valid_archive_ids = {
         r.get("archive_id") for r in all_movie_rows
@@ -954,6 +981,8 @@ def sync_curated_movie_exceptions(
         valid_archive_ids.add(ident)
         curated_tmdb_to_mark.add(mid)
         tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
+        if str(best["stream_url"]).lower().split("?")[0].endswith((".mp4", ".m4v")):
+            tmdb_has_mp4[mid] = True
         tier = estimate_source_quality_tier(ident, best["stream_url"], final_title)
         if tier > tmdb_best_tier.get(mid, -1):
             tmdb_best_tier[mid] = tier
@@ -1050,6 +1079,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         if not videos or is_episodic_or_multi_movie_container(videos):
             continue
         best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
         arch_mins = best["duration_mins"]
         if is_mismatched_modern_dune(mid, ident, raw_doc_title, best["filename"], arch_md.get("title")):
             continue
@@ -1082,7 +1112,7 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
         )
         if ok and fast_verify_stream_playable(best["stream_url"]):
             downloads = float(doc.get("downloads") or 0)
-            valid_candidates.append((aspect_tier, best["size_mb"], downloads, ident, best, arch_mins))
+            valid_candidates.append((aspect_tier, best["size_mb"], downloads, ident, best, arch_mins, mp4_alt))
             if year < 1955 or aspect_tier == 2:
                 break
 
@@ -1094,8 +1124,8 @@ def find_best_archive_movie_match(details, year, exclude_ids, deadline_ts=None, 
     else:
         valid_candidates.sort(key=lambda x: (-x[2], -x[1]))
 
-    _, _, _, best_ident, best_file, best_mins = valid_candidates[0]
-    return best_ident, best_file, best_mins
+    _, _, _, best_ident, best_file, best_mins, best_mp4_alt = valid_candidates[0]
+    return best_ident, best_file, best_mins, best_mp4_alt
 
 
 def try_rematch_row_by_filename_and_year(row, expected_year):
@@ -1137,6 +1167,7 @@ def audit_and_repair_existing_movies(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
+    tmdb_has_mp4,
     phase_deadline_ts
 ):
     valid_rows = [r for r in all_movie_rows if r.get("is_valid", True)]
@@ -1303,7 +1334,7 @@ def audit_and_repair_existing_movies(
                 exclude_snapshot = set(existing_archive_ids)
             replacement = find_best_archive_movie_match(details, final_year, exclude_snapshot, phase_deadline_ts)
             if replacement:
-                new_ident, new_file, new_mins = replacement
+                new_ident, new_file, new_mins, _ = replacement
                 can_use_new_id = False
                 with state_lock:
                     if new_ident not in existing_archive_ids:
@@ -1324,6 +1355,8 @@ def audit_and_repair_existing_movies(
                     with state_lock:
                         if new_tier > tmdb_best_tier.get(tmdb_id, -1):
                             tmdb_best_tier[tmdb_id] = new_tier
+                        if str(new_file["stream_url"]).lower().split("?")[0].endswith((".mp4", ".m4v")):
+                            tmdb_has_mp4[tmdb_id] = True
                         replaced_count[0] += 1
                     print(f"  🔊 Zamijenjen strani audio originalnim: {details['hr_title']} ({final_year}) -> {new_ident}", flush=True)
                     return
@@ -1394,7 +1427,7 @@ def audit_and_repair_existing_movies(
             if not match:
                 return
 
-            new_ident, new_file, new_mins = match
+            new_ident, new_file, new_mins, mp4_alt = match
             pop_score = float(details["popularity"]) * 100.0 + (rel_year * 2) + 500.0
             if save_verified_movie_row(
                 new_ident,
@@ -1408,8 +1441,10 @@ def audit_and_repair_existing_movies(
                 existing_archive_ids,
                 tmdb_version_counts,
                 tmdb_best_tier,
+                tmdb_has_mp4=tmdb_has_mp4,
                 all_movie_rows=all_movie_rows,
-                size_mb=new_file.get("size_mb", 0)
+                size_mb=new_file.get("size_mb", 0),
+                mp4_alt_file=mp4_alt
             ):
                 with state_lock:
                     hd_upgraded_count[0] += 1
@@ -1438,9 +1473,12 @@ def save_verified_movie_row(
     existing_archive_ids,
     tmdb_version_counts,
     tmdb_best_tier,
+    tmdb_has_mp4=None,
     hint_genre=None,
     all_movie_rows=None,
-    size_mb=0
+    size_mb=0,
+    mp4_alt_file=None,
+    is_mp4_fallback=False
 ):
     mid = int(details["tmdb_id"])
     if is_mismatched_modern_dune(mid, arch_id, stream_url, details["hr_title"]):
@@ -1455,11 +1493,15 @@ def save_verified_movie_row(
     ty_key = (norm_t, rel_year)
     cand_tier = estimate_source_quality_tier(arch_id, stream_url, details["hr_title"])
     special_flag = is_special_or_remastered_edition(arch_id, stream_url, details["hr_title"])
+    is_mp4_stream = str(stream_url).lower().split("?")[0].endswith((".mp4", ".m4v"))
 
     with state_lock:
         if arch_id in existing_archive_ids:
             return False
-        if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
+        if not can_accept_movie_candidate(
+            mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag,
+            tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=is_mp4_fallback
+        ):
             return False
         had_only_vhs = (tmdb_best_tier.get(mid, -1) == 0 and cand_tier > 0)
         current_count = tmdb_version_counts.get(mid, 0)
@@ -1469,6 +1511,8 @@ def save_verified_movie_row(
         seen_tmdb_ids.add(mid)
         existing_archive_ids.add(arch_id)
         tmdb_version_counts[mid] = current_count + 1
+        if is_mp4_stream and tmdb_has_mp4 is not None:
+            tmdb_has_mp4[mid] = True
         if cand_tier > tmdb_best_tier.get(mid, -1):
             tmdb_best_tier[mid] = cand_tier
         if norm_t:
@@ -1476,6 +1520,8 @@ def save_verified_movie_row(
 
     genres = resolve_movie_genres(details, details["hr_title"], hint_genre)
     adjusted_pop = pop_score + (400.0 if cand_tier == 2 else (-300.0 if cand_tier == 0 else 0.0))
+    if is_mp4_fallback:
+        adjusted_pop -= 150.0
     row = {
         "archive_id": arch_id,
         "tmdb_id": mid,
@@ -1500,8 +1546,32 @@ def save_verified_movie_row(
     if had_only_vhs and all_movie_rows is not None:
         retired_vhs = retire_vhs_rows_for_tmdb(mid, arch_id, rel_year, all_movie_rows, tmdb_version_counts)
 
-    ver_tag = " [zamjena za VHS]" if retired_vhs > 0 else (" [2. verzija]" if current_count >= 1 else "")
+    ver_tag = " [MP4 verzija]" if is_mp4_fallback else (" [zamjena za VHS]" if retired_vhs > 0 else (" [2. verzija]" if current_count >= 1 else ""))
     print(f"  + Film{ver_tag}: {row['title']} ({rel_year}) -> {', '.join(genres)}", flush=True)
+
+    # Ako je glavna verzija MKV, automatski spremi i MP4 kopiju (ako postoji) kao rezervnu verziju
+    if not is_mp4_stream and mp4_alt_file and mp4_alt_file.get("stream_url"):
+        mp4_arch_id = f"{arch_id},mp4"
+        save_verified_movie_row(
+            mp4_arch_id,
+            details,
+            rel_year,
+            mp4_alt_file["stream_url"],
+            mp4_alt_file.get("duration_mins") or arch_mins,
+            pop_score,
+            seen_tmdb_ids,
+            seen_title_years,
+            existing_archive_ids,
+            tmdb_version_counts,
+            tmdb_best_tier,
+            tmdb_has_mp4=tmdb_has_mp4,
+            hint_genre=hint_genre,
+            all_movie_rows=None,
+            size_mb=mp4_alt_file.get("size_mb", 0),
+            mp4_alt_file=None,
+            is_mp4_fallback=True
+        )
+
     return True
 
 
@@ -1512,6 +1582,7 @@ def mine_direct_movies_from_branches(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
+    tmdb_has_mp4,
     deadline_ts,
     all_movie_rows=None
 ):
@@ -1545,7 +1616,7 @@ def mine_direct_movies_from_branches(
                 "page": page,
                 "output": "json"
             },
-            timeout=12,
+            timeout=8,
         )
         return (data or {}).get("response", {}).get("docs", [])
 
@@ -1638,7 +1709,161 @@ def mine_direct_movies_from_branches(
         with state_lock:
             stats[key] += 1
 
-    # Jedan zajednički pool s 6 dretvi sprječava gomilanje pozadinskih dretvi i Archive.org rate-limit
+    def process_archive_doc(entry):
+        if time.monotonic() > deadline_ts:
+            return
+        doc, title_candidates, parsed_y = entry
+        ident = doc.get("identifier") or ""
+        raw_title = doc.get("title") or ident
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0]
+
+        if is_explicit_junk_item(ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("junk_recorded")
+            return
+
+        cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
+        special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
+
+        cand_q = title_candidates[0]
+        tmdb_params = {
+            "api_key": TMDB_API_KEY,
+            "query": cand_q,
+            "language": "hr-HR",
+            "include_adult": "false",
+        }
+        if parsed_y > 0:
+            tmdb_params["year"] = parsed_y
+        res = safe_get(f"{TMDB_BASE}/search/movie", params=tmdb_params)
+        results = (res or {}).get("results", [])
+
+        if not results:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("no_tmdb_match")
+            return
+
+        cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
+        cand_norms.discard("")
+        chosen_hit = None
+        for hit in results[:5]:
+            if is_future_release(hit.get("release_date") or ""):
+                continue
+            hit_orig_norm = normalize_for_exact_title_compare(hit.get("original_title") or "")
+            hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
+            hit_year = extract_year_from_text(hit.get("release_date") or "")
+            if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
+                continue
+            if cand_norms and (hit_orig_norm in cand_norms or hit_hr_norm in cand_norms):
+                chosen_hit = hit
+                break
+
+        if chosen_hit is None:
+            first_hit = results[0]
+            first_year = extract_year_from_text(first_hit.get("release_date") or "")
+            if not is_future_release(first_hit.get("release_date") or "") and (
+                parsed_y == 0 or first_year == 0 or abs(first_year - parsed_y) <= 1
+            ):
+                chosen_hit = first_hit
+
+        if chosen_hit is None:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("no_tmdb_match")
+            return
+
+        mid = int(chosen_hit["id"])
+        if is_mismatched_modern_dune(mid, ident, raw_title):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("validation_rejected")
+            return
+        with state_lock:
+            if not can_accept_movie_candidate(
+                mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag,
+                tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=True
+            ):
+                inc_stat("already_in_db")
+                return
+
+        details = get_tmdb_movie_details(mid)
+        if not details or not details["poster_path"]:
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("no_tmdb_match")
+            return
+
+        is_doc = 99 in (details.get("genre_ids") or [])
+        is_anim = 16 in (details.get("genre_ids") or [])
+        videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
+        if not videos or is_episodic_or_multi_movie_container(videos):
+            if videos and STRICT_EPISODE_RE.search(" ".join(v.get("filename") or "" for v in videos)):
+                queue_series_candidate_for_tv_sync(ident, raw_title)
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("no_video_file")
+            return
+        best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
+        arch_mins = best["duration_mins"]
+
+        if is_mismatched_modern_dune(mid, ident, raw_title, best["filename"], arch_md.get("title")):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("validation_rejected")
+            return
+
+        if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title, best["filename"]):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("junk_recorded")
+            return
+
+        if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=best["size_mb"]):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("validation_rejected")
+            return
+
+        rel_year = extract_year_from_text(details["release_date"]) or parsed_y
+        expected_titles = [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates
+        if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year, details=details):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("validation_rejected")
+            return
+
+        final_tier = max(cand_tier, best.get("aspect_tier", 1), estimate_source_quality_tier(ident, best["stream_url"], str(raw_title)))
+        final_special = special_flag or is_special_or_remastered_edition(ident, best["stream_url"], str(raw_title))
+        is_mp4_only_fill = best["filename"].lower().endswith((".mp4", ".m4v"))
+        with state_lock:
+            if not can_accept_movie_candidate(
+                mid, tmdb_version_counts, tmdb_best_tier, final_tier, final_special,
+                tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=is_mp4_only_fill
+            ):
+                inc_stat("already_in_db")
+                return
+
+        require_credits = has_multiple_tmdb_versions(details["orig_title"])
+        ok, _ = validate_movie_match(
+            ident,
+            arch_md,
+            arch_mins,
+            details,
+            expected_titles,
+            rel_year,
+            require_credits=require_credits,
+            chosen_filename=best["filename"],
+            chosen_size_mb=best["size_mb"]
+        )
+        if not ok or not fast_verify_stream_playable(best["stream_url"]):
+            record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
+            inc_stat("validation_rejected")
+            return
+
+        downloads = float(doc.get("downloads") or 0)
+        pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
+        if save_verified_movie_row(
+            ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
+            seen_tmdb_ids, seen_title_years, existing_archive_ids,
+            tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4=tmdb_has_mp4,
+            all_movie_rows=all_movie_rows, size_mb=best["size_mb"], mp4_alt_file=mp4_alt
+        ):
+            with state_lock:
+                total_added[0] += 1
+
     shared_pool = ThreadPoolExecutor(max_workers=6)
     try:
         while cursor < len(remaining_pool) and time.monotonic() < deadline_ts:
@@ -1650,163 +1875,21 @@ def mine_direct_movies_from_branches(
                 flush=True
             )
 
-            batch_added = [0]
-
-            def process_archive_doc(entry):
-                if time.monotonic() > deadline_ts:
-                    return
-                doc, title_candidates, parsed_y = entry
-                ident = doc.get("identifier") or ""
-                raw_title = doc.get("title") or ident
-                if isinstance(raw_title, list):
-                    raw_title = raw_title[0]
-
-                if is_explicit_junk_item(ident, raw_title):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("junk_recorded")
-                    return
-
-                cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
-                special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
-
-                cand_q = title_candidates[0]
-                tmdb_params = {
-                    "api_key": TMDB_API_KEY,
-                    "query": cand_q,
-                    "language": "hr-HR",
-                    "include_adult": "false",
-                }
-                if parsed_y > 0:
-                    tmdb_params["year"] = parsed_y
-                res = safe_get(f"{TMDB_BASE}/search/movie", params=tmdb_params)
-                results = (res or {}).get("results", [])
-
-                if not results:
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("no_tmdb_match")
-                    return
-
-                cand_norms = {normalize_for_exact_title_compare(c) for c in title_candidates}
-                cand_norms.discard("")
-                chosen_hit = None
-                for hit in results[:5]:
-                    if is_future_release(hit.get("release_date") or ""):
-                        continue
-                    hit_orig_norm = normalize_for_exact_title_compare(hit.get("original_title") or "")
-                    hit_hr_norm = normalize_for_exact_title_compare(hit.get("title") or "")
-                    hit_year = extract_year_from_text(hit.get("release_date") or "")
-                    if parsed_y > 0 and hit_year > 0 and abs(hit_year - parsed_y) > 1:
-                        continue
-                    if cand_norms and (hit_orig_norm in cand_norms or hit_hr_norm in cand_norms):
-                        chosen_hit = hit
-                        break
-
-                if chosen_hit is None:
-                    first_hit = results[0]
-                    first_year = extract_year_from_text(first_hit.get("release_date") or "")
-                    if not is_future_release(first_hit.get("release_date") or "") and (
-                        parsed_y == 0 or first_year == 0 or abs(first_year - parsed_y) <= 1
-                    ):
-                        chosen_hit = first_hit
-
-                if chosen_hit is None:
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("no_tmdb_match")
-                    return
-
-                mid = int(chosen_hit["id"])
-                if is_mismatched_modern_dune(mid, ident, raw_title):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("validation_rejected")
-                    return
-                with state_lock:
-                    if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
-                        inc_stat("already_in_db")
-                        return
-
-                details = get_tmdb_movie_details(mid)
-                if not details or not details["poster_path"]:
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("no_tmdb_match")
-                    return
-
-                is_doc = 99 in (details.get("genre_ids") or [])
-                is_anim = 16 in (details.get("genre_ids") or [])
-                videos, arch_md = get_archive_item_details(ident, min_size_mb=(80 if is_anim else 160), allow_mkv=True)
-                if not videos or is_episodic_or_multi_movie_container(videos):
-                    if videos and STRICT_EPISODE_RE.search(" ".join(v.get("filename") or "" for v in videos)):
-                        queue_series_candidate_for_tv_sync(ident, raw_title)
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("no_video_file")
-                    return
-                best = pick_best_video_file(videos)
-                arch_mins = best["duration_mins"]
-
-                if is_mismatched_modern_dune(mid, ident, raw_title, best["filename"], arch_md.get("title")):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("validation_rejected")
-                    return
-
-                if not is_doc and is_explicit_junk_item(ident, arch_md.get("title") or raw_title, best["filename"]):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("junk_recorded")
-                    return
-
-                if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_doc, size_mb=best["size_mb"]):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("validation_rejected")
-                    return
-
-                rel_year = extract_year_from_text(details["release_date"]) or parsed_y
-                expected_titles = [details["orig_title"], details["hr_title"], details.get("en_title", "")] + title_candidates
-                if not verify_multilayer_title_and_file(best["filename"], ident, arch_md, expected_titles, rel_year, details=details):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("validation_rejected")
-                    return
-
-                final_tier = max(cand_tier, best.get("aspect_tier", 1), estimate_source_quality_tier(ident, best["stream_url"], str(raw_title)))
-                final_special = special_flag or is_special_or_remastered_edition(ident, best["stream_url"], str(raw_title))
-                with state_lock:
-                    if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, final_tier, final_special):
-                        inc_stat("already_in_db")
-                        return
-
-                require_credits = has_multiple_tmdb_versions(details["orig_title"])
-                ok, _ = validate_movie_match(
-                    ident,
-                    arch_md,
-                    arch_mins,
-                    details,
-                    expected_titles,
-                    rel_year,
-                    require_credits=require_credits,
-                    chosen_filename=best["filename"],
-                    chosen_size_mb=best["size_mb"]
-                )
-                if not ok or not fast_verify_stream_playable(best["stream_url"]):
-                    record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
-                    inc_stat("validation_rejected")
-                    return
-
-                downloads = float(doc.get("downloads") or 0)
-                pop_score = max(details["popularity"] * 100.0, min(downloads / 10.0, 15000.0)) + (rel_year * 2)
-                if save_verified_movie_row(
-                    ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
-                    seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                    tmdb_version_counts, tmdb_best_tier, all_movie_rows=all_movie_rows,
-                    size_mb=best["size_mb"]
-                ):
-                    with state_lock:
-                        batch_added[0] += 1
-                        total_added[0] += 1
-
+            before_cnt = total_added[0]
             futures = [shared_pool.submit(process_archive_doc, entry) for entry in batch_slice]
-            # Čekamo da svih 12 zadataka završi (svaki pojedini HTTP poziv ima strogi timeout 4-7s)
-            wait(futures, timeout=min(45, max(1.0, deadline_ts - time.monotonic())))
+            done, not_done = wait(futures, timeout=min(30, max(1.0, deadline_ts - time.monotonic())))
+
+            # Ako je ijedna dretva zapela duže od 30s, odbaci stari pool bez čekanja i otvori svježi
+            if not_done:
+                for f in not_done:
+                    f.cancel()
+                shared_pool.shutdown(wait=False, cancel_futures=True)
+                shared_pool = ThreadPoolExecutor(max_workers=6)
 
             flush_rejected_buffer(force=True)
+            added_in_batch = total_added[0] - before_cnt
             print(
-                f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {batch_added[0]} filmova (ukupno dodano: {total_added[0]}).",
+                f"  ✓ Paket #{batch_num} ({len(batch_slice)}) završen: dodano {added_in_batch} filmova (ukupno dodano: {total_added[0]}).",
                 flush=True
             )
 
@@ -1837,6 +1920,7 @@ def sync_ex_yu_and_cult_movies(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
+    tmdb_has_mp4,
     phase_deadline_ts,
     all_movie_rows=None
 ):
@@ -1859,7 +1943,7 @@ def sync_ex_yu_and_cult_movies(
                 "page": random.randint(1, 3),
                 "output": "json"
             },
-            timeout=12,
+            timeout=8,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = doc.get("identifier")
@@ -1945,7 +2029,10 @@ def sync_ex_yu_and_cult_movies(
         cand_tier = estimate_source_quality_tier(ident, "", str(raw_title))
         special_flag = is_special_or_remastered_edition(ident, "", str(raw_title))
         with state_lock:
-            if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
+            if not can_accept_movie_candidate(
+                mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag,
+                tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=True
+            ):
                 record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
                 return
 
@@ -1969,6 +2056,7 @@ def sync_ex_yu_and_cult_movies(
             record_rejected_archive_id(ident, raw_title, parsed_y, existing_archive_ids)
             return
         best = pick_best_video_file(videos)
+        mp4_alt = pick_best_mp4_alternative(videos, exclude_url=best["stream_url"]) if best["filename"].lower().endswith(".mkv") else None
         arch_mins = best["duration_mins"]
 
         if is_runtime_mismatch(details.get("runtime", 0), arch_mins, is_short_allowed=is_anim, size_mb=best["size_mb"]):
@@ -1998,8 +2086,9 @@ def sync_ex_yu_and_cult_movies(
         if save_verified_movie_row(
             ident, details, rel_year, best["stream_url"], arch_mins, pop_score,
             seen_tmdb_ids, seen_title_years, existing_archive_ids,
-            tmdb_version_counts, tmdb_best_tier, hint_genre=hint, all_movie_rows=all_movie_rows,
-            size_mb=best["size_mb"]
+            tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4=tmdb_has_mp4,
+            hint_genre=hint, all_movie_rows=all_movie_rows, size_mb=best["size_mb"],
+            mp4_alt_file=mp4_alt
         ):
             with state_lock:
                 added_ex_yu[0] += 1
@@ -2082,13 +2171,14 @@ def sync_ex_yu_and_cult_movies(
             exclude_snapshot = set(existing_archive_ids)
         match = find_best_archive_movie_match(details, year, exclude_snapshot, phase_deadline_ts, min_aspect_tier=min_req_tier)
         if match:
-            best_ident, best_file, best_mins = match
+            best_ident, best_file, best_mins, mp4_alt = match
             pop_score = float(m.get("popularity") or 10.0) * 100.0 + (year * 2)
             if save_verified_movie_row(
                 best_ident, details, year, best_file["stream_url"], best_mins, pop_score,
                 seen_tmdb_ids, seen_title_years, existing_archive_ids,
-                tmdb_version_counts, tmdb_best_tier, hint_genre, all_movie_rows=all_movie_rows,
-                size_mb=best_file.get("size_mb", 0)
+                tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4=tmdb_has_mp4,
+                hint_genre=hint_genre, all_movie_rows=all_movie_rows,
+                size_mb=best_file.get("size_mb", 0), mp4_alt_file=mp4_alt
             ):
                 with state_lock:
                     added_tmdb[0] += 1
@@ -2129,7 +2219,7 @@ def discover_layered_multi_file_bundles(sub_layers, existing_archive_ids, deadli
                 "page": random.randint(1, 3),
                 "output": "json",
             },
-            timeout=12,
+            timeout=8,
         )
         for doc in (data or {}).get("response", {}).get("docs", []):
             ident = (doc.get("identifier") or "").strip()
@@ -2157,6 +2247,7 @@ def sync_multi_file_movie_bundles(
     seen_title_years,
     tmdb_version_counts,
     tmdb_best_tier,
+    tmdb_has_mp4,
     deadline_ts,
     all_movie_rows=None
 ):
@@ -2293,7 +2384,10 @@ def sync_multi_file_movie_bundles(
             with state_lock:
                 if catalog_arch_id in existing_archive_ids:
                     return
-                if not can_accept_movie_candidate(mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag):
+                if not can_accept_movie_candidate(
+                    mid, tmdb_version_counts, tmdb_best_tier, cand_tier, special_flag,
+                    tmdb_has_mp4=tmdb_has_mp4, is_mp4_fallback=True
+                ):
                     return
 
             details = get_tmdb_movie_details(mid)
@@ -2336,6 +2430,7 @@ def sync_multi_file_movie_bundles(
                 existing_archive_ids,
                 tmdb_version_counts,
                 tmdb_best_tier,
+                tmdb_has_mp4=tmdb_has_mp4,
                 hint_genre=None,
                 all_movie_rows=all_movie_rows,
                 size_mb=v.get("size_mb", 0)
@@ -2360,17 +2455,17 @@ def run_movies_sync():
     deadline_ts = start_ts + MAX_MOVIES_SYNC_SECONDS
     print("=== [FILMOVI] Pokretanje brze hijerarhijske sinkronizacije igranih, animiranih i Ex-Yu filmova ===", flush=True)
     existing_archive_ids, seen_tmdb_ids, seen_title_years, all_movie_rows = fetch_existing_catalog_state("movie")
-    tmdb_version_counts, tmdb_best_tier = build_movie_version_maps(all_movie_rows)
+    tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4 = build_movie_version_maps(all_movie_rows)
     print(f"  U bazi već postoji {len(seen_tmdb_ids)} potvrđenih filmova ({sum(tmdb_version_counts.values())} verzija).", flush=True)
 
     phase1_deadline = min(deadline_ts, time.monotonic() + PHASE1_AUDIT_MAX_SECONDS)
     audit_and_repair_existing_movies(
         all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, phase1_deadline
+        tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4, phase1_deadline
     )
     sync_curated_movie_exceptions(
         all_movie_rows, existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier
+        tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4
     )
 
     sub_layers = map_approved_movie_subtrees(deadline_ts)
@@ -2382,18 +2477,18 @@ def run_movies_sync():
     phase2_deadline = min(deadline_ts, time.monotonic() + PHASE2_DIRECT_MOVIES_MAX_SECONDS)
     mine_direct_movies_from_branches(
         sub_layers, existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, phase2_deadline, all_movie_rows=all_movie_rows
+        tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4, phase2_deadline, all_movie_rows=all_movie_rows
     )
 
     phase3_deadline = min(deadline_ts, time.monotonic() + PHASE3_CURATED_AND_EXYU_MAX_SECONDS)
     sync_ex_yu_and_cult_movies(
         existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, phase3_deadline, all_movie_rows=all_movie_rows
+        tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4, phase3_deadline, all_movie_rows=all_movie_rows
     )
 
     sync_multi_file_movie_bundles(
         sub_layers, existing_archive_ids, seen_tmdb_ids, seen_title_years,
-        tmdb_version_counts, tmdb_best_tier, deadline_ts, all_movie_rows=all_movie_rows
+        tmdb_version_counts, tmdb_best_tier, tmdb_has_mp4, deadline_ts, all_movie_rows=all_movie_rows
     )
 
     flush_rejected_buffer(force=True)
