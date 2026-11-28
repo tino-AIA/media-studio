@@ -5,7 +5,7 @@ import re
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote
 
 import requests
@@ -839,27 +839,38 @@ CULT_AND_ANIMATION_SEEDS = [
 
 CURATED_MOVIE_EXCEPTIONS = [
     {
-        "archive_query": "identifier:dune-david-lynch-1984",
+        "archive_ids": ["dune-david-lynch-1984"],
+        "archive_query": 'title:"Dune" AND year:1984 AND mediatype:movies AND -title:redux AND -title:saga',
         "tmdb_id": 841,
-        "custom_title": "",
+        "custom_title": "Dina (1984)",
         "min_mins": 115,
+        "pop_bonus": 4200.0,
     },
     {
-        "archive_query": "identifier:dune-1984-alternative-edition-redux-fanedit-m*",
+        "archive_ids": [
+            "dune-1984-alternative-edition-redux-fanedit-mkv-flac-subs",
+            "dune-1984-alternative-edition-redux-fanedit",
+        ],
+        "archive_query": 'title:"Dune" AND title:"Alternative Edition Redux" AND mediatype:movies',
         "tmdb_id": 841,
-        "custom_title": "Dina - Alternative Edition Redux",
+        "custom_title": "Dina - Alternative Edition Redux (1984)",
         "min_mins": 150,
+        "pop_bonus": 4100.0,
     },
     {
-        "archive_query": "identifier:DuneTheCompleteSagaVimeo",
+        "archive_ids": ["DuneTheCompleteSagaVimeo"],
+        "archive_query": 'title:"Dune" AND title:"Complete Saga" AND mediatype:movies',
         "tmdb_id": 841,
-        "custom_title": "Dina - The Complete Saga",
+        "custom_title": "Dina - The Complete Saga (1984)",
         "min_mins": 150,
+        "pop_bonus": 4000.0,
     },
 ]
 
 CURATED_ARCHIVE_IDS = {
     "dune-david-lynch-1984",
+    "dune-1984-alternative-edition-redux-fanedit-mkv-flac-subs",
+    "dune-1984-alternative-edition-redux-fanedit",
     "DuneTheCompleteSagaVimeo",
 }
 
@@ -920,35 +931,98 @@ def sync_curated_movie_exceptions(
     tmdb_best_tier,
     tmdb_has_mp4
 ):
-    valid_archive_ids = {
-        r.get("archive_id") for r in all_movie_rows
-        if r.get("is_valid", True) and r.get("archive_id")
+    # 1. Odmah očisti sve pogrešno povezane zapise Dine 2021/2024 koji su zapravo verzije iz 1984.
+    for row in all_movie_rows:
+        if not row.get("is_valid", True):
+            continue
+        mid = int(row.get("tmdb_id") or 0)
+        if mid in (438631, 693134) and is_mismatched_modern_dune(
+            mid, row.get("archive_id") or "", row.get("stream_url") or "", row.get("title") or ""
+        ):
+            supabase_patch_row("catalog_items", row["id"], {"is_valid": False})
+            row["is_valid"] = False
+            if tmdb_version_counts.get(mid, 0) > 0:
+                tmdb_version_counts[mid] -= 1
+            print(
+                f"  ✕ Uklonjen pogrešan upar Dine (1984. pod 2021./2024.): {row.get('title')} ({row.get('archive_id')})",
+                flush=True
+            )
+
+    rows_by_arch_id = {
+        str(r.get("archive_id") or "").strip(): r
+        for r in all_movie_rows
+        if r.get("archive_id")
     }
+
+    details = get_tmdb_movie_details(841)
+    if not details:
+        return
+
     curated_tmdb_to_mark = set()
 
     for item in CURATED_MOVIE_EXCEPTIONS:
-        data = safe_get(
-            "https://archive.org/advancedsearch.php",
-            params={
-                "q": item["archive_query"],
-                "fl[]": ["identifier", "title", "downloads"],
-                "rows": 3,
-                "output": "json"
-            }
-        )
-        docs = (data or {}).get("response", {}).get("docs", [])
-        if not docs:
+        mid = item["tmdb_id"]
+        final_title = item["custom_title"].strip() or details["hr_title"]
+        rel_year = extract_year_from_text(details["release_date"]) or 1984
+        genres = resolve_movie_genres(details, final_title, "Sci-Fi klasici")
+        if "Sci-Fi klasici" not in genres:
+            genres = ["Sci-Fi klasici"] + genres[:2]
+
+        existing_row = None
+        for cand_id in item["archive_ids"]:
+            if cand_id in rows_by_arch_id:
+                existing_row = rows_by_arch_id[cand_id]
+                break
+
+        if existing_row and (existing_row.get("stream_url") or "").startswith("http"):
+            if (
+                not existing_row.get("is_valid", True)
+                or existing_row.get("title") != final_title
+                or "Sci-Fi klasici" not in (existing_row.get("genres") or [])
+            ):
+                supabase_patch_row(
+                    "catalog_items",
+                    existing_row["id"],
+                    {
+                        "tmdb_id": mid,
+                        "title": final_title,
+                        "genres": genres,
+                        "release_year": rel_year,
+                        "popularity_score": float(details["popularity"]) * 100.0 + item["pop_bonus"],
+                        "is_valid": True,
+                    }
+                )
+                existing_row["is_valid"] = True
+                print(f"  + Vraćeno odobreno izdanje Dine 1984: {final_title}", flush=True)
+            curated_tmdb_to_mark.add(mid)
             continue
 
-        ident = docs[0].get("identifier") or ""
-        if not ident or ident in valid_archive_ids:
+        resolved_ident = ""
+        for cand_id in item["archive_ids"]:
+            videos_test, _ = get_archive_item_details(cand_id, min_size_mb=250, allow_mkv=True)
+            if videos_test:
+                resolved_ident = cand_id
+                break
+
+        if not resolved_ident:
+            data = safe_get(
+                "https://archive.org/advancedsearch.php",
+                params={
+                    "q": item["archive_query"],
+                    "fl[]": ["identifier", "title", "downloads"],
+                    "sort[]": "downloads desc",
+                    "rows": 3,
+                    "output": "json"
+                }
+            )
+            docs = (data or {}).get("response", {}).get("docs", [])
+            if docs:
+                resolved_ident = docs[0].get("identifier") or ""
+
+        if not resolved_ident:
             continue
 
-        details = get_tmdb_movie_details(item["tmdb_id"])
-        if not details:
-            continue
-
-        videos, _ = get_archive_item_details(ident, min_size_mb=250, allow_mkv=True)
+        videos, _ = get_archive_item_details(resolved_ident, min_size_mb=250, allow_mkv=True)
         min_mins = item.get("min_mins", 115)
         long_videos = [
             v for v in videos
@@ -962,19 +1036,15 @@ def sync_curated_movie_exceptions(
         if not fast_verify_stream_playable(best["stream_url"]):
             continue
 
-        final_title = item["custom_title"].strip() or details["hr_title"]
-        rel_year = extract_year_from_text(details["release_date"]) or 1984
-        genres = resolve_movie_genres(details, final_title, "Sci-Fi klasici")
-        mid = item["tmdb_id"]
         row = {
-            "archive_id": ident,
+            "archive_id": resolved_ident,
             "tmdb_id": mid,
             "title": final_title,
             "media_type": "movie",
             "genres": genres,
             "release_year": rel_year,
             "rating": round(details["vote_average"], 1),
-            "popularity_score": float(details["popularity"]) * 100.0 + 3500.0,
+            "popularity_score": float(details["popularity"]) * 100.0 + item["pop_bonus"],
             "description_hr": details["overview_hr"],
             "poster_url": f"{TMDB_IMG_POSTER}{details['poster_path']}" if details["poster_path"] else "",
             "backdrop_url": f"{TMDB_IMG_BACKDROP}{details['backdrop_path']}" if details["backdrop_path"] else "",
@@ -985,19 +1055,18 @@ def sync_curated_movie_exceptions(
             "archive_runtime": best["duration_mins"]
         }
         supabase_upsert("catalog_items", [row], "archive_id")
-        existing_archive_ids.add(ident)
-        valid_archive_ids.add(ident)
+        existing_archive_ids.add(resolved_ident)
         curated_tmdb_to_mark.add(mid)
         tmdb_version_counts[mid] = tmdb_version_counts.get(mid, 0) + 1
         if str(best["stream_url"]).lower().split("?")[0].endswith((".mp4", ".m4v")):
             tmdb_has_mp4[mid] = True
-        tier = estimate_source_quality_tier(ident, best["stream_url"], final_title)
+        tier = estimate_source_quality_tier(resolved_ident, best["stream_url"], final_title)
         if tier > tmdb_best_tier.get(mid, -1):
             tmdb_best_tier[mid] = tier
         norm_t = normalize_for_exact_title_compare(final_title)
         if norm_t:
             seen_title_years.add((norm_t, rel_year))
-        print(f"  + Odobreno izdanje: {row['title']} ({best['duration_mins']} min) -> {', '.join(genres)}", flush=True)
+        print(f"  + Odobreno izdanje Dine 1984: {row['title']} ({best['duration_mins']} min) -> {', '.join(genres)}", flush=True)
 
     seen_tmdb_ids.update(curated_tmdb_to_mark)
 
